@@ -1,7 +1,8 @@
 import logging
 import re
 import sys
-from typing import Annotated, List
+from pathlib import Path
+from typing import List, Optional
 
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
@@ -28,7 +29,7 @@ if sys.platform == "win32":
 
     async def read_active_word_document(
         ctx: Context,
-        clean_view: Annotated[bool, "If True, returns clean text without markup."] = False,
+        clean_view: bool = False,
     ) -> ToolResult:
         await ctx.info("Connecting to active Word application...")
         pythoncom.CoInitialize()
@@ -123,7 +124,6 @@ if sys.platform == "win32":
                 mapped_annotations.append(ann)
 
             # Convert overlapping annotations into a sequence of insertion events
-            # to safely build the final string without index drift or markup corruption.
             events = []
             for ann in mapped_annotations:
                 start = ann["mapped_start"]
@@ -145,16 +145,11 @@ if sys.platform == "win32":
                     continue
 
                 if start == end:
-                    # Point annotations
                     inner = inner_override if inner_override is not None else ""
                     events.append((start, 1, 0, layer, ann["id"], prefix + inner + suffix))
                 else:
                     length = end - start
-                    # Open events (type 2) sort with -length so longer spans open first.
-                    # open_priority uses layer (1 < 2, so Comment opens before Revision).
                     events.append((start, 2, -length, layer, ann["id"], prefix))
-                    # Close events (type 0) sort with length so shorter spans close first.
-                    # close_priority uses -layer (-2 < -1, so Revision closes before Comment).
                     events.append((end, 0, length, -layer, ann["id"], suffix))
 
             events.sort()
@@ -180,14 +175,12 @@ if sys.platform == "win32":
             )
 
         finally:
-            # Pytest tracebacks hold COM locals, causing GC access violations if we tear down early.
-            # We intentionally omit CoUninitialize() and let the process exit handle cleanup.
             pass
 
     async def process_active_word_batch(
         ctx: Context,
-        changes: Annotated[List[DocumentChange], "List of changes to apply."],
-        author_name: Annotated[str, "Name to appear in Track Changes (e.g. 'Reviewer AI')."],
+        changes: List[DocumentChange],
+        author_name: str,
     ) -> str:
         if not changes:
             return "No changes provided."
@@ -212,9 +205,6 @@ if sys.platform == "win32":
 
             stats = {"applied": 0, "failed": 0}
 
-            # Pre-resolve Revision objects to prevent index drift.
-            # Modifying text adds new Revisions, which shifts collection indices.
-            # By holding the COM reference now, we can accept/reject safely later.
             revisions_map = {}
             try:
                 for i in range(1, doc.Revisions.Count + 1):
@@ -231,14 +221,12 @@ if sys.platform == "win32":
                             start_idx, end_idx = _find_match_in_text(current_text, clean_target)
 
                             if start_idx != -1:
-                                # Get literal string, preserving \r for native Find execution
                                 exact_substring = doc.Content.Text[start_idx:end_idx]
 
                                 search_start = max(0, start_idx - 200)
                                 search_end = min(doc.Content.End, end_idx + 200)
                                 rng = doc.Range(Start=search_start, End=search_end)
 
-                                # Word Find limit is 255 chars
                                 search_text = exact_substring[:250] if len(exact_substring) > 250 else exact_substring
 
                                 rng.Find.ClearFormatting()
@@ -254,7 +242,6 @@ if sys.platform == "win32":
                                         doc.Comments.Add(replace_rng, change.comment)
                                     stats["applied"] += 1
                                 else:
-                                    # Fallback: search entire document
                                     doc_rng = doc.Content
                                     doc_rng.Find.ClearFormatting()
                                     doc_rng.Find.Text = search_text
@@ -308,5 +295,52 @@ if sys.platform == "win32":
             return f"Live Word Batch complete. Applied: {stats['applied']}, Failed: {stats['failed']}."
 
         finally:
-            # Omitted CoUninitialize() to prevent GC access violations.
+            pass
+
+    async def open_word_document_impl(ctx: Context, file_path: str, visible: bool = True) -> str:
+        await ctx.info(f"Opening {file_path} in Word...")
+        pythoncom.CoInitialize()
+        try:
+            abs_path = str(Path(file_path).resolve())
+
+            app = win32com.client.Dispatch("Word.Application")
+            app.Visible = visible
+            if visible:
+                try:
+                    app.Activate()
+                except Exception:
+                    pass
+
+            app.Documents.Open(abs_path)
+            return f"Successfully opened {abs_path} in Microsoft Word."
+        except Exception as e:
+            raise ToolError(f"Failed to open document in Word. {e}") from e
+        finally:
+            pass
+
+    async def save_active_word_document_impl(
+        ctx: Context, output_path: Optional[str] = None, close: bool = False
+    ) -> str:
+        await ctx.info("Saving active Word document...")
+        pythoncom.CoInitialize()
+        try:
+            app = win32com.client.GetActiveObject("Word.Application")
+            doc = app.ActiveDocument
+
+            if output_path:
+                abs_path = str(Path(output_path).resolve())
+                doc.SaveAs2(abs_path)
+                msg = f"Successfully saved active document as: {abs_path}"
+            else:
+                doc.Save()
+                msg = "Successfully saved active document."
+
+            if close:
+                doc.Close(0)  # 0 = wdDoNotSaveChanges (since we just saved it)
+                msg += " Document closed."
+
+            return msg
+        except Exception as e:
+            raise ToolError(f"Failed to save active Word document. {e}") from e
+        finally:
             pass

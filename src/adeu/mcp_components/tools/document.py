@@ -242,7 +242,12 @@ async def accept_all_changes(
 # ==========================================
 
 if sys.platform == "win32":
-    from adeu.mcp_components.tools.live_word import process_active_word_batch, read_active_word_document
+    from adeu.mcp_components.tools.live_word import (
+        open_word_document_impl,
+        process_active_word_batch,
+        read_active_word_document,
+        save_active_word_document_impl,
+    )
 
     @tool(
         description=(
@@ -308,6 +313,29 @@ if sys.platform == "win32":
         if not original_docx_path:
             return await process_active_word_batch(ctx, changes, author_name)
         return await _process_document_batch_disk(original_docx_path, author_name, ctx, changes, output_path)
+
+    @tool(
+        description=(
+            "Opens a DOCX file from disk into the live Microsoft Word application. "
+            "Essential for automated exploratory testing and ensuring Word has the document active."
+        ),
+    )
+    async def open_word_document(
+        ctx: Context,
+        file_path: Annotated[str, "Absolute path to the DOCX file to open in Word."],
+        visible: Annotated[bool, "Whether to make the Word application window visible."] = True,
+    ) -> str:
+        return await open_word_document_impl(ctx, file_path, visible)
+
+    @tool(description="Saves the currently active Microsoft Word document to disk. Optionally closes it after saving.")
+    async def save_active_word_document(
+        ctx: Context,
+        output_path: Annotated[
+            Optional[str], "Optional absolute path to 'Save As'. If omitted, overwrites the current file."
+        ] = None,
+        close: Annotated[bool, "Whether to close the document in Word after saving."] = False,
+    ) -> str:
+        return await save_active_word_document_impl(ctx, output_path, close)
 
 else:
 
