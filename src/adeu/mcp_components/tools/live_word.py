@@ -12,8 +12,10 @@ if sys.platform == "win32":
     import pythoncom
     import win32com.client
 
+    from adeu.ingest import _build_merged_meta_block, _get_wrappers
     from adeu.markup import _find_match_in_text
     from adeu.models import AcceptChange, DocumentChange, ModifyText, RejectChange, ReplyComment
+    from adeu.utils.docx import DocxEvent
 
     logger = logging.getLogger(__name__)
 
@@ -64,28 +66,43 @@ if sys.platform == "win32":
                                 "end": rev.Range.End,
                                 "text": text,
                                 "type": "insert" if rev.Type == 1 else "delete",
-                                "id": f"Chg:{i}",
+                                "id": str(i),
+                                "author": rev.Author,
+                                "date": str(rev.Date) if hasattr(rev, "Date") else "",
                             }
                         )
                 except Exception as e:
                     logger.warning(f"Failed to read revision {i}: {e}")
 
             # 2. Extract Comments
+            comments_data = {}
             for i in range(1, doc.Comments.Count + 1):
                 try:
                     com = doc.Comments(i)
                     text = com.Scope.Text or ""
+                    cid = str(i)
+                    author = com.Author
+                    date = str(com.Date) if hasattr(com, "Date") else ""
+                    content = com.Range.Text.strip().replace("\r", " ")
+
                     annotations.append(
                         {
                             "start": com.Scope.Start,
                             "end": com.Scope.End,
                             "text": text,
                             "type": "comment",
-                            "id": f"Com:{i}",
-                            "content": com.Range.Text.strip().replace("\r", " "),
-                            "author": com.Author,
+                            "id": cid,
+                            "author": author,
+                            "date": date,
                         }
                     )
+                    comments_data[cid] = {
+                        "author": author,
+                        "text": content,
+                        "date": date,
+                        "resolved": False,
+                        "parent_id": None,
+                    }
                 except Exception as e:
                     logger.warning(f"Failed to read comment {i}: {e}")
 
@@ -116,56 +133,176 @@ if sys.platform == "win32":
                     ann["mapped_start"] = window_start + rel_start
                     ann["mapped_end"] = window_start + rel_end
                 else:
-                    # Fallback
+                    # Fallback for text hidden from doc.Content.Text (like deletions)
                     ann["mapped_start"] = min(start_hint, len(raw_text))
                     ann["mapped_end"] = ann["mapped_start"]
                     ann["inner_override"] = text_to_find
 
                 mapped_annotations.append(ann)
 
-            # Convert overlapping annotations into a sequence of insertion events
-            events = []
+            # 4. Build sequential Event list exactly like ingest.py
+            events_by_idx = {}
             for ann in mapped_annotations:
                 start = ann["mapped_start"]
                 end = ann["mapped_end"]
-                inner_override = ann.get("inner_override")
+                uid = ann["id"]
+                auth = ann.get("author", "Unknown")
+                date = ann.get("date", "")
 
-                layer = 2  # Default inner layer for revisions
-                if ann["type"] == "insert":
-                    prefix = "{++"
-                    suffix = f"++}}{{>>[Edit:{ann['id']}]<<}}"
-                elif ann["type"] == "delete":
-                    prefix = "{--"
-                    suffix = f"--}}{{>>[Edit:{ann['id']}]<<}}"
-                elif ann["type"] == "comment":
-                    prefix = "{=="
-                    suffix = f"==}}{{>>{ann['author']}: {ann['content']} [Edit:{ann['id']}]<<}}"
-                    layer = 1  # Outer layer for comments so they wrap revisions cleanly
+                if "inner_override" in ann:
+                    text_val = ann["inner_override"]
+                    if ann["type"] == "delete":
+                        events_by_idx.setdefault(start, []).extend(
+                            [DocxEvent("del_start", uid, auth, date), text_val, DocxEvent("del_end", uid)]
+                        )
+                    elif ann["type"] == "insert":
+                        events_by_idx.setdefault(start, []).extend(
+                            [DocxEvent("ins_start", uid, auth, date), text_val, DocxEvent("ins_end", uid)]
+                        )
+                    elif ann["type"] == "comment":
+                        events_by_idx.setdefault(start, []).extend(
+                            [DocxEvent("start", uid), text_val, DocxEvent("end", uid)]
+                        )
                 else:
-                    continue
+                    if ann["type"] == "insert":
+                        events_by_idx.setdefault(start, []).append(DocxEvent("ins_start", uid, auth, date))
+                        events_by_idx.setdefault(end, []).append(DocxEvent("ins_end", uid))
+                    elif ann["type"] == "delete":
+                        events_by_idx.setdefault(start, []).append(DocxEvent("del_start", uid, auth, date))
+                        events_by_idx.setdefault(end, []).append(DocxEvent("del_end", uid))
+                    elif ann["type"] == "comment":
+                        events_by_idx.setdefault(start, []).append(DocxEvent("start", uid))
+                        events_by_idx.setdefault(end, []).append(DocxEvent("end", uid))
 
-                if start == end:
-                    inner = inner_override if inner_override is not None else ""
-                    events.append((start, 1, 0, layer, ann["id"], prefix + inner + suffix))
-                else:
-                    length = end - start
-                    events.append((start, 2, -length, layer, ann["id"], prefix))
-                    events.append((end, 0, length, -layer, ann["id"], suffix))
-
-            events.sort()
-
-            result_parts = []
+            items = []
             last_idx = 0
-            for idx, _, _, _, _, text_to_insert in events:
+            indices = sorted(list(set([0, len(raw_text)] + list(events_by_idx.keys()))))
+
+            for idx in indices:
                 if idx > last_idx:
-                    result_parts.append(raw_text[last_idx:idx])
+                    text_seg = raw_text[last_idx:idx]
+                    if text_seg:
+                        items.append(text_seg)
                     last_idx = idx
-                result_parts.append(text_to_insert)
 
-            if last_idx < len(raw_text):
-                result_parts.append(raw_text[last_idx:])
+                if idx in events_by_idx:
+                    evts = events_by_idx[idx]
 
-            final_text = "".join(result_parts).replace("\r", "\n")
+                    def evt_sort_key(e):
+                        if isinstance(e, str):
+                            return 1
+                        if "end" in e.type:
+                            return 0
+                        return 2
+
+                    evts.sort(key=evt_sort_key)
+                    items.extend(evts)
+
+            # 5. Mirror the ingest.py State Machine
+            active_ins = {}
+            active_del = {}
+            active_comments = set()
+            deferred_meta_states = []
+            pending_text = ""
+            current_wrappers = ("", "")
+            parts = []
+
+            for i, item in enumerate(items):
+                if isinstance(item, str):
+                    seg = item
+
+                    if clean_view and active_del:
+                        continue
+
+                    if seg:
+                        if clean_view:
+                            new_wrappers = ("", "")
+                        else:
+                            new_wrappers = _get_wrappers(active_ins, active_del, active_comments)
+
+                        if pending_text and new_wrappers == current_wrappers:
+                            pending_text += seg
+                        else:
+                            if pending_text:
+                                s_tok, e_tok = current_wrappers
+                                parts.append(f"{s_tok}{pending_text}{e_tok}")
+                            pending_text = seg
+                            current_wrappers = new_wrappers
+
+                        if not clean_view:
+                            current_state = (active_ins.copy(), active_del.copy(), active_comments.copy())
+                            deferred_meta_states.append(current_state)
+
+                            should_defer = False
+                            is_redline = bool(active_ins) or bool(active_del)
+                            if is_redline:
+                                j = i + 1
+                                next_is_redline = False
+                                temp_ins = len(active_ins)
+                                temp_del = len(active_del)
+                                while j < len(items):
+                                    next_item = items[j]
+                                    if isinstance(next_item, str):
+                                        if temp_ins > 0 or temp_del > 0:
+                                            next_is_redline = True
+                                        break
+                                    elif isinstance(next_item, DocxEvent):
+                                        if next_item.type == "ins_start":
+                                            temp_ins += 1
+                                        elif next_item.type == "ins_end":
+                                            temp_ins = max(0, temp_ins - 1)
+                                        elif next_item.type == "del_start":
+                                            temp_del += 1
+                                        elif next_item.type == "del_end":
+                                            temp_del = max(0, temp_del - 1)
+                                    j += 1
+
+                                if next_is_redline:
+                                    should_defer = True
+
+                            if not should_defer:
+                                if pending_text:
+                                    s_tok, e_tok = current_wrappers
+                                    parts.append(f"{s_tok}{pending_text}{e_tok}")
+                                    pending_text = ""
+                                    current_wrappers = ("", "")
+
+                                meta_block = _build_merged_meta_block(deferred_meta_states, comments_data)
+                                if meta_block:
+                                    parts.append(f"{{>>{meta_block}<<}}")
+                                deferred_meta_states = []
+
+                elif isinstance(item, DocxEvent):
+                    if pending_text:
+                        s_tok, e_tok = current_wrappers
+                        parts.append(f"{s_tok}{pending_text}{e_tok}")
+                        pending_text = ""
+                        current_wrappers = ("", "")
+
+                    if item.type == "start":
+                        active_comments.add(item.id)
+                    elif item.type == "end":
+                        active_comments.discard(item.id)
+                    elif item.type == "ins_start":
+                        active_ins[item.id] = item
+                    elif item.type == "ins_end":
+                        active_ins.pop(item.id, None)
+                    elif item.type == "del_start":
+                        active_del[item.id] = item
+                    elif item.type == "del_end":
+                        active_del.pop(item.id, None)
+
+            if pending_text:
+                s_tok, e_tok = current_wrappers
+                parts.append(f"{s_tok}{pending_text}{e_tok}")
+
+            if deferred_meta_states:
+                meta_block = _build_merged_meta_block(deferred_meta_states, comments_data)
+                if meta_block:
+                    parts.append(f"{{>>{meta_block}<<}}")
+
+            final_text = "".join(parts).replace("\r", "\n")
+
             return ToolResult(
                 content=final_text,
                 structured_content={
@@ -175,6 +312,7 @@ if sys.platform == "win32":
             )
 
         finally:
+            # Omitted CoUninitialize() to prevent GC access violations.
             pass
 
     async def process_active_word_batch(
@@ -205,6 +343,7 @@ if sys.platform == "win32":
 
             stats = {"applied": 0, "failed": 0}
 
+            # Pre-resolve Revision objects to prevent index drift.
             revisions_map = {}
             try:
                 for i in range(1, doc.Revisions.Count + 1):
@@ -242,6 +381,7 @@ if sys.platform == "win32":
                                         doc.Comments.Add(replace_rng, change.comment)
                                     stats["applied"] += 1
                                 else:
+                                    # Fallback: search entire document
                                     doc_rng = doc.Content
                                     doc_rng.Find.ClearFormatting()
                                     doc_rng.Find.Text = search_text
@@ -303,6 +443,7 @@ if sys.platform == "win32":
         try:
             abs_path = str(Path(file_path).resolve())
 
+            # Dispatch starts a new instance or connects to an existing one
             app = win32com.client.Dispatch("Word.Application")
             app.Visible = visible
             if visible:
