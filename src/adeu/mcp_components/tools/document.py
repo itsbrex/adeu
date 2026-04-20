@@ -316,6 +316,7 @@ if sys.platform == "win32":
         return await _process_document_batch_disk(original_docx_path, author_name, ctx, changes, output_path)
 
     if os.getenv("ADEU_ENABLE_TEST_TOOLS") in ("1", "true", "True", "yes"):
+
         @tool(
             description=(
                 "Opens a DOCX file from disk into the live Microsoft Word application. "
@@ -329,7 +330,9 @@ if sys.platform == "win32":
         ) -> str:
             return await open_word_document_impl(ctx, file_path, visible)
 
-        @tool(description="Saves the currently active Microsoft Word document to disk. Optionally closes it after saving.")
+        @tool(
+            description="Saves the currently active Microsoft Word document to disk. Optionally closes it after saving."
+        )
         async def save_active_word_document(
             ctx: Context,
             output_path: Annotated[
