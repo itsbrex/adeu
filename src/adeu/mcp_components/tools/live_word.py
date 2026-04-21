@@ -471,5 +471,7 @@ else:
     async def open_word_document_impl(ctx: Context, file_path: str, visible: bool = True) -> str:
         raise NotImplementedError("Live Word is only supported on Windows.")
 
-    async def save_active_word_document_impl(ctx: Context, output_path: Optional[str] = None, close: bool = False) -> str:
+    async def save_active_word_document_impl(
+        ctx: Context, output_path: Optional[str] = None, close: bool = False
+    ) -> str:
         raise NotImplementedError("Live Word is only supported on Windows.")
