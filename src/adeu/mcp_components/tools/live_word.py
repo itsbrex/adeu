@@ -93,28 +93,22 @@ if sys.platform == "win32":
         if comment_text:
             doc.Comments.Add(target_rng, comment_text)
 
-    async def read_active_word_document(
-        ctx: Context,
-        clean_view: bool = False,
-    ) -> ToolResult:
-        await ctx.info("Connecting to active Word application...")
+    def _read_active_word_document_core(clean_view: bool = False) -> str:
+        """Synchronous core for reading live word document, decoupled from FastMCP context."""
         pythoncom.CoInitialize()
         try:
             try:
                 app = win32com.client.GetActiveObject("Word.Application")
                 doc = app.ActiveDocument
             except Exception as e:
-                raise ToolError(f"Could not connect to active Word document. {e}") from e
+                raise RuntimeError(f"Could not connect to active Word document. {e}") from e
 
             raw_text = doc.Content.Text
             if raw_text is None:
-                return ToolResult(content="", structured_content={"markdown": "", "title": "Live Word Document"})
+                return ""
 
             if clean_view:
-                clean_text = raw_text.replace("\r", "\n")
-                return ToolResult(
-                    content=clean_text, structured_content={"markdown": clean_text, "title": "Live Word Document"}
-                )
+                return raw_text.replace("\r", "\n")
 
             annotations = []
 
@@ -185,31 +179,42 @@ if sys.platform == "win32":
                 except Exception as e:
                     logger.warning(f"Failed to read comment {i}: {e}")
 
-            # 2b. Extract Formats (Fast COM Path using Collapse)
+            # 2b. Extract Formats (Fast COM Path using Style Cache)
             bold_ranges: List[Tuple[int, int]] = []
             italic_ranges: List[Tuple[int, int]] = []
+            style_cache = {}  # Cache style definitions to bypass slow COM lookup
+            doc_end = doc.Content.End
             try:
                 for fmt_name, fmt_list in [("bold", bold_ranges), ("italic", italic_ranges)]:
-                    rng = doc.Content
-                    rng.Find.ClearFormatting()
+                    rng = doc.Range(0, doc_end)
+                    find = rng.Find
+                    find.ClearFormatting()
                     if fmt_name == "bold":
-                        rng.Find.Font.Bold = True
+                        find.Font.Bold = True
                     else:
-                        rng.Find.Font.Italic = True
-                    rng.Find.Forward = True
-                    rng.Find.Wrap = 0  # wdFindStop
-                    rng.Find.Format = True
-                    rng.Find.Text = ""
-                    while rng.Find.Execute():
+                        find.Font.Italic = True
+                    find.Forward = True
+                    find.Wrap = 0  # wdFindStop
+                    find.Format = True
+                    find.Text = ""
+                    while find.Execute():
                         start = rng.Start
                         end = rng.End
 
                         is_explicit = True
                         try:
-                            style_font = rng.Style.Font
-                            if fmt_name == "bold" and getattr(style_font, "Bold", 0) == -1:
+                            style = rng.Style
+                            style_name = style.NameLocal
+                            if style_name not in style_cache:
+                                font = style.Font
+                                style_cache[style_name] = (
+                                    getattr(font, "Bold", 0) == -1,
+                                    getattr(font, "Italic", 0) == -1,
+                                )
+                            s_bold, s_italic = style_cache[style_name]
+                            if fmt_name == "bold" and s_bold:
                                 is_explicit = False
-                            elif fmt_name == "italic" and getattr(style_font, "Italic", 0) == -1:
+                            elif fmt_name == "italic" and s_italic:
                                 is_explicit = False
                         except Exception:
                             pass
@@ -241,14 +246,15 @@ if sys.platform == "win32":
             try:
                 # win32com constants: wdStyleHeading1 = -2, wdStyleHeading9 = -10
                 for lvl in range(1, 10):
-                    rng = doc.Content
-                    rng.Find.ClearFormatting()
-                    rng.Find.Style = -1 - lvl
-                    rng.Find.Forward = True
-                    rng.Find.Wrap = 0
-                    rng.Find.Format = True
-                    rng.Find.Text = ""
-                    while rng.Find.Execute():
+                    rng = doc.Range(0, doc_end)
+                    find = rng.Find
+                    find.ClearFormatting()
+                    find.Style = -1 - lvl
+                    find.Forward = True
+                    find.Wrap = 0
+                    find.Format = True
+                    find.Text = ""
+                    while find.Execute():
                         heading_events.append((rng.Start, lvl))
                         rng.Collapse(0)
             except Exception as e:
@@ -286,7 +292,6 @@ if sys.platform == "win32":
 
             items = []
             last_idx = 0
-            doc_end = doc.Content.End
             indices = [0, doc_end] + list(events_by_idx.keys())
             indices = sorted(list(set([i for i in indices if 0 <= i <= doc_end])))
 
@@ -465,6 +470,18 @@ if sys.platform == "win32":
                 .replace("\r", "\n")
             )
 
+            return final_text
+        finally:
+            # Omitted CoUninitialize() to prevent GC access violations.
+            pass
+
+    async def read_active_word_document(
+        ctx: Context,
+        clean_view: bool = False,
+    ) -> ToolResult:
+        await ctx.info("Connecting to active Word application...")
+        try:
+            final_text = _read_active_word_document_core(clean_view)
             return ToolResult(
                 content=final_text,
                 structured_content={
@@ -472,38 +489,31 @@ if sys.platform == "win32":
                     "title": "Live Word Document",
                 },
             )
+        except Exception as e:
+            raise ToolError(str(e)) from e
 
-        finally:
-            # Omitted CoUninitialize() to prevent GC access violations.
-            pass
-
-    async def process_active_word_batch(
-        ctx: Context,
-        changes: List[DocumentChange],
-        author_name: str,
-    ) -> str:
+    def _process_active_word_batch_core(changes: List[DocumentChange], author_name: str) -> dict:
+        """Synchronous core for processing live word batch, decoupled from FastMCP context."""
+        stats = {"applied": 0, "failed": 0}
         if not changes:
-            return "No changes provided."
+            return stats
 
         if not author_name or not author_name.strip():
-            return "Error: author_name cannot be empty."
+            raise ValueError("author_name cannot be empty.")
 
-        await ctx.info(f"Applying {len(changes)} changes to live Word document...")
         pythoncom.CoInitialize()
         try:
             try:
                 app = win32com.client.GetActiveObject("Word.Application")
                 doc = app.ActiveDocument
             except Exception as e:
-                raise ToolError(f"Could not connect to active Word document. {e}") from e
+                raise RuntimeError(f"Could not connect to active Word document. {e}") from e
 
             original_track_revisions = doc.TrackRevisions
             doc.TrackRevisions = True
 
             original_user = app.UserName
             app.UserName = author_name
-
-            stats = {"applied": 0, "failed": 0}
 
             # Pre-resolve Revision objects to prevent index drift.
             revisions_map = {}
@@ -585,7 +595,7 @@ if sys.platform == "win32":
                                         stats["failed"] += 1
                             else:
                                 stats["failed"] += 1
-                                await ctx.warning(f"Could not find target text: '{change.target_text[:30]}...'")
+                                logger.warning(f"Could not find target text: '{change.target_text[:30]}...'")
 
                         elif isinstance(change, AcceptChange):
                             if change.target_id in revisions_map:
@@ -593,7 +603,7 @@ if sys.platform == "win32":
                                 stats["applied"] += 1
                             else:
                                 stats["failed"] += 1
-                                await ctx.warning(f"Revision {change.target_id} not found or lost to drift.")
+                                logger.warning(f"Revision {change.target_id} not found or lost to drift.")
 
                         elif isinstance(change, RejectChange):
                             if change.target_id in revisions_map:
@@ -601,7 +611,7 @@ if sys.platform == "win32":
                                 stats["applied"] += 1
                             else:
                                 stats["failed"] += 1
-                                await ctx.warning(f"Revision {change.target_id} not found or lost to drift.")
+                                logger.warning(f"Revision {change.target_id} not found or lost to drift.")
 
                         elif isinstance(change, ReplyComment):
                             try:
@@ -614,20 +624,38 @@ if sys.platform == "win32":
                                 stats["applied"] += 1
                             except Exception as e:
                                 stats["failed"] += 1
-                                await ctx.warning(f"Comment {change.target_id} not found. {e}")
+                                logger.warning(f"Comment {change.target_id} not found. {e}")
 
                     except Exception as e:
                         stats["failed"] += 1
-                        await ctx.error(f"Failed to apply change {getattr(change, 'type', 'Unknown')}: {e}")
+                        logger.error(f"Failed to apply change {getattr(change, 'type', 'Unknown')}: {e}")
 
             finally:
                 app.UserName = original_user
                 doc.TrackRevisions = original_track_revisions
 
-            return f"Live Word Batch complete. Applied: {stats['applied']}, Failed: {stats['failed']}."
+            return stats
 
         finally:
             pass
+
+    async def process_active_word_batch(
+        ctx: Context,
+        changes: List[DocumentChange],
+        author_name: str,
+    ) -> str:
+        if not changes:
+            return "No changes provided."
+
+        if not author_name or not author_name.strip():
+            return "Error: author_name cannot be empty."
+
+        await ctx.info(f"Applying {len(changes)} changes to live Word document...")
+        try:
+            stats = _process_active_word_batch_core(changes, author_name)
+            return f"Live Word Batch complete. Applied: {stats['applied']}, Failed: {stats['failed']}."
+        except Exception as e:
+            raise ToolError(str(e)) from e
 
     async def open_word_document_impl(ctx: Context, file_path: str, visible: bool = True) -> str:
         await ctx.info(f"Opening {file_path} in Word...")

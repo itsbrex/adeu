@@ -156,7 +156,19 @@ def _load_batch_from_json(path: Path) -> List[DocumentChange]:
 
 
 def handle_extract(args):
-    text = _read_docx_text(args.input)
+    if args.live:
+        if sys.platform != "win32":
+            print("❌ --live is only supported on Windows.", file=sys.stderr)
+            sys.exit(1)
+        from adeu.mcp_components.tools.live_word import _read_active_word_document_core
+
+        text = _read_active_word_document_core(clean_view=False)
+    else:
+        if not args.input:
+            print("❌ Must provide input file or use --live", file=sys.stderr)
+            sys.exit(1)
+        text = _read_docx_text(args.input)
+
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
             f.write(text)
@@ -191,6 +203,16 @@ def handle_diff(args):
 
 
 def handle_apply(args):
+    if args.live:
+        if args.changes is None and args.original is not None:
+            # Shift positional arguments if only one is provided
+            args.changes = args.original
+            args.original = None
+
+    if not args.changes:
+        print("❌ Must provide changes file.", file=sys.stderr)
+        sys.exit(1)
+
     changes: List[DocumentChange] = []
 
     if args.changes.suffix.lower() == ".json":
@@ -198,12 +220,41 @@ def handle_apply(args):
         changes = _load_batch_from_json(args.changes)
     else:
         print(f"Calculating diff from text file {args.changes}...", file=sys.stderr)
-        text_orig = _read_docx_text(args.original)
+        if args.live:
+            if sys.platform != "win32":
+                print("❌ --live is only supported on Windows.", file=sys.stderr)
+                sys.exit(1)
+            from adeu.mcp_components.tools.live_word import _read_active_word_document_core
+
+            text_orig = _read_active_word_document_core(clean_view=False)
+        else:
+            if not args.original:
+                print("❌ Must provide original file if not using --live", file=sys.stderr)
+                sys.exit(1)
+            text_orig = _read_docx_text(args.original)
+
         with open(args.changes, "r", encoding="utf-8") as f:
             text_mod = f.read()
         changes.extend(generate_edits_from_text(text_orig, text_mod))
 
-    print(f"Applying {len(changes)} changes...", file=sys.stderr)
+    if args.live:
+        if sys.platform != "win32":
+            print("❌ --live is only supported on Windows.", file=sys.stderr)
+            sys.exit(1)
+        from adeu.mcp_components.tools.live_word import _process_active_word_batch_core
+
+        print(f"Applying {len(changes)} changes to live Word document...", file=sys.stderr)
+        stats = _process_active_word_batch_core(changes, args.author)
+        print(f"✅ Live Word Batch complete. Applied: {stats['applied']}, Failed: {stats['failed']}", file=sys.stderr)
+        if stats["failed"] > 0:
+            sys.exit(1)
+        return
+
+    if not args.original:
+        print("❌ Must provide original file if not using --live", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Applying {len(changes)} changes to {args.original.name}...", file=sys.stderr)
     with open(args.original, "rb") as f:
         stream = BytesIO(f.read())
 
@@ -409,7 +460,8 @@ def main():
     subparsers = parser.add_subparsers(dest="command", required=True, help="Subcommands")
 
     p_extract = subparsers.add_parser("extract", help="Extract raw text from a DOCX file")
-    p_extract.add_argument("input", type=Path, help="Input DOCX file")
+    p_extract.add_argument("input", type=Path, nargs="?", help="Input DOCX file (omit if --live)")
+    p_extract.add_argument("--live", action="store_true", help="Extract text from live active Word document")
     p_extract.add_argument("-o", "--output", type=Path, help="Output file (default: stdout)")
     p_extract.set_defaults(func=handle_extract)
 
@@ -433,8 +485,9 @@ def main():
         default_author = "Adeu AI"
 
     p_apply = subparsers.add_parser("apply", help="Apply edits to a DOCX")
-    p_apply.add_argument("original", type=Path, help="Original DOCX")
-    p_apply.add_argument("changes", type=Path, help="JSON edits file OR Modified Text file")
+    p_apply.add_argument("original", type=Path, nargs="?", help="Original DOCX (omit if --live)")
+    p_apply.add_argument("changes", type=Path, nargs="?", help="JSON edits file OR Modified Text file")
+    p_apply.add_argument("--live", action="store_true", help="Apply edits to live active Word document")
     p_apply.add_argument("-o", "--output", type=Path, help="Output DOCX path")
     p_apply.add_argument(
         "--author",
