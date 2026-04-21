@@ -78,7 +78,18 @@ def get_paragraph_prefix(paragraph: Paragraph) -> str:
     if style_name == "Title":
         return "# "
 
-    # 3. Heuristic for "Normal" style headers (Lazy Lawyer / Manually formatted)
+    # 3. Check for List Formatting
+    pPr = paragraph._element.find(qn("w:pPr"))
+    if pPr is not None:
+        numPr = pPr.find(qn("w:numPr"))
+        if numPr is not None:
+            numId = numPr.find(qn("w:numId"))
+            if numId is not None:
+                val = numId.get(qn("w:val"))
+                if val and val != "0":
+                    return "* "
+
+    # 4. Heuristic for "Normal" style headers (Lazy Lawyer / Manually formatted)
     # If text is short (<100 chars), All Caps, and Bold -> Likely a Header
     if style_name == "Normal":
         text = paragraph.text.strip()
@@ -160,6 +171,14 @@ def iter_paragraph_content(paragraph: Paragraph) -> Iterator[ParagraphItem]:
                 c_id = child.get(qn("w:id"))
                 if c_id:
                     yield DocxEvent("ref", c_id)
+            elif child.tag == qn("w:footnoteReference"):
+                f_id = child.get(qn("w:id"))
+                if f_id:
+                    yield DocxEvent("footnote", f_id)
+            elif child.tag == qn("w:endnoteReference"):
+                e_id = child.get(qn("w:id"))
+                if e_id:
+                    yield DocxEvent("endnote", e_id)
 
         # 1. Parse Field Characters (begin/separate/end)
         for fchar in r_element.findall(qn("w:fldChar")):
@@ -215,6 +234,8 @@ def iter_paragraph_content(paragraph: Paragraph) -> Iterator[ParagraphItem]:
             elif tag == qn("w:commentReference"):
                 # Reference directly in paragraph
                 pass
+            elif tag in (qn("w:hyperlink"), qn("w:sdt"), qn("w:smartTag"), qn("w:fldSimple"), qn("w:sdtContent")):
+                yield from traverse_node(child)
 
     yield from traverse_node(paragraph._element)
 
@@ -302,12 +323,28 @@ def _coalesce_runs_in_container(container_element, parent_paragraph):
                     children.pop(i + 1)
                     continue
 
-        if curr.tag in (qn("w:ins"), qn("w:del")):
+        if curr.tag in (
+            qn("w:ins"),
+            qn("w:del"),
+            qn("w:hyperlink"),
+            qn("w:sdt"),
+            qn("w:smartTag"),
+            qn("w:fldSimple"),
+            qn("w:sdtContent"),
+        ):
             _coalesce_runs_in_container(curr, parent_paragraph)
 
         i += 1
 
-    if children and children[-1].tag in (qn("w:ins"), qn("w:del")):
+    if children and children[-1].tag in (
+        qn("w:ins"),
+        qn("w:del"),
+        qn("w:hyperlink"),
+        qn("w:sdt"),
+        qn("w:smartTag"),
+        qn("w:fldSimple"),
+        qn("w:sdtContent"),
+    ):
         _coalesce_runs_in_container(children[-1], parent_paragraph)
 
 

@@ -238,6 +238,13 @@ def _build_paragraph_text(paragraph, comments_map, clean_view: bool = False):
                 active_del[item.id] = item
             elif item.type == "del_end":
                 active_del.pop(item.id, None)
+            elif item.type in ("footnote", "endnote"):
+                if pending_text:
+                    s_tok, e_tok = current_wrappers
+                    parts.append(f"{s_tok}{pending_text}{e_tok}")
+                    pending_text = ""
+                    current_wrappers = ("", "")
+                parts.append(f"[^{item.id}]")
 
     # Final Flush
     if pending_text:

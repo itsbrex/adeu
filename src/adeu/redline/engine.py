@@ -859,6 +859,11 @@ class RedlineEngine:
         if not target_runs:
             return False
 
+        affected_ps = set()
+        for run in target_runs:
+            if run._parent and hasattr(run._parent, "_element") and run._parent._element.tag == qn("w:p"):
+                affected_ps.add(run._parent._element)
+
         if op == EditOperationType.DELETION:
             for run in target_runs:
                 self.track_delete_run(run)
@@ -904,6 +909,39 @@ class RedlineEngine:
                         self._attach_comment(parent, first_del_element, ins_elem, edit.comment)
                     else:
                         self._attach_comment_spanning(start_p, first_del_element, end_p, ins_elem, edit.comment)
+
+        for p_elem in affected_ps:
+            has_visible = False
+            for tag in ["w:t", "w:tab", "w:br"]:
+                for node in p_elem.findall(f".//{qn(tag)}"):
+                    is_deleted = False
+                    curr = node.getparent()
+                    while curr is not None and curr != p_elem.getparent():
+                        if curr.tag == qn("w:del"):
+                            is_deleted = True
+                            break
+                        curr = curr.getparent()
+                    if not is_deleted:
+                        if tag == "w:t" and not node.text:
+                            continue
+                        has_visible = True
+                        break
+                if has_visible:
+                    break
+
+            if not has_visible:
+                pPr = p_elem.find(qn("w:pPr"))
+                if pPr is None:
+                    pPr = create_element("w:pPr")
+                    p_elem.insert(0, pPr)
+                rPr = pPr.find(qn("w:rPr"))
+                if rPr is None:
+                    rPr = create_element("w:rPr")
+                    pPr.append(rPr)
+                if rPr.find(qn("w:del")) is None:
+                    del_mark = self._create_track_change_tag("w:del")
+                    rPr.append(del_mark)
+
         return True
 
     def _get_next_run(self, run: Run) -> Optional[Run]:
