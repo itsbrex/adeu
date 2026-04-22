@@ -48,7 +48,11 @@ async def _read_docx_disk(file_path: str, ctx: Context, clean_view: bool) -> Too
 
 
 async def _process_document_batch_disk(
-    original_docx_path: str, author_name: str, ctx: Context, changes: List[DocumentChange], output_path: Optional[str]
+    original_docx_path: str,
+    author_name: str,
+    ctx: Context,
+    changes: List[DocumentChange],
+    output_path: Optional[str],
 ) -> str:
     """Core logic for modifying a DOCX on disk."""
     await ctx.info(
@@ -266,7 +270,8 @@ if sys.platform == "win32":
     async def read_docx(
         ctx: Context,
         file_path: Annotated[
-            Optional[str], "Path to the DOCX file. LEAVE EMPTY (Null) to read the live Word document!"
+            Optional[str],
+            "Path to the DOCX file. LEAVE EMPTY (Null) to read the live Word document!",
         ] = None,
         clean_view: Annotated[
             bool,
@@ -286,9 +291,12 @@ if sys.platform == "win32":
             "The `changes` parameter is a list of operations. Each item MUST have a `type`:\n"
             "1. 'modify': Search-and-replace text. Provide exact `target_text` (CRITICAL: include "
             "surrounding context if the word appears multiple times to ensure unique matching) and "
-            "`new_text` (the replacement, which supports Markdown like **bold** or _italic_). To "
-            "delete text, make `new_text` empty. Do NOT manually write CriticMarkup {++ tags; "
-            "the engine handles that.\n"
+            "`new_text` (the replacement). `new_text` supports full Markdown structure: "
+            "'# Heading 1' through '###### Heading 6' at the start of a line for heading styles, "
+            "'**bold**' and '_italic_' inline formatting, and blank lines ('\\n\\n') to split "
+            "`new_text` into multiple paragraphs. Multi-paragraph inserts are tracked as one "
+            "logical revision. To delete text, make `new_text` empty. Do NOT manually write "
+            "CriticMarkup {++ tags; the engine handles that.\n"
             "2. 'accept': Finalize a tracked change. Requires `target_id` (e.g., 'Chg:12').\n"
             "3. 'reject': Revert a tracked change. Requires `target_id` (e.g., 'Chg:12').\n"
             "4. 'reply': Reply to a comment. Requires `target_id` (e.g., 'Com:5') and `text`.\n\n"
@@ -305,10 +313,12 @@ if sys.platform == "win32":
             "List of changes to apply. Each change must specify 'type' as 'accept', 'reject', 'reply', or 'modify'.",
         ],
         original_docx_path: Annotated[
-            Optional[str], "Path to source file. LEAVE EMPTY (Null) to edit the live Word document!"
+            Optional[str],
+            "Path to source file. LEAVE EMPTY (Null) to edit the live Word document!",
         ] = None,
         output_path: Annotated[
-            Optional[str], "Optional output path (only used if original_docx_path is provided)."
+            Optional[str],
+            "Optional output path (only used if original_docx_path is provided).",
         ] = None,
     ) -> str:
         if not original_docx_path:
@@ -336,7 +346,8 @@ if sys.platform == "win32":
         async def save_active_word_document(
             ctx: Context,
             output_path: Annotated[
-                Optional[str], "Optional absolute path to 'Save As'. If omitted, overwrites the current file."
+                Optional[str],
+                "Optional absolute path to 'Save As'. If omitted, overwrites the current file.",
             ] = None,
             close: Annotated[bool, "Whether to close the document in Word after saving."] = False,
         ) -> str:
@@ -372,9 +383,12 @@ else:
             "The `changes` parameter is a list of operations. Each item MUST have a `type`:\n"
             "1. 'modify': Search-and-replace text. Provide exact `target_text` (CRITICAL: include "
             "surrounding context if the word appears multiple times to ensure unique matching) and "
-            "`new_text` (the replacement, which supports Markdown like **bold** or _italic_). To "
-            "delete text, make `new_text` empty. Do NOT manually write CriticMarkup {++ tags; "
-            "the engine handles that.\n"
+            "`new_text` (the replacement). `new_text` supports full Markdown structure: "
+            "'# Heading 1' through '###### Heading 6' at the start of a line for heading styles, "
+            "'**bold**' and '_italic_' inline formatting, and blank lines ('\\n\\n') to split "
+            "`new_text` into multiple paragraphs. Multi-paragraph inserts are tracked as one "
+            "logical revision. To delete text, make `new_text` empty. Do NOT manually write "
+            "CriticMarkup {++ tags; the engine handles that.\n"
             "2. 'accept': Finalize a tracked change. Requires `target_id` (e.g., 'Chg:12').\n"
             "3. 'reject': Revert a tracked change. Requires `target_id` (e.g., 'Chg:12').\n"
             "4. 'reply': Reply to a comment. Requires `target_id` (e.g., 'Com:5') and `text`.\n\n"
