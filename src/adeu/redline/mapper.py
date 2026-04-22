@@ -145,6 +145,16 @@ class DocumentMapper:
     def _map_paragraph_content(self, paragraph: Paragraph, start_offset: int) -> int:
         """
         Maps Runs to Spans, handling Flattened CriticMarkup generation.
+
+        FIX C (parity with ingest.py):
+          * Merge eligibility is WRAPPERS ONLY — two runs inside one redline
+            group combine into one {++...++} block regardless of style.
+          * When adjacent runs within a merged group share the SAME non-empty
+            style markers, the trailing virtual suffix of the previous run and
+            the leading virtual prefix of the next run are elided so we emit
+            "**AB**" instead of "**A****B**".
+          * `current_style` tracks the style of the trailing real piece in
+            `pending_runs`, used only for elision decisions.
         """
         current = start_offset
 
@@ -154,7 +164,38 @@ class DocumentMapper:
 
         deferred_meta_states: List[Tuple] = []
         current_wrappers = ("", "")
+        current_style = ("", "")  # Trailing style in pending_runs (for elision)
         pending_runs: List[Tuple[str, str, Optional[Run], Optional[str], Optional[str]]] = []
+
+        def flush_pending_runs():
+            """Emits pending_runs + wrappers as spans. Resets pending_runs."""
+            nonlocal current, pending_runs
+            if not pending_runs:
+                return
+            s_tok, e_tok = current_wrappers
+            if s_tok:
+                self._add_virtual_text(s_tok, current, paragraph)
+                current += len(s_tok)
+            for kind, txt, r_obj, i_id, d_id in pending_runs:
+                if kind == "virtual":
+                    self._add_virtual_text(txt, current, paragraph)
+                else:
+                    span = TextSpan(
+                        start=current,
+                        end=current + len(txt),
+                        text=txt,
+                        run=r_obj,
+                        paragraph=paragraph,
+                        ins_id=i_id,
+                        del_id=d_id,
+                    )
+                    self.spans.append(span)
+                    self.full_text += txt
+                current += len(txt)
+            if e_tok:
+                self._add_virtual_text(e_tok, current, paragraph)
+                current += len(e_tok)
+            pending_runs = []
 
         items = list(iter_paragraph_content(paragraph))
 
@@ -189,7 +230,6 @@ class DocumentMapper:
 
                 full_seg_text = "".join(x[1] for x in run_parts)
 
-                # Initialize IDs safely before use
                 curr_ins_id = list(active_ins.keys())[-1] if active_ins else None
                 curr_del_id = list(active_del.keys())[-1] if active_del else None
 
@@ -199,42 +239,40 @@ class DocumentMapper:
                     else:
                         start_token, end_token = self._get_wrappers(curr_ins_id, curr_del_id, active_ids)
                         new_wrappers = (start_token, end_token)
+                    new_style = (prefix, suffix)
 
                     if pending_runs and new_wrappers == current_wrappers:
+                        # MERGE: same redline wrapper group.
+                        # Elide adjacent same-style markers when applicable.
+                        skip_leading_prefix = False
+                        if (
+                            new_style == current_style
+                            and current_style != ("", "")
+                            and pending_runs
+                            and pending_runs[-1][0] == "virtual"
+                            and pending_runs[-1][1] == current_style[1]
+                        ):
+                            # Drop the trailing closing marker of the previous run;
+                            # the new run's opening marker will also be skipped below.
+                            pending_runs.pop()
+                            skip_leading_prefix = True
+
                         for kind, txt, r_obj in run_parts:
+                            if skip_leading_prefix and kind == "virtual" and txt == new_style[0]:
+                                skip_leading_prefix = False
+                                continue
                             pending_runs.append((kind, txt, r_obj, curr_ins_id, curr_del_id))
+
+                        current_style = new_style
                     else:
-                        if pending_runs:
-                            s_tok, e_tok = current_wrappers
-                            if s_tok:
-                                self._add_virtual_text(s_tok, current, paragraph)
-                                current += len(s_tok)
-                            for kind, txt, r_obj, i_id, d_id in pending_runs:
-                                if kind == "virtual":
-                                    self._add_virtual_text(txt, current, paragraph)
-                                else:
-                                    span = TextSpan(
-                                        start=current,
-                                        end=current + len(txt),
-                                        text=txt,
-                                        run=r_obj,
-                                        paragraph=paragraph,
-                                        ins_id=i_id,
-                                        del_id=d_id,
-                                    )
-                                    self.spans.append(span)
-                                    self.full_text += txt
-                                current += len(txt)
-                            if e_tok:
-                                self._add_virtual_text(e_tok, current, paragraph)
-                                current += len(e_tok)
-
+                        # FLUSH and open new wrapper group.
+                        flush_pending_runs()
                         current_wrappers = new_wrappers
-                        pending_runs = []
+                        current_style = new_style
                         for kind, txt, r_obj in run_parts:
                             pending_runs.append((kind, txt, r_obj, curr_ins_id, curr_del_id))
 
-                # Metadata Handling
+                # Metadata Handling (unchanged)
                 if not self.clean_view:
                     state_snapshot = (
                         active_ins.copy(),
@@ -249,7 +287,6 @@ class DocumentMapper:
                     if is_redline:
                         j = i + 1
                         next_is_redline = False
-                        # Use counters to handle nested tag closures safely during lookahead
                         temp_ins_count = len(active_ins)
                         temp_del_count = len(active_del)
 
@@ -277,67 +314,20 @@ class DocumentMapper:
                             should_defer = True
 
                     if not should_defer:
-                        if pending_runs:
-                            s_tok, e_tok = current_wrappers
-                            if s_tok:
-                                self._add_virtual_text(s_tok, current, paragraph)
-                                current += len(s_tok)
-                            for kind, txt, r_obj, i_id, d_id in pending_runs:
-                                if kind == "virtual":
-                                    self._add_virtual_text(txt, current, paragraph)
-                                else:
-                                    span = TextSpan(
-                                        start=current,
-                                        end=current + len(txt),
-                                        text=txt,
-                                        run=r_obj,
-                                        paragraph=paragraph,
-                                        ins_id=i_id,
-                                        del_id=d_id,
-                                    )
-                                    self.spans.append(span)
-                                    self.full_text += txt
-                                current += len(txt)
-                            if e_tok:
-                                self._add_virtual_text(e_tok, current, paragraph)
-                                current += len(e_tok)
-                            pending_runs = []
-                            current_wrappers = ("", "")
-
                         meta_block = self._build_merged_meta_block(deferred_meta_states)
                         if meta_block:
+                            flush_pending_runs()
+                            current_wrappers = ("", "")
+                            current_style = ("", "")
                             full_meta = f"{{>>{meta_block}<<}}"
                             self._add_virtual_text(full_meta, current, paragraph)
                             current += len(full_meta)
                         deferred_meta_states = []
 
             elif isinstance(item, DocxEvent):
-                if pending_runs:
-                    s_tok, e_tok = current_wrappers
-                    if s_tok:
-                        self._add_virtual_text(s_tok, current, paragraph)
-                        current += len(s_tok)
-                    for kind, txt, r_obj, i_id, d_id in pending_runs:
-                        if kind == "virtual":
-                            self._add_virtual_text(txt, current, paragraph)
-                        else:
-                            span = TextSpan(
-                                start=current,
-                                end=current + len(txt),
-                                text=txt,
-                                run=r_obj,
-                                paragraph=paragraph,
-                                ins_id=i_id,
-                                del_id=d_id,
-                            )
-                            self.spans.append(span)
-                            self.full_text += txt
-                        current += len(txt)
-                    if e_tok:
-                        self._add_virtual_text(e_tok, current, paragraph)
-                        current += len(e_tok)
-                    pending_runs = []
-                    current_wrappers = ("", "")
+                flush_pending_runs()
+                current_wrappers = ("", "")
+                current_style = ("", "")
 
                 if item.type == "start":
                     active_ids.add(item.id)
@@ -353,31 +343,7 @@ class DocumentMapper:
                 elif item.type == "del_end":
                     active_del.pop(item.id, None)
 
-        # Final Flush
-        if pending_runs:
-            s_tok, e_tok = current_wrappers
-            if s_tok:
-                self._add_virtual_text(s_tok, current, paragraph)
-                current += len(s_tok)
-            for kind, txt, r_obj, i_id, d_id in pending_runs:
-                if kind == "virtual":
-                    self._add_virtual_text(txt, current, paragraph)
-                else:
-                    span = TextSpan(
-                        start=current,
-                        end=current + len(txt),
-                        text=txt,
-                        run=r_obj,
-                        paragraph=paragraph,
-                        ins_id=i_id,
-                        del_id=d_id,
-                    )
-                    self.spans.append(span)
-                    self.full_text += txt
-                current += len(txt)
-            if e_tok:
-                self._add_virtual_text(e_tok, current, paragraph)
-                current += len(e_tok)
+        flush_pending_runs()
 
         if deferred_meta_states:
             meta_block = self._build_merged_meta_block(deferred_meta_states)

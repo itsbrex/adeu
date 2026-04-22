@@ -126,7 +126,13 @@ if sys.platform == "win32":
     import win32com.client
 
     from adeu.markup import _find_match_in_text
-    from adeu.models import AcceptChange, DocumentChange, ModifyText, RejectChange, ReplyComment
+    from adeu.models import (
+        AcceptChange,
+        DocumentChange,
+        ModifyText,
+        RejectChange,
+        ReplyComment,
+    )
 
     def _strip_critic_markup(text: str) -> str:
         """Removes CriticMarkup tags so raw text can be found via Word's native Find."""
@@ -136,6 +142,20 @@ if sys.platform == "win32":
         text = re.sub(r"\{>>.*?<<\}", "", text)
         text = re.sub(r"\{\+\+(.*?)\+\+\}", r"\1", text)
         text = re.sub(r"\{==(.*?)==\}", r"\1", text)
+        return text
+
+    def _strip_markdown_formatting(text: str) -> str:
+        """Strips Markdown bold/italic/header markers so target_text can match plain COM text."""
+        if not text:
+            return ""
+        # Strip bold: **text** or __text__
+        text = re.sub(r"\*\*", "", text)
+        text = re.sub(r"__", "", text)
+        # Strip italic: single * or _ not part of a word
+        text = re.sub(r"(?<!\w)\*(?!\*)", "", text)
+        text = re.sub(r"(?<!\w)_(?!_)", "", text)
+        # Strip header markers at line start
+        text = re.sub(r"^#+\s*", "", text, flags=re.MULTILINE)
         return text
 
     def _parse_markdown_for_com(text: str):
@@ -277,7 +297,7 @@ if sys.platform == "win32":
             for change in changes:
                 try:
                     if isinstance(change, ModifyText):
-                        clean_target = _strip_critic_markup(change.target_text)
+                        clean_target = _strip_markdown_formatting(_strip_critic_markup(change.target_text))
                         raw_text = doc.Content.Text
 
                         clean_chars = []
@@ -327,8 +347,17 @@ if sys.platform == "win32":
 
                             if rng.Find.Execute():
                                 actual_start = rng.Start
-                                replace_rng = doc.Range(Start=actual_start, End=actual_start + len(exact_substring))
-                                _apply_com_replacement(doc, app, replace_rng, change.new_text, change.comment)
+                                replace_rng = doc.Range(
+                                    Start=actual_start,
+                                    End=actual_start + len(exact_substring),
+                                )
+                                _apply_com_replacement(
+                                    doc,
+                                    app,
+                                    replace_rng,
+                                    change.new_text,
+                                    change.comment,
+                                )
                                 stats["applied"] += 1
                             else:
                                 # Fallback: search entire document
@@ -337,9 +366,16 @@ if sys.platform == "win32":
                                 doc_rng.Find.Text = search_text
                                 if doc_rng.Find.Execute():
                                     replace_rng = doc.Range(
-                                        Start=doc_rng.Start, End=doc_rng.Start + len(exact_substring)
+                                        Start=doc_rng.Start,
+                                        End=doc_rng.Start + len(exact_substring),
                                     )
-                                    _apply_com_replacement(doc, app, replace_rng, change.new_text, change.comment)
+                                    _apply_com_replacement(
+                                        doc,
+                                        app,
+                                        replace_rng,
+                                        change.new_text,
+                                        change.comment,
+                                    )
                                     stats["applied"] += 1
                                 else:
                                     stats["failed"] += 1
