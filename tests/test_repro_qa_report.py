@@ -35,11 +35,13 @@ class TestQaReportDefects:
         assert len(ins_elements) >= 1
         
         for ins in ins_elements:
-            for rPr in ins.findall(qn("w:r/w:rPr")):
-                b_tag = rPr.find(qn("w:b"))
-                if b_tag is not None:
-                    val = b_tag.get(qn("w:val"))
-                    assert val != "0", "Insertion explicitly disabled bold inside a bold run (H1)"
+            for run in ins.findall(qn("w:r")):
+                rPr = run.find(qn("w:rPr"))
+                if rPr is not None:
+                    b_tag = rPr.find(qn("w:b"))
+                    if b_tag is not None:
+                        val = b_tag.get(qn("w:val"))
+                        assert val != "0", "Insertion explicitly disabled bold inside a bold run (H1)"
 
     def test_h2_markdown_bold_inside_bold(self):
         """

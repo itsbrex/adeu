@@ -46,12 +46,46 @@ class CommentsManager:
     def __init__(self, doc):
         logger.debug("Initializing CommentsManager")
         self.doc = doc
-        self.comments_part = self._get_or_create_comments_part()
-        self._ensure_namespaces()
-        self.extended_part = self._get_or_create_extended_part()
-        self.ids_part = self._get_or_create_ids_part()
-        self.extensible_part = self._get_or_create_extensible_part()
-        self.next_id = self._get_next_comment_id()
+        self._comments_part = None
+        self._extended_part = None
+        self._ids_part = None
+        self._extensible_part = None
+        self._next_id = None
+
+    @property
+    def comments_part(self):
+        if self._comments_part is None:
+            self._comments_part = self._get_or_create_comments_part()
+            self._ensure_namespaces()
+        return self._comments_part
+
+    @property
+    def extended_part(self):
+        if self._extended_part is None:
+            self._extended_part = self._get_or_create_extended_part()
+        return self._extended_part
+
+    @property
+    def ids_part(self):
+        if self._ids_part is None:
+            self._ids_part = self._get_or_create_ids_part()
+        return self._ids_part
+
+    @property
+    def extensible_part(self):
+        if self._extensible_part is None:
+            self._extensible_part = self._get_or_create_extensible_part()
+        return self._extensible_part
+
+    @property
+    def next_id(self):
+        if self._next_id is None:
+            self._next_id = self._get_next_comment_id()
+        return self._next_id
+
+    @next_id.setter
+    def next_id(self, value):
+        self._next_id = value
 
     def _ensure_xml_part(self, part: Part) -> XmlPart:
         """
@@ -222,10 +256,10 @@ class CommentsManager:
         return extensible_part
 
     def _ensure_namespaces(self):
-        if not self.comments_part:
+        if not self._comments_part:
             return
 
-        element = self.comments_part.element
+        element = self._comments_part.element
         has_w14 = "w14" in element.nsmap and element.nsmap["w14"] == w14_ns
         has_w15 = "w15" in element.nsmap and element.nsmap["w15"] == w15_ns
 
@@ -267,12 +301,13 @@ class CommentsManager:
 
         # Replace the matched tag with our new tag(s)
         new_xml = xml_str.replace(original_tag, replacement, 1)
-        self.comments_part._element = parse_xml(new_xml)
+        self._comments_part._element = parse_xml(new_xml)
 
     def _get_next_comment_id(self) -> int:
         ids = [0]
-        if self.comments_part:
-            comments = self.comments_part.element.findall(qn("w:comment"))
+        part = self._get_existing_part_by_type(CT.WML_COMMENTS)
+        if part:
+            comments = parse_xml(part.blob).findall(qn("w:comment"))
             for c in comments:
                 try:
                     ids.append(int(c.get(qn("w:id"))))
@@ -295,9 +330,9 @@ class CommentsManager:
         return "".join(part[0] for part in author.split() if part).upper()
 
     def _find_para_id_for_comment(self, comment_id: str) -> Optional[str]:
-        if not self.comments_part:
+        if not self._comments_part:
             return None
-        for c in self.comments_part.element.findall(qn("w:comment")):
+        for c in self._comments_part.element.findall(qn("w:comment")):
             if c.get(qn("w:id")) == comment_id:
                 for p in c.findall(qn("w:p")):
                     pid = p.get(qn("w14:paraId"))
@@ -311,10 +346,12 @@ class CommentsManager:
         Modern Word flattens all replies to point to the original comment.
         """
         direct_para_id = self._find_para_id_for_comment(comment_id)
-        if not direct_para_id or not self.extended_part:
+        ext_part = self._get_existing_part_by_type("application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml")
+        if not direct_para_id or not ext_part:
             return direct_para_id
 
-        for child in self.extended_part.element:
+        ext_xml = parse_xml(ext_part.blob)
+        for child in ext_xml:
             if child.get(qn("w15:paraId")) == direct_para_id:
                 parent = child.get(qn("w15:paraIdParent"))
                 if parent:
@@ -372,7 +409,8 @@ class CommentsManager:
         # We only add this if we are NOT using modern comments (extended_part),
         # as modern Word relies on the extended part, and providing both might cause conflicts.
         # Only add if Modern Comments (extended) are NOT in use to avoid conflicts.
-        if parent_id and not self.extended_part:
+        ext_part = self._get_existing_part_by_type("application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml")
+        if parent_id and not ext_part:
             comment.set(qn("w15:p"), str(parent_id))
 
         para_id = self._generate_para_id()
@@ -426,13 +464,14 @@ class CommentsManager:
 
     def extract_comments_data(self) -> Dict[str, dict]:
         data: Dict[str, dict] = {}
-        if not self.comments_part:
+        part = self._get_existing_part_by_type(CT.WML_COMMENTS)
+        if not part:
             return data
 
         # Map paraId -> comment_id to resolve parents from commentsExtended
         para_id_to_cid: Dict[str, str] = {}
 
-        comments = self.comments_part.element.findall(qn("w:comment"))
+        comments = parse_xml(part.blob).findall(qn("w:comment"))
         for c in comments:
             c_id = c.get(qn("w:id"))
             c_author = c.get(qn("w:author")) or "Unknown"
@@ -474,9 +513,11 @@ class CommentsManager:
             }
 
         # 2. Enrich with Threading and Resolved status from commentsExtended (Modern Word)
-        if self.extended_part:
+        ext_part = self._get_existing_part_by_type("application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml")
+        if ext_part:
             try:
-                for child in self.extended_part.element:
+                ext_xml = parse_xml(ext_part.blob)
+                for child in ext_xml:
                     para_id = child.get(qn("w15:paraId"))
                     parent_para_id = child.get(qn("w15:paraIdParent"))
                     done_val = child.get(qn("w15:done"))
@@ -500,14 +541,14 @@ class CommentsManager:
         Safely deletes a comment and all its metadata from the 4 XML parts.
         Also recursively deletes any threaded replies attached to this comment.
         """
-        if not self.comments_part:
+        if not self._comments_part:
             return
 
         comment_id_str = str(comment_id)
         comment_el = None
 
         # 1. Find the comment element
-        for c in self.comments_part.element.findall(qn("w:comment")):
+        for c in self._comments_part.element.findall(qn("w:comment")):
             if c.get(qn("w:id")) == comment_id_str:
                 comment_el = c
                 break
@@ -532,7 +573,7 @@ class CommentsManager:
                         child_para_id = child.get(qn("w15:paraId"))
                         if child_para_id:
                             # Map child paraId back to comment ID
-                            for c in self.comments_part.element.findall(qn("w:comment")):
+                            for c in self._comments_part.element.findall(qn("w:comment")):
                                 for p in c.findall(qn("w:p")):
                                     if p.get(qn("w14:paraId")) == child_para_id:
                                         replies_to_delete.append(c.get(qn("w:id")))

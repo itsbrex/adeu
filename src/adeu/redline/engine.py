@@ -43,6 +43,7 @@ class RedlineEngine:
         self.mapper = DocumentMapper(self.doc)
         self.comments_manager = CommentsManager(self.doc)
         self.clean_mapper: Optional[DocumentMapper] = None
+        self.skipped_details: List[str] = []
 
     def _get_paired_nodes(self, node):
         """
@@ -358,14 +359,30 @@ class RedlineEngine:
         # Handle Bold
         if props.get("bold"):
             run_obj.bold = True
+            rPr = run_element.find(qn("w:rPr"))
+            if rPr is not None:
+                b_elem = rPr.find(qn("w:b"))
+                if b_elem is not None:
+                    b_elem.set(qn("w:val"), "1")
         elif suppress_inherited:
-            run_obj.bold = False
+            rPr = run_element.find(qn("w:rPr"))
+            if rPr is not None:
+                for b in rPr.findall(qn("w:b")):
+                    rPr.remove(b)
 
         # Handle Italic
         if props.get("italic"):
             run_obj.italic = True
+            rPr = run_element.find(qn("w:rPr"))
+            if rPr is not None:
+                i_elem = rPr.find(qn("w:i"))
+                if i_elem is not None:
+                    i_elem.set(qn("w:val"), "1")
         elif suppress_inherited:
-            run_obj.italic = False
+            rPr = run_element.find(qn("w:rPr"))
+            if rPr is not None:
+                for i in rPr.findall(qn("w:i")):
+                    rPr.remove(i)
 
     def _set_paragraph_style(self, p_element, style_name: str):
         existing_pPr = p_element.find(qn("w:pPr"))
@@ -626,6 +643,7 @@ class RedlineEngine:
         Processes a unified batch of actions and edits safely.
         Actions are applied first, the Virtual DOM map is rebuilt, and then text edits are validated and applied.
         """
+        self.skipped_details = []
         actions = [c for c in changes if isinstance(c, (AcceptChange, RejectChange, ReplyComment))]
         edits = [c for c in changes if isinstance(c, ModifyText)]
 
@@ -650,6 +668,7 @@ class RedlineEngine:
             "actions_skipped": skipped_actions,
             "edits_applied": applied_edits,
             "edits_skipped": skipped_edits,
+            "skipped_details": self.skipped_details,
         }
 
     def apply_edits(self, edits: List[ModifyText]) -> tuple[int, int]:
@@ -663,25 +682,25 @@ class RedlineEngine:
         # Indexed First (Reverse Order)
         indexed_edits.sort(key=lambda x: x._match_start_index or 0, reverse=True)
         for edit in indexed_edits:
-            # Fix 5.6: Prevent collisions from overlapping edits
             start = edit._match_start_index or 0
             end = start + (len(edit.target_text) if edit.target_text else 0)
             if any(start < occ_end and end > occ_start for occ_start, occ_end in occupied_ranges):
                 logger.warning(f"Skipping overlapping edit at index {start}")
                 skipped += 1
+                self.skipped_details.append(f"- Skipped overlapping edit targeting: '{edit.target_text[:40]}...'")
                 continue
             if self._apply_single_edit_indexed(edit):
                 applied += 1
                 occupied_ranges.append((start, end))
             else:
                 skipped += 1
+                self.skipped_details.append(f"- Failed to apply edit targeting: '{edit.target_text[:40]}...'")
 
         # Heuristic Second
         if unindexed_edits:
             unindexed_edits.sort(key=lambda x: len(x.target_text), reverse=True)
             self.mapper._build_map()
             for edit in unindexed_edits:
-                # Fix 5.6: Check for overlaps in heuristic path too
                 if edit.target_text:
                     start_idx, match_len = self.mapper.find_match_index(edit.target_text)
                     if start_idx != -1:
@@ -689,6 +708,7 @@ class RedlineEngine:
                         if any(start_idx < occ_end and end_idx > occ_start for occ_start, occ_end in occupied_ranges):
                             logger.warning(f"Skipping overlapping heuristic edit at index {start_idx}")
                             skipped += 1
+                            self.skipped_details.append(f"- Skipped overlapping edit targeting: '{edit.target_text[:40]}...'")
                             continue
                         if self._apply_single_edit_heuristic(edit):
                             applied += 1
@@ -696,12 +716,15 @@ class RedlineEngine:
                             self.mapper._build_map()
                         else:
                             skipped += 1
+                            self.skipped_details.append(f"- Failed to apply edit targeting: '{edit.target_text[:40]}...'")
                         continue
                 if self._apply_single_edit_heuristic(edit):
                     applied += 1
                     self.mapper._build_map()
                 else:
                     skipped += 1
+                    target_snippet = edit.target_text[:40] if edit.target_text else "insertion"
+                    self.skipped_details.append(f"- Failed to apply edit targeting: '{target_snippet}...'")
         return applied, skipped
 
     def _apply_single_edit_heuristic(self, edit: ModifyText) -> bool:
@@ -734,6 +757,12 @@ class RedlineEngine:
         actual_doc_text = self.mapper.full_text[start_idx : start_idx + match_len]
 
         if actual_doc_text == effective_new_text:
+            if edit.comment:
+                proxy_edit = ModifyText(type="modify", target_text=actual_doc_text, new_text=effective_new_text, comment=edit.comment)
+                proxy_edit._match_start_index = start_idx
+                proxy_edit._internal_op = "COMMENT_ONLY"
+                proxy_edit._active_mapper_ref = active_mapper
+                return self._apply_single_edit_indexed(proxy_edit)
             return True
 
         if effective_new_text.startswith(actual_doc_text):
@@ -791,6 +820,27 @@ class RedlineEngine:
 
         logger.debug(f"Applying Edit at [{start_idx}:{start_idx + length}] Op={op}")
 
+        if op == "COMMENT_ONLY":
+            target_runs = active_mapper.find_target_runs_by_index(start_idx, length)
+            if not target_runs:
+                return False
+            if edit.comment:
+                first_el = target_runs[0]._element
+                last_el = target_runs[-1]._element
+                start_p = first_el.getparent()
+                while start_p is not None and start_p.tag != qn("w:p"):
+                    start_p = start_p.getparent()
+                end_p = last_el.getparent()
+                while end_p is not None and end_p.tag != qn("w:p"):
+                    end_p = end_p.getparent()
+                
+                if start_p is not None and end_p is not None:
+                    if start_p == end_p:
+                        self._attach_comment(start_p, first_el, last_el, edit.comment)
+                    else:
+                        self._attach_comment_spanning(start_p, first_el, end_p, last_el, edit.comment)
+            return True
+
         if op == EditOperationType.INSERTION:
             anchor_run = self.mapper.get_insertion_anchor(start_idx)
             if not anchor_run:
@@ -827,32 +877,6 @@ class RedlineEngine:
 
                     if edit.comment:
                         self._attach_comment(actual_parent, ins_elem, ins_elem, edit.comment)
-            return True
-
-        if op == EditOperationType.INSERTION:
-            anchor_run = self.mapper.get_insertion_anchor(start_idx)
-            if not anchor_run:
-                return False
-
-            parent = anchor_run._element.getparent()
-            index = parent.index(anchor_run._element)
-
-            final_new_text = edit.new_text or ""
-
-            if start_idx == 0:
-                ins_elem = self.track_insert(final_new_text, anchor_run=anchor_run, comment=edit.comment)
-                if ins_elem is not None:
-                    parent.insert(index, ins_elem)
-                if edit.comment and ins_elem is not None:
-                    self._attach_comment(parent, ins_elem, ins_elem, edit.comment)
-            else:
-                next_run = self._get_next_run(anchor_run)
-                style_run = self._determine_style_source(anchor_run, next_run, final_new_text)
-                ins_elem = self.track_insert(final_new_text, anchor_run=style_run, comment=edit.comment)
-                if ins_elem is not None:
-                    parent.insert(index + 1, ins_elem)
-                if edit.comment and ins_elem is not None:
-                    self._attach_comment(parent, ins_elem, ins_elem, edit.comment)
             return True
 
         target_runs = active_mapper.find_target_runs_by_index(start_idx, length)
@@ -892,9 +916,13 @@ class RedlineEngine:
                 check_text = original_new_text if original_new_text is not None else edit.new_text
                 _has_markdown = bool(re.search(r"\*\*|_", check_text or ""))
 
+                del_r = last_del_element.find(qn("w:r"))
+                if del_r is None:
+                    del_r = target_runs[-1]._element
+
                 ins_elem = self.track_insert(
                     text_to_insert,
-                    anchor_run=Run(target_runs[-1]._element, target_runs[-1]._parent),
+                    anchor_run=Run(del_r, target_runs[-1]._parent),
                     comment=edit.comment,
                     suppress_inherited=not _has_markdown,
                 )
@@ -1013,6 +1041,7 @@ class RedlineEngine:
                     resolved_history.update(resolved_now)
                 applied += 1
             else:
+                self.skipped_details.append(f"- Failed to apply action: {act.type} on {target_id}")
                 skipped += 1
 
         if applied > 0:
@@ -1238,9 +1267,19 @@ class RedlineEngine:
                 index += 1
             parent.remove(ins)
 
+        for p in self.doc.element.xpath("//w:p"):
+            pPr = p.find(qn("w:pPr"))
+            if pPr is not None:
+                rPr = pPr.find(qn("w:rPr"))
+                if rPr is not None and rPr.find(qn("w:del")) is not None:
+                    self._delete_comments_in_element(p)
+                    if p.getparent() is not None:
+                        p.getparent().remove(p)
+
         for d in self.doc.element.xpath("//w:del"):
             self._delete_comments_in_element(d)
-            d.getparent().remove(d)
+            if d.getparent() is not None:
+                d.getparent().remove(d)
 
         # 1. Purge all remaining comments from the comment manager XML parts
         # FIX: Use findall with qn()
