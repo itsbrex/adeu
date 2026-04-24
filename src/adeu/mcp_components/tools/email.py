@@ -189,7 +189,8 @@ async def search_and_fetch_emails(
     offset: Annotated[int, "Pagination offset to skip the first N emails."] = 0,
     email_id: Annotated[
         Optional[str],
-        "If provided, fetches the exact full email and downloads its attachments, ignoring other filters.",
+        "If provided, fetches the exact full email and downloads its attachments. "
+        "Accepts short IDs from search results (e.g., 'msg_abc123') OR direct Adeu IDs (e.g., 'adeu_4052').",
     ] = None,
     working_directory: Annotated[
         Optional[str],
