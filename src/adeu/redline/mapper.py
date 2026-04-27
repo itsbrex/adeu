@@ -13,6 +13,7 @@ from docx.table import Table
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 
+from adeu.domain import build_structural_appendix
 from adeu.redline.comments import CommentsManager
 from adeu.utils.docx import (
     DocxEvent,
@@ -36,6 +37,7 @@ class TextSpan:
     paragraph: Optional[Paragraph]
     ins_id: Optional[str] = None
     del_id: Optional[str] = None
+    hyperlink_id: Optional[str] = None
 
 
 class DocumentMapper:
@@ -46,6 +48,7 @@ class DocumentMapper:
         self.comments_map = self.comments_mgr.extract_comments_data()
         self.full_text = ""
         self.spans: List[TextSpan] = []
+        self.appendix_start_index: int = -1
         self._build_map()
 
     def _build_map(self):
@@ -66,29 +69,47 @@ class DocumentMapper:
             self.spans.pop()
             self.full_text = self.full_text[:-2]
 
+        appendix_text = build_structural_appendix(self.doc, self.full_text)
+        if appendix_text:
+            self.appendix_start_index = len(self.full_text)
+            self._add_virtual_text(appendix_text, self.appendix_start_index, None)
+
     def _map_blocks(self, container, offset: int) -> int:
         current = offset
+        c_type = type(container).__name__
 
+        if c_type == "NotesPart":
+            header = "## Footnotes" if container.note_type == "fn" else "## Endnotes"
+            sep = f"---\n{header}"
+            self._add_virtual_text(sep, current, None)
+            current += len(sep)
+            self._add_virtual_text("\n\n", current, None)
+            current += 2
+
+        is_first_para = True
         for item in iter_block_items(container):
-            if isinstance(item, Paragraph):
-                # FIX: Include paragraph prefix (e.g. "# ") in the mapper
+            i_type = type(item).__name__
+
+            if i_type == "FootnoteItem":
+                current = self._map_blocks(item, current)
+            elif isinstance(item, Paragraph):
                 prefix = get_paragraph_prefix(item)
+                if is_first_para and c_type == "FootnoteItem":
+                    prefix = f"[^{container.note_type}-{container.id}]: " + prefix
                 if prefix:
                     self._add_virtual_text(prefix, current, item)
                     current += len(prefix)
 
                 current = self._map_paragraph_content(item, current)
-
-                # Separator between paragraphs
                 self._add_virtual_text("\n\n", current, item)
                 current += 2
-
+                is_first_para = False
             elif isinstance(item, Table):
                 current = self._map_table(item, current)
-                # Separator after table
                 if self.spans and self.spans[-1].text != "\n\n":
                     self._add_virtual_text("\n\n", current, None)
                     current += 2
+                is_first_para = False
 
         return current
 
@@ -165,6 +186,7 @@ class DocumentMapper:
         deferred_meta_states: List[Tuple] = []
         current_wrappers = ("", "")
         current_style = ("", "")  # Trailing style in pending_runs (for elision)
+        active_hyperlink_id = None
         pending_runs: List[Tuple[str, str, Optional[Run], Optional[str], Optional[str]]] = []
 
         def flush_pending_runs():
@@ -178,7 +200,7 @@ class DocumentMapper:
                 current += len(s_tok)
             for kind, txt, r_obj, i_id, d_id in pending_runs:
                 if kind == "virtual":
-                    self._add_virtual_text(txt, current, paragraph)
+                    self._add_virtual_text(txt, current, paragraph, hyperlink_id=active_hyperlink_id)
                 else:
                     span = TextSpan(
                         start=current,
@@ -188,6 +210,7 @@ class DocumentMapper:
                         paragraph=paragraph,
                         ins_id=i_id,
                         del_id=d_id,
+                        hyperlink_id=active_hyperlink_id,
                     )
                     self.spans.append(span)
                     self.full_text += txt
@@ -342,6 +365,42 @@ class DocumentMapper:
                     active_del[item.id] = item
                 elif item.type == "del_end":
                     active_del.pop(item.id, None)
+                elif item.type in ("footnote", "endnote"):
+                    flush_pending_runs()
+                    current_wrappers = ("", "")
+                    current_style = ("", "")
+                    prefix_str = "fn" if item.type == "footnote" else "en"
+                    txt = f"[^{prefix_str}-{item.id}]"
+                    self._add_virtual_text(txt, current, paragraph)
+                    current += len(txt)
+                elif item.type == "hyperlink_start":
+                    flush_pending_runs()
+                    current_wrappers = ("", "")
+                    current_style = ("", "")
+                    self._add_virtual_text("[", current, paragraph, hyperlink_id=item.id)
+                    current += 1
+                    active_hyperlink_id = item.id
+                elif item.type == "hyperlink_end":
+                    flush_pending_runs()
+                    current_wrappers = ("", "")
+                    current_style = ("", "")
+                    txt = f"]({item.date})"
+                    self._add_virtual_text(txt, current, paragraph, hyperlink_id=item.id)
+                    current += len(txt)
+                    active_hyperlink_id = None
+                elif item.type == "xref_start":
+                    flush_pending_runs()
+                    current_wrappers = ("", "")
+                    current_style = ("", "")
+                    self._add_virtual_text("[~", current, paragraph)
+                    current += 2
+                elif item.type == "xref_end":
+                    flush_pending_runs()
+                    current_wrappers = ("", "")
+                    current_style = ("", "")
+                    txt = f"~](#{item.id})"
+                    self._add_virtual_text(txt, current, paragraph)
+                    current += len(txt)
 
         flush_pending_runs()
 
@@ -394,13 +453,16 @@ class DocumentMapper:
 
         return "\n".join(change_lines + comment_lines)
 
-    def _add_virtual_text(self, text: str, offset: int, context_paragraph: Optional[Paragraph]):
+    def _add_virtual_text(
+        self, text: str, offset: int, context_paragraph: Optional[Paragraph], hyperlink_id: Optional[str] = None
+    ):
         span = TextSpan(
             start=offset,
             end=offset + len(text),
             text=text,
             run=None,  # Virtual
             paragraph=context_paragraph,
+            hyperlink_id=hyperlink_id,
         )
         self.spans.append(span)
         self.full_text += text

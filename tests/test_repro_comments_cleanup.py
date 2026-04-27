@@ -135,3 +135,44 @@ def test_accept_all_revisions_total_comment_wipe():
     assert len(c_mgr.comments_part.element.findall(qn("w:comment"))) == 0
     if c_mgr.ids_part:
         assert len(c_mgr.ids_part.element.findall(qn("w16cid:commentId"))) == 0
+
+
+def test_accept_all_revisions_preserves_untouched_comments():
+    """
+    VAL-CRIT-2: accept_all_revisions must NOT perform global normalizations or
+    blindly wipe unrelated comments/proofErrs.
+    """
+    doc = Document()
+    doc.add_paragraph("Sentence one. ")
+    doc.add_paragraph("Sentence two. ")
+    stream = io.BytesIO()
+    doc.save(stream)
+    stream.seek(0)
+
+    engine = RedlineEngine(stream, author="TestAuthor")
+
+    # Add a legitimate unrelated comment that should SURVIVE
+    _inject_comment_into_element(engine, engine.doc.paragraphs[0]._element, "Legitimate comment.")
+
+    # Add a fake proofErr to verify normalize_docx isn't called
+    proof = OxmlElement("w:proofErr")
+    proof.set(qn("w:type"), "spellStart")
+    engine.doc.paragraphs[0]._element.append(proof)
+
+    # Add a track-change (w:ins) to paragraph 2
+    ins_tag = OxmlElement("w:ins")
+    ins_tag.set(qn("w:id"), "99")
+    r_tag = OxmlElement("w:r")
+    t_tag = OxmlElement("w:t")
+    t_tag.text = "Inserted"
+    r_tag.append(t_tag)
+    ins_tag.append(r_tag)
+    engine.doc.paragraphs[1]._element.append(ins_tag)
+
+    # Run acceptance
+    engine.accept_all_revisions()
+
+    doc_xml = engine.doc.element.xml
+    assert "w:ins" not in doc_xml, "Track change must be accepted/gone"
+    assert "w:commentRangeStart" in doc_xml, "Original comment must survive"
+    assert "w:proofErr" in doc_xml, "w:proofErr must survive (normalize_docx was wrongly called)"

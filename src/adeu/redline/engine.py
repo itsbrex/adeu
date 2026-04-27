@@ -14,7 +14,7 @@ from adeu.diff import trim_common_context
 from adeu.models import AcceptChange, DocumentChange, EditOperationType, ModifyText, RejectChange, ReplyComment
 from adeu.redline.comments import CommentsManager
 from adeu.redline.mapper import DocumentMapper
-from adeu.utils.docx import create_attribute, create_element, normalize_docx
+from adeu.utils.docx import create_attribute, create_element
 
 logger = structlog.get_logger(__name__)
 
@@ -28,7 +28,7 @@ class BatchValidationError(Exception):
     """Raised when text edits fail location validation."""
 
     def __init__(self, errors: List[str]):
-        super().__init__("Batch validation failed")
+        super().__init__("Batch validation failed:\n" + "\n".join(errors))
         self.errors = errors
 
 
@@ -37,16 +37,33 @@ class RedlineEngine:
         self.doc = Document(doc_stream)
 
         # M8: Ensure w16du namespace is declared at the document root to prevent ns0 aliasing
+        import re
+
         import lxml.etree as etree
 
-        xml_bytes = etree.tostring(self.doc.part._element, encoding="utf-8", pretty_print=False)
-        xml_str = xml_bytes.decode("utf-8")
-
         w16du_ns_str = 'xmlns:w16du="http://schemas.microsoft.com/office/word/2023/wordml/word16du"'
-        if 'xmlns:w16du="' not in xml_str and "xmlns:w16du='" not in xml_str:
-            xml_str = xml_str.replace("<w:document ", "<w:document " + w16du_ns_str + " ", 1)
-            self.doc.part._element = parse_xml(xml_str.encode("utf-8"))
-            self.doc._element = self.doc.part._element
+
+        parts_to_inject = [self.doc.part]
+        for part in self.doc.part.package.parts:
+            if part != self.doc.part and "wordprocessingml" in part.content_type and part.content_type.endswith("+xml"):
+                parts_to_inject.append(part)
+
+        for part in parts_to_inject:
+            if not hasattr(part, "_adeu_element"):
+                if part == self.doc.part:
+                    part._adeu_element = part._element  # type: ignore[attr-defined]
+                else:
+                    part._adeu_element = parse_xml(part.blob)  # type: ignore[attr-defined]
+
+            xml_bytes = etree.tostring(part._adeu_element, encoding="utf-8", pretty_print=False)  # type: ignore[attr-defined]
+            xml_str = xml_bytes.decode("utf-8")
+
+            if 'xmlns:w16du="' not in xml_str and "xmlns:w16du='" not in xml_str:
+                xml_str = re.sub(r"(<w:[a-zA-Z0-9_]+ )", r"\1" + w16du_ns_str + " ", xml_str, count=1)
+                part._adeu_element = parse_xml(xml_str.encode("utf-8"))  # type: ignore[attr-defined]
+                if part == self.doc.part:
+                    self.doc.part._element = part._adeu_element  # type: ignore[attr-defined]
+                    self.doc._element = self.doc.part._element
 
         self.author = author
         self.timestamp = (
@@ -615,6 +632,39 @@ class RedlineEngine:
         self.mapper._build_map()
 
         for i, edit in enumerate(edits):
+            if edit.target_text and "[~" in edit.target_text:
+                target_xrefs = dict(re.findall(r"\[~([^~]+)~\]\(#([^\)]+)\)", edit.target_text))
+                new_xrefs = dict(re.findall(r"\[~([^~]+)~\]\(#([^\)]+)\)", edit.new_text or ""))
+                for t_text, t_hash in target_xrefs.items():
+                    if t_hash in new_xrefs.values():
+                        # Same hash exists, check if text changed
+                        for n_text, n_hash in new_xrefs.items():
+                            if n_hash == t_hash and n_text != t_text:
+                                errors.append(
+                                    f"- Edit {i + 1} Failed: Cross-reference display text is computed "
+                                    "from the target. To change what this reference says, edit the heading "
+                                    "or paragraph at the target instead."
+                                )
+                    if t_text in new_xrefs:
+                        # Same text exists, check if hash changed
+                        if new_xrefs[t_text] != t_hash:
+                            errors.append(
+                                f"- Edit {i + 1} Failed: Directly retargeting cross-references via text "
+                                "replacement is disallowed to prevent dependency corruption."
+                                " Edit the target text directly."
+                            )
+
+            if edit.new_text:
+                for line in edit.new_text.splitlines():
+                    stripped = line.lstrip()
+                    if stripped.startswith("#######"):
+                        level = len(stripped) - len(stripped.lstrip("#"))
+                        if stripped[level:].startswith(" ") or not stripped[level:]:
+                            errors.append(
+                                f"- Edit {i + 1} Failed: Heading level {level} is not supported (maximum is 6)."
+                            )
+                            break
+
             if not edit.target_text:
                 continue  # Skip validation for pure index-based insertions
 
@@ -628,6 +678,28 @@ class RedlineEngine:
                 matches = self.clean_mapper.find_all_match_indices(edit.target_text)
                 if len(matches) > 0:
                     active_text = self.clean_mapper.full_text
+
+            # Track 3: Appendix Boundary Validation
+            if self.mapper.appendix_start_index != -1:
+                violates_boundary = False
+                for match_start, match_length in matches:
+                    if match_start + match_length > self.mapper.appendix_start_index:
+                        violates_boundary = True
+                        break
+                if "READONLY_BOUNDARY_START" in (edit.target_text or "") or "READONLY_BOUNDARY_START" in (
+                    edit.new_text or ""
+                ):
+                    violates_boundary = True
+                if "# Document Structure (Read-Only)" in (
+                    edit.target_text or ""
+                ) or "# Document Structure (Read-Only)" in (edit.new_text or ""):
+                    violates_boundary = True
+                if violates_boundary:
+                    errors.append(
+                        f"- Edit {i + 1} Failed: Modification targets the read-only boundary "
+                        "(Structural Appendix). This section cannot be edited."
+                    )
+                    continue
 
             if len(matches) == 0:
                 errors.append(f'- Edit {i + 1} Failed: Target text not found in document:\n  "{edit.target_text}"')
@@ -723,7 +795,7 @@ class RedlineEngine:
                     msg = f"- Failed to apply edit targeting: '{target_snippet}...'"
                     if getattr(edit, "_is_table_edit", False) or " | " in (edit.target_text or ""):
                         msg += (
-                            ". (Note: Structural table changes like adding/removing columns "
+                            ". (Note: Structural table changes like adding/removing rows or columns "
                             "are not supported via text replace)."
                         )
                     self.skipped_details.append(msg)
@@ -801,6 +873,33 @@ class RedlineEngine:
         effective_new_text = edit.new_text or ""
         actual_doc_text = self.mapper.full_text[start_idx : start_idx + match_len]
 
+        if "](" in actual_doc_text:
+            t_links = list(re.finditer(r"\[([^\]]+)\]\(([^)]+)\)", actual_doc_text))
+            n_links = list(re.finditer(r"\[([^\]]+)\]\(([^)]+)\)", effective_new_text))
+            if len(t_links) == 1 and len(n_links) == 1:
+                t_text, t_url = t_links[0].groups()
+                n_text, n_url = n_links[0].groups()
+
+                sub_edits = []
+                if t_text != n_text:
+                    t_idx = actual_doc_text.find(t_text)
+                    txt_edit = ModifyText(type="modify", target_text=t_text, new_text=n_text, comment=edit.comment)
+                    txt_edit._match_start_index = start_idx + t_idx
+                    txt_edit._internal_op = EditOperationType.MODIFICATION
+                    txt_edit._active_mapper_ref = active_mapper
+                    sub_edits.append(txt_edit)
+
+                if t_url != n_url:
+                    t_idx = actual_doc_text.find(t_url)
+                    url_edit = ModifyText(type="modify", target_text=t_url, new_text=n_url, comment=None)
+                    url_edit._match_start_index = start_idx + t_idx
+                    url_edit._internal_op = "URL_RETARGET"
+                    url_edit._active_mapper_ref = active_mapper
+                    sub_edits.append(url_edit)
+
+                if sub_edits:
+                    return sub_edits if len(sub_edits) > 1 else sub_edits[0]
+
         # TABLE CELL SPLITTING LOGIC (R1, R2, R3, R4, N1 Fix)
         # Only split if the target area actually spans a virtual table boundary (" | ")
         if " | " in actual_doc_text:
@@ -810,9 +909,15 @@ class RedlineEngine:
             if len(actual_cells) == len(new_cells) and len(actual_cells) > 1:
                 sub_edits = []
                 current_offset = start_idx
-                comment_attached = False
 
-                for a_cell, n_cell in zip(actual_cells, new_cells, strict=True):
+                # Determine which cell should receive the comment (first cell that actually changes, or cell 0)
+                target_comment_idx = 0
+                for idx, (a, n) in enumerate(zip(actual_cells, new_cells, strict=True)):
+                    if a.strip() != n.strip():
+                        target_comment_idx = idx
+                        break
+
+                for cell_idx, (a_cell, n_cell) in enumerate(zip(actual_cells, new_cells, strict=True)):
                     a_clean = a_cell.strip()
                     n_clean = n_cell.strip()
 
@@ -827,12 +932,14 @@ class RedlineEngine:
                     n_cell_aligned = a_leading + n_clean + a_trailing
                     start_offset = len(a_leading)
 
-                    if a_cell != n_cell_aligned or (edit.comment and not comment_attached):
+                    should_attach_comment = (edit.comment is not None) and (cell_idx == target_comment_idx)
+
+                    if a_cell != n_cell_aligned or should_attach_comment:
                         sub_edit = ModifyText(
                             type="modify",
                             target_text=a_clean,
                             new_text=n_clean,
-                            comment=edit.comment if not comment_attached else None,
+                            comment=edit.comment if should_attach_comment else None,
                         )
                         sub_edit._active_mapper_ref = active_mapper
                         sub_edit._original_target_text = edit.target_text  # type: ignore[attr-defined]
@@ -862,7 +969,6 @@ class RedlineEngine:
                                 sub_edit._internal_op = "COMMENT_ONLY"
 
                         sub_edits.append(sub_edit)
-                        comment_attached = True
 
                     current_offset += len(a_cell) + 1  # Move past cell and the "|" separator
 
@@ -943,6 +1049,14 @@ class RedlineEngine:
         length = len(target_text) if target_text else 0
 
         logger.debug(f"Applying Edit at [{start_idx}:{start_idx + length}] Op={op}")
+
+        if op == "URL_RETARGET":
+            target_spans = [s for s in active_mapper.spans if s.start <= start_idx < s.end]
+            if target_spans and target_spans[0].hyperlink_id:
+                rel = self.doc.part.rels[target_spans[0].hyperlink_id]
+                rel._target = edit.new_text
+                return True
+            return False
 
         if op == "COMMENT_ONLY":
             target_runs = active_mapper.find_target_runs_by_index(start_idx, length, rebuild_map=rebuild_map)
@@ -1047,7 +1161,10 @@ class RedlineEngine:
                     clean_text, style_name = self._parse_markdown_style(text_to_insert)
                     if style_name:
                         anchor_para = target_runs[-1]._parent
-                        current_style = getattr(anchor_para, "style", None)
+                        try:
+                            current_style = getattr(anchor_para, "style", None)
+                        except AttributeError:
+                            current_style = None
                         if current_style and getattr(current_style, "name", "") == style_name:
                             text_to_insert = clean_text
 
@@ -1124,6 +1241,11 @@ class RedlineEngine:
         return prev_run
 
     def save_to_stream(self) -> BytesIO:
+        import lxml.etree as etree
+
+        for part in self.doc.part.package.parts:
+            if hasattr(part, "_adeu_element"):
+                part._blob = etree.tostring(part._adeu_element, xml_declaration=True, encoding="UTF-8", standalone=True)
         output = BytesIO()
         self.doc.save(output)
         output.seek(0)
@@ -1393,40 +1515,40 @@ class RedlineEngine:
         new_end.addnext(ref_run)
 
     def accept_all_revisions(self):
-        for ins in self.doc.element.xpath("//w:ins"):
-            parent = ins.getparent()
-            index = parent.index(ins)
-            for child in list(ins):
-                parent.insert(index, child)
-                index += 1
-            parent.remove(ins)
+        parts_to_process = [self.doc.element]
 
-        for p in self.doc.element.xpath("//w:p"):
-            pPr = p.find(qn("w:pPr"))
-            if pPr is not None:
-                rPr = pPr.find(qn("w:rPr"))
-                if rPr is not None and rPr.find(qn("w:del")) is not None:
-                    self._delete_comments_in_element(p)
-                    if p.getparent() is not None:
-                        p.getparent().remove(p)
+        for part in self.doc.part.package.parts:
+            if part == self.doc.part:
+                continue
+            if "wordprocessingml" in part.content_type and part.content_type.endswith("+xml"):
+                if not hasattr(part, "_adeu_element"):
+                    part._adeu_element = parse_xml(part.blob)  # type: ignore[attr-defined]
+                parts_to_process.append(part._adeu_element)  # type: ignore[attr-defined]
 
-        for d in self.doc.element.xpath("//w:del"):
-            self._delete_comments_in_element(d)
-            if d.getparent() is not None:
-                d.getparent().remove(d)
+        for root_element in parts_to_process:
+            for ins in root_element.findall(f".//{qn('w:ins')}"):
+                self._clean_wrapping_comments(ins)
+                parent = ins.getparent()
+                if parent is None:
+                    continue
+                index = parent.index(ins)
+                for child in list(ins):
+                    parent.insert(index, child)
+                    index += 1
+                parent.remove(ins)
 
-        # 1. Purge all remaining comments from the comment manager XML parts
-        # FIX: Use findall with qn()
-        for ref in self.doc.element.findall(f".//{qn('w:commentReference')}"):
-            c_id = ref.get(qn("w:id"))
-            if c_id:
-                self.comments_manager.delete_comment(c_id)
+            for p in root_element.findall(f".//{qn('w:p')}"):
+                pPr = p.find(qn("w:pPr"))
+                if pPr is not None:
+                    rPr = pPr.find(qn("w:rPr"))
+                    if rPr is not None and rPr.find(qn("w:del")) is not None:
+                        self._clean_wrapping_comments(p)
+                        self._delete_comments_in_element(p)
+                        if p.getparent() is not None:
+                            p.getparent().remove(p)
 
-        # 2. Strip all stray comment tags from the document body
-        for tag in ["w:commentRangeStart", "w:commentRangeEnd", "w:commentReference"]:
-            # FIX: Use findall with qn()
-            for el in self.doc.element.findall(f".//{qn(tag)}"):
-                if el.getparent() is not None:
-                    el.getparent().remove(el)
-
-        normalize_docx(self.doc)
+            for d in root_element.findall(f".//{qn('w:del')}"):
+                self._clean_wrapping_comments(d)
+                self._delete_comments_in_element(d)
+                if d.getparent() is not None:
+                    d.getparent().remove(d)

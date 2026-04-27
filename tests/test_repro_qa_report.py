@@ -1,11 +1,13 @@
 import io
+import sys
+from unittest.mock import MagicMock, patch
 
 import pytest
 from docx import Document
 from docx.oxml.ns import qn
 
 from adeu.models import ModifyText
-from adeu.redline.engine import RedlineEngine
+from adeu.redline.engine import BatchValidationError, RedlineEngine
 
 
 def create_doc_with_bold_run():
@@ -171,3 +173,107 @@ class TestQaReportDefects:
         parts = engine.doc.part.package.parts
         comment_parts = [p for p in parts if "comments" in p.partname]
         assert len(comment_parts) == 0, "Comment XML parts should not be created if no comments are attached (M3)"
+
+    def test_tech2_heading_depth_validation(self):
+        """
+        TECH-2: Heading levels above 6 should be rejected by validation to prevent
+        silent template breakage (e.g., generating Heading7).
+        """
+        doc = Document()
+        doc.add_paragraph("Replace me.")
+        stream = io.BytesIO()
+        doc.save(stream)
+        stream.seek(0)
+
+        engine = RedlineEngine(stream)
+        edit = ModifyText(target_text="Replace me.", new_text="####### Heading 7")
+
+        with pytest.raises(BatchValidationError, match="[Hh]eading"):
+            engine.process_batch([edit])
+
+    def test_tech3_table_cell_comment_anchoring(self):
+        """
+        TECH-3: Comments for cell edits should anchor to the specific edited cell,
+        not the first cell of the row.
+        """
+        doc = Document()
+        table = doc.add_table(rows=1, cols=3)
+        row = table.rows[0]
+        row.cells[0].text = "First"
+        row.cells[1].text = "Second"
+        row.cells[2].text = "Third"
+        stream = io.BytesIO()
+        doc.save(stream)
+        stream.seek(0)
+
+        engine = RedlineEngine(stream)
+        # Edit only the 3rd cell and attach a comment
+        edit = ModifyText(
+            target_text="First | Second | Third", new_text="First | Second | Third Modified", comment="Review this cell"
+        )
+        engine.process_batch([edit])
+
+        cells = engine.doc.tables[0].rows[0].cells
+        cell1_xml = cells[0]._tc.xml
+        cell3_xml = cells[2]._tc.xml
+
+        assert "commentRangeStart" not in cell1_xml, "Comment incorrectly anchored to the first cell (TECH-3)"
+        assert "commentRangeStart" in cell3_xml, "Comment must anchor to the modified cell (TECH-3)"
+
+    def test_tech6_table_error_wording(self):
+        """
+        TECH-6: Error message for structural table changes should explicitly say "rows or columns",
+        not just "columns".
+        """
+        doc = Document()
+        table = doc.add_table(rows=1, cols=2)
+        row = table.rows[0]
+        row.cells[0].text = "Left"
+        row.cells[1].text = "Right"
+        stream = io.BytesIO()
+        doc.save(stream)
+        stream.seek(0)
+
+        engine = RedlineEngine(stream)
+        # Attempt a structural column insertion via text replace
+        edit = ModifyText(target_text="Left | Right", new_text="Left | Right | Extra")
+        stats = engine.process_batch([edit])
+
+        assert stats["edits_skipped"] == 1
+        skipped_msg = stats["skipped_details"][0].lower()
+
+        assert "rows or columns" in skipped_msg, f"Error message lacks 'rows or columns'. Got: {skipped_msg}"
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Live Word only supported on Windows")
+    def test_tech1_live_com_author_warning(self):
+        """
+        TECH-1: Live COM mode silently ignores author_name overrides for tracked changes.
+        The tool must surface this warning in the string response so the agent is aware.
+        """
+        import asyncio
+
+        from fastmcp import Context
+
+        from adeu.mcp_components.tools.live_word import process_active_word_batch
+
+        ctx = MagicMock(spec=Context)
+
+        with patch("adeu.mcp_components.tools.live_word._process_active_word_batch_core") as mock_core:
+            with patch("win32com.client.GetActiveObject") as mock_get_obj:
+                mock_app = MagicMock()
+                mock_app.UserName = "Real M365 User"
+                mock_get_obj.return_value = mock_app
+
+                mock_core.return_value = {
+                    "applied": 1,
+                    "failed": 0,
+                    "skipped_details": [],
+                    "author_overridden_by_word": "Real M365 User",
+                }
+
+                edit = ModifyText(target_text="A", new_text="B")
+                res = asyncio.run(process_active_word_batch(ctx, changes=[edit], author_name="Reviewer AI"))
+
+                assert "author_overridden_by_word" in res or "overridden" in res.lower(), (
+                    "Missing author override warning in live COM batch response (TECH-1)"
+                )

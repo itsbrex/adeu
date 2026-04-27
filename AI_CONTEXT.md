@@ -38,11 +38,13 @@ Adeu acts as a "Virtual DOM" for DOCX files, enabling LLMs to edit documents via
     *   **Empty Rows**: `ingest.py` must *never* skip empty table rows. `mapper.py` iterates all rows in the DOM; skipping one in text extraction causes index misalignment.
     *   **Separators**: Row separators (`\n`) are injected *between* rows. Virtual pipes (` | `) separate cells.
     *   **Cell Isolation**: The virtual `|` boundary represents a hard `<w:tc>` cell wall. Modifying text across `|` boundaries is dynamically segmented into per-cell edits by the engine. Structural table changes (adding/removing `|` columns) via text replacement are explicitly intercepted and rejected to prevent cross-cell data corruption.
+    *   **Heuristic Cell Matching**: When modifying table rows via text substitution, we explicitly `.strip()` individual cell contents to bypass whitespace drift and accurately anchor comments to the semantically modified cell.
 
 ### 6. The Unified `DocumentChange` API
 *   **Flat API Structure**: The LLM interacts with a flat list of `DocumentChange` objects (Discriminated Union of `ModifyText`, `AcceptChange`, `RejectChange`, `ReplyComment`).
 *   **Search & Replace First**: Pure insertions and deletions are intentionally hidden from the LLM. All text modifications must be executed as search-and-replace (`ModifyText`) to guarantee sufficient anchoring context for the fuzzy matcher.
 *   **Universal Tooling**: Disk-based and Live Word tools share the same endpoints (`read_docx`, `process_document_batch`). On Windows, omitting file paths dynamically routes the command to the active Live Word COM object, preventing LLM tool selection paralysis.
+*   **Heading Depth Validation**: Markdown heading depths (`#`) are strictly clamped to a maximum of 6. Exceeding this raises a `BatchValidationError` to prevent the silent generation of broken/unstyled XML blocks.
 
 ### 7. MCP Apps & UI Rendering
 *   **Custom HTML Apps**: We use FastMCP's `AppConfig(resource_uri="ui://...")` to serve custom HTML/CSS interfaces for complex tools (e.g., `validate_documents`). We maintain full control over the markup.
@@ -64,7 +66,7 @@ Adeu acts as a "Virtual DOM" for DOCX files, enabling LLMs to edit documents via
     *   **Pre-Resolution**: Modifying text natively adds Revisions, shifting `doc.Revisions` indices. We pre-resolve and cache all target COM objects *before* applying a batch of `DocumentChange` operations so Accept/Reject actions target the correct revisions.
     *   **Minimal-Diff Replacements**: Live Word COM replacements must mathematically trim common context (`trim_common_context`) from the target string's prefix and suffix before executing the COM replacement. Replacing the entire target string wholesale creates bloat and destroys adjacent comment anchors.
 *   **Comment Bounds**: We strictly use `Comment.Scope` (the highlighted text), not `Comment.Reference` (the 0-length anchor), to accurately extract target strings for Comment annotations.
-*   **Identity Spoofing & Deadlocks**: Tools temporarily hijack `Word.Application.UserName` and toggle `doc.TrackRevisions` to apply tracked changes cleanly as the Agent. *Constraint*: Modern M365 enforces logged-in MS Account identities on Comments. Attempting to spoof comment authors via `app.Options.UseLocalUserInfo` causes fatal STA thread deadlocks. Live comments will natively show the local user's real name.
+*   **Identity Spoofing & Deadlocks**: Tools temporarily hijack `Word.Application.UserName` and toggle `doc.TrackRevisions` to apply tracked changes cleanly as the Agent. *Constraint*: Modern M365 enforces logged-in MS Account identities on Comments. Attempting to spoof comment authors via `app.Options.UseLocalUserInfo` causes fatal STA thread deadlocks. Live comments will natively show the local user's real name. Live COM batch executions will natively surface a warning when the `author_name` is overridden by the host OS M365 identity to maintain predictable audit trails.
 
 ### 10. COM vs XML Impedance Mismatches
 Achieving 100% CriticMarkup extraction parity between Live COM and Disk XML requires bridging deep structural differences:
@@ -85,6 +87,14 @@ Achieving 100% CriticMarkup extraction parity between Live COM and Disk XML requ
 *   **Event Loop Blocking**: Any heavy, synchronous CPU or disk-bound tasks (e.g., `sanitize_docx`, or heavy batch processing) called from an async FastMCP tool endpoint MUST be wrapped in `asyncio.to_thread()`. This prevents the `asyncio` event loop from freezing and dropping MCP client heartbeats.
 *   **Kwargs in to_thread**: When dispatching functions via `asyncio.to_thread` that expect keyword-only arguments, arguments must be explicitly passed as keyword arguments to prevent `TypeError: takes X positional arguments` errors.
 *   **Testing Tools**: FastMCP's `@tool` decorator heavily modifies function metadata. When asserting against an MCP tool's prompt or docstring in tests, prefer `inspect.getsource(func)` or `getattr(func, "description", "")` rather than `func.__doc__`.
+
+### 13. Domain Gaps & Projection Syntax (Semantic Markdown)
+To solve domain visibility gaps without adding new MCP tools, `read_docx` projects a strictly defined semantic dialect of Markdown:
+*   **Italics Strictness**: Adeu strictly uses `_italic_`. The `*italic*` syntax is explicitly parsed as literal text.
+*   **Footnotes/Endnotes**: Projected inline as `[^fn-{w:id}]` (using stable OOXML IDs, not display numbers) and appended at the bottom. Fully bi-directional. Editing them natively updates `footnotes.xml`. *Constraint*: Generic XML parts lack `get_style()`, so `_get_paragraph_style_safe` gracefully handles missing formatting attributes.
+*   **Bi-directional Links**: `[text](url)`. Editing the text applies tracked changes. Editing the URL executes a silent `URL_RETARGET` operation in `_rels` (no redlines emitted).
+*   **Cross-References**: Projected as `[~text~](#_Ref)`. The `[~...~]` wrapper indicates computed/read-only text. Attempting to modify the display text or hash via `ModifyText` is strictly rejected (`BatchValidationError`) to prevent dependency corruption.
+*   **Structural Appendix**: Structural XML (Bookmarks, TOC boundaries, Defined Terms) is too dangerous to inject inline. The engine extracts this dependency map and appends it to the bottom of the projection behind a `<!-- READONLY_BOUNDARY_START -->` marker. The `RedlineEngine` explicitly tracks `mapper.appendix_start_index` and strictly rejects any `ModifyText` operation targeting this read-only block.
 
 ## Developer Workflows
 

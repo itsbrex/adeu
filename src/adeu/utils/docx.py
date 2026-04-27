@@ -27,6 +27,26 @@ class DocxEvent(NamedTuple):
 ParagraphItem = Union[Run, DocxEvent]
 
 
+class NotesPart:
+    def __init__(self, part, note_type="fn"):
+        from docx.oxml import parse_xml
+
+        self.part = part
+        if not hasattr(part, "_adeu_element"):
+            part._adeu_element = parse_xml(part.blob)
+        self._element = part._adeu_element
+        self.note_type = note_type
+
+
+class FootnoteItem:
+    def __init__(self, element, parent, note_type="fn"):
+        self._element = element
+        self._parent = parent
+        self.part = parent.part
+        self.id = element.get(qn("w:id"))
+        self.note_type = note_type
+
+
 def create_element(name: str):
     return OxmlElement(name)
 
@@ -44,6 +64,14 @@ def _is_page_instr(instr: str) -> bool:
     if not parts:
         return False
     return parts[0] in ("PAGE", "NUMPAGES")
+
+
+def _get_paragraph_style_safe(paragraph: Paragraph):
+    try:
+        return paragraph.style
+    except AttributeError:
+        # Handle generic XmlParts (like footnotes.xml) that lack get_style()
+        return None
 
 
 def get_paragraph_prefix(paragraph: Paragraph) -> str:
@@ -64,8 +92,9 @@ def get_paragraph_prefix(paragraph: Paragraph) -> str:
     # treats them as the default "Normal" style. Bailing here misses the
     # all-caps bold heuristic that catches manually-formatted section titles.
     style_name = None
-    if paragraph.style is not None:
-        style_name = paragraph.style.name
+    style = _get_paragraph_style_safe(paragraph)
+    if style is not None:
+        style_name = style.name
 
     # 2. Check Style Name
     if style_name and style_name.startswith("Heading"):
@@ -100,7 +129,7 @@ def get_paragraph_prefix(paragraph: Paragraph) -> str:
 
             # Check for Bold (paragraph style OR explicit run formatting)
             is_bold = False
-            if paragraph.style is not None and paragraph.style.font.bold:
+            if style is not None and style.font.bold:
                 is_bold = True
             else:
                 runs = [r for r in paragraph.runs if r.text.strip()]
@@ -135,10 +164,8 @@ def get_run_style_markers(run: Run) -> tuple[str, str]:
     # runs emitted by iter_paragraph_content are always constructed with a
     # Paragraph parent, so the cast is truthful at runtime.
     para = cast(Paragraph, run._parent)
-    para_style_name = None
-    para_style = getattr(para, "style", None)
-    if para_style is not None:
-        para_style_name = para_style.name
+    para_style = _get_paragraph_style_safe(para)
+    para_style_name = para_style.name if para_style else None
 
     is_heading = bool(para_style_name and (para_style_name.startswith("Heading") or para_style_name == "Title"))
 
@@ -209,7 +236,15 @@ def iter_paragraph_content(paragraph: Paragraph) -> Iterator[ParagraphItem]:
                 # End of instruction, start of visible result
                 if _is_page_instr(current_instr):
                     hide_result = True
+                else:
+                    parts = current_instr.strip().split()
+                    if parts and parts[0] == "REF" and len(parts) > 1:
+                        yield DocxEvent("xref_start", parts[1])
             elif fld_type == "end":
+                if not hide_result:
+                    parts = current_instr.strip().split()
+                    if parts and parts[0] == "REF" and len(parts) > 1:
+                        yield DocxEvent("xref_end", parts[1])
                 in_complex_field = False
                 current_instr = ""
                 hide_result = False
@@ -253,13 +288,34 @@ def iter_paragraph_content(paragraph: Paragraph) -> Iterator[ParagraphItem]:
             elif tag == qn("w:commentReference"):
                 # Reference directly in paragraph
                 pass
-            elif tag in (
-                qn("w:hyperlink"),
-                qn("w:sdt"),
-                qn("w:smartTag"),
-                qn("w:fldSimple"),
-                qn("w:sdtContent"),
-            ):
+            elif tag == qn("w:hyperlink"):
+                rId = child.get(qn("r:id"))
+                url = ""
+                if rId and paragraph.part:
+                    try:
+                        rel = paragraph.part.rels[rId]
+                        if rel.is_external:
+                            url = rel.target_ref
+                    except KeyError:
+                        pass
+                if url:
+                    yield DocxEvent("hyperlink_start", rId, date=url)  # reuse date field for url
+                yield from traverse_node(child)
+                if url:
+                    yield DocxEvent("hyperlink_end", rId, date=url)
+            elif tag == qn("w:fldSimple"):
+                instr = child.get(qn("w:instr"), "")
+                target = ""
+                if " REF " in instr or instr.startswith("REF "):
+                    parts = instr.strip().split()
+                    if len(parts) > 1 and parts[0] == "REF":
+                        target = parts[1]
+                if target:
+                    yield DocxEvent("xref_start", target)
+                yield from traverse_node(child)
+                if target:
+                    yield DocxEvent("xref_end", target)
+            elif tag in (qn("w:sdt"), qn("w:smartTag"), qn("w:sdtContent")):
                 yield from traverse_node(child)
 
     yield from traverse_node(paragraph._element)
@@ -437,6 +493,21 @@ def iter_document_parts(doc: DocumentObject):
     for section in doc.sections:
         yield from _iter_section_parts(section, "footer")
 
+    # 4. Footnotes & Endnotes (ordered)
+    fn_part = None
+    en_part = None
+    for part in doc.part.package.parts:
+        part_name = str(part.partname)
+        if part_name.endswith("footnotes.xml"):
+            fn_part = part
+        elif part_name.endswith("endnotes.xml"):
+            en_part = part
+
+    if fn_part:
+        yield NotesPart(fn_part, "fn")
+    if en_part:
+        yield NotesPart(en_part, "en")
+
 
 def normalize_docx(doc: DocumentObject):
     """
@@ -470,7 +541,7 @@ def _normalize_table(table: Table):
                     _normalize_table(item)
 
 
-def iter_block_items(parent) -> Iterator[Union[Paragraph, Table]]:
+def iter_block_items(parent) -> Iterator[Union[Paragraph, Table, FootnoteItem]]:
     """
     Yields Paragraph or Table objects in the order they appear in the XML.
     Supports Document, Header, Footer, and Cell objects.
@@ -480,6 +551,15 @@ def iter_block_items(parent) -> Iterator[Union[Paragraph, Table]]:
         parent_elm = parent.element.body
     elif isinstance(parent, _Cell):
         parent_elm = parent._tc
+    elif type(parent).__name__ == "NotesPart":
+        tag = "w:footnote" if parent.note_type == "fn" else "w:endnote"
+        for child in parent._element.findall(qn(tag)):
+            if child.get(qn("w:type")) in ("separator", "continuationSeparator"):
+                continue
+            yield FootnoteItem(child, parent, parent.note_type)
+        return
+    elif type(parent).__name__ == "FootnoteItem":
+        parent_elm = parent._element
     else:
         # Header/Footer usually expose ._element or can be iterated
         if hasattr(parent, "_element"):

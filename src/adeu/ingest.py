@@ -7,6 +7,7 @@ from docx.table import Table
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 
+from adeu.domain import build_structural_appendix
 from adeu.redline.comments import CommentsManager
 from adeu.utils.docx import (
     DocxEvent,
@@ -53,7 +54,11 @@ def extract_text_from_stream(file_stream: io.BytesIO, filename: str = "document.
             if part_text:
                 full_text.append(part_text)
 
-        return "\n\n".join(full_text)
+        base_text = "\n\n".join(full_text)
+        appendix = build_structural_appendix(doc, base_text)
+        if appendix:
+            return base_text + appendix
+        return base_text
 
     except Exception as e:
         logger.error(f"Text extraction failed: {e}", exc_info=True)
@@ -67,16 +72,32 @@ def _extract_blocks(container, comments_map, clean_view: bool) -> str:
     """
     blocks = []
 
+    c_type = type(container).__name__
+    if c_type == "NotesPart":
+        header = "## Footnotes" if container.note_type == "fn" else "## Endnotes"
+        blocks.append(f"---\n{header}")
+
+    is_first_para = True
     for item in iter_block_items(container):
-        if isinstance(item, Paragraph):
+        i_type = type(item).__name__
+
+        if i_type == "FootnoteItem":
+            fn_text = _extract_blocks(item, comments_map, clean_view)
+            if fn_text:
+                blocks.append(fn_text)
+        elif isinstance(item, Paragraph):
             prefix = get_paragraph_prefix(item)
+            if is_first_para and c_type == "FootnoteItem":
+                prefix = f"[^{container.note_type}-{container.id}]: " + prefix
             p_text = _build_paragraph_text(item, comments_map, clean_view)
             blocks.append(prefix + p_text)
+            is_first_para = False
 
         elif isinstance(item, Table):
             table_text = _extract_table(item, comments_map, clean_view)
             if table_text:
                 blocks.append(table_text)
+            is_first_para = False
 
     return "\n\n".join(blocks)
 
@@ -258,7 +279,40 @@ def _build_paragraph_text(paragraph, comments_map, clean_view: bool = False):
                     pending_text = ""
                     current_wrappers = ("", "")
                     current_style = ("", "")
-                parts.append(f"[^{item.id}]")
+                prefix_str = "fn" if item.type == "footnote" else "en"
+                parts.append(f"[^{prefix_str}-{item.id}]")
+            elif item.type == "hyperlink_start":
+                if pending_text:
+                    s_tok, e_tok = current_wrappers
+                    parts.append(f"{s_tok}{pending_text}{e_tok}")
+                    pending_text = ""
+                    current_wrappers = ("", "")
+                    current_style = ("", "")
+                parts.append("[")
+            elif item.type == "hyperlink_end":
+                if pending_text:
+                    s_tok, e_tok = current_wrappers
+                    parts.append(f"{s_tok}{pending_text}{e_tok}")
+                    pending_text = ""
+                    current_wrappers = ("", "")
+                    current_style = ("", "")
+                parts.append(f"]({item.date})")
+            elif item.type == "xref_start":
+                if pending_text:
+                    s_tok, e_tok = current_wrappers
+                    parts.append(f"{s_tok}{pending_text}{e_tok}")
+                    pending_text = ""
+                    current_wrappers = ("", "")
+                    current_style = ("", "")
+                parts.append("[~")
+            elif item.type == "xref_end":
+                if pending_text:
+                    s_tok, e_tok = current_wrappers
+                    parts.append(f"{s_tok}{pending_text}{e_tok}")
+                    pending_text = ""
+                    current_wrappers = ("", "")
+                    current_style = ("", "")
+                parts.append(f"~](#{item.id})")
 
     if pending_text:
         s_tok, e_tok = current_wrappers

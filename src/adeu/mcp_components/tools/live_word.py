@@ -553,6 +553,7 @@ if sys.platform == "win32":
         doc.TrackRevisions = True
 
         original_user = app.UserName
+        stats["author_overridden_by_word"] = original_user
         app.UserName = author_name
 
         # Pre-resolve Revision objects to prevent index drift.
@@ -735,6 +736,12 @@ if sys.platform == "win32":
             stats = _process_active_word_batch_core(changes, author_name)
             await ctx.info(f"Live Word batch complete. Applied: {stats['applied']}, Failed: {stats['failed']}.")
             res = f"Live Word Batch complete. Applied: {stats['applied']}, Failed: {stats['failed']}."
+            if "author_overridden_by_word" in stats:
+                res += (
+                    f"\n\nWarning: Live Word natively enforces M365 identities. "
+                    f"The requested author_name ('{author_name}') may have been overridden "
+                    f"by Word with the active user identity ('{stats['author_overridden_by_word']}')."
+                )
             if stats.get("skipped_details"):
                 res += "\n\nSkipped Details:\n" + "\n".join(stats["skipped_details"])
             return res
