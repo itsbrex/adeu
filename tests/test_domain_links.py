@@ -1,5 +1,6 @@
 import io
 
+import pytest
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -80,3 +81,61 @@ def test_xref_modification_rejected():
         raise AssertionError("Engine failed to reject cross-reference hash modification.")
     except BatchValidationError as e:
         assert "dependency corruption" in str(e) or "rejected" in str(e).lower()
+
+
+def test_hyperlink_fabrication_rejected():
+    """VAL-CRIT-5: Verify hyperlink fabrication via text replace is rejected."""
+    stream = setup_links_fixture()
+    engine = RedlineEngine(stream)
+
+    edit = ModifyText(
+        target_text="Please visit [Adeu HQ](https://adeu.com)",
+        new_text="Please visit [Adeu HQ](https://adeu.com) and [Google](https://google.com)",
+    )
+
+    with pytest.raises(BatchValidationError) as exc_info:
+        engine.process_batch([edit])
+
+    assert "hyperlink" in str(exc_info.value).lower() or "dialects" in str(exc_info.value).lower()
+
+
+def test_hyperlink_deletion_rejected():
+    """VAL-CRIT-5: Verify hyperlink structural deletion via text replace is rejected."""
+    stream = setup_links_fixture()
+    engine = RedlineEngine(stream)
+
+    edit = ModifyText(target_text="Please visit [Adeu HQ](https://adeu.com)", new_text="Please visit nothing")
+
+    with pytest.raises(BatchValidationError) as exc_info:
+        engine.process_batch([edit])
+
+    assert "hyperlink" in str(exc_info.value).lower() or "delete" in str(exc_info.value).lower()
+
+
+def test_cross_reference_fabrication_rejected():
+    """VAL-CRIT-5: Verify cross-reference fabrication via text replace is rejected."""
+    stream = setup_links_fixture()
+    engine = RedlineEngine(stream)
+
+    edit = ModifyText(
+        target_text="As detailed in [~Section 5~](#_Ref12345)",
+        new_text="As detailed in [~Section 5~](#_Ref12345) and [~Section 6~](#_Ref999)",
+    )
+
+    with pytest.raises(BatchValidationError) as exc_info:
+        engine.process_batch([edit])
+
+    assert "cross-reference" in str(exc_info.value).lower() or "read-only" in str(exc_info.value).lower()
+
+
+def test_cross_reference_deletion_rejected():
+    """VAL-CRIT-5: Verify cross-reference structural deletion via text replace is rejected."""
+    stream = setup_links_fixture()
+    engine = RedlineEngine(stream)
+
+    edit = ModifyText(target_text="As detailed in [~Section 5~](#_Ref12345)", new_text="As detailed in nothing")
+
+    with pytest.raises(BatchValidationError) as exc_info:
+        engine.process_batch([edit])
+
+    assert "cross-reference" in str(exc_info.value).lower() or "delete" in str(exc_info.value).lower()

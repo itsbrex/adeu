@@ -632,26 +632,84 @@ class RedlineEngine:
         self.mapper._build_map()
 
         for i, edit in enumerate(edits):
-            if edit.target_text and "[~" in edit.target_text:
-                target_xrefs = dict(re.findall(r"\[~([^~]+)~\]\(#([^\)]+)\)", edit.target_text))
-                new_xrefs = dict(re.findall(r"\[~([^~]+)~\]\(#([^\)]+)\)", edit.new_text or ""))
-                for t_text, t_hash in target_xrefs.items():
-                    if t_hash in new_xrefs.values():
-                        # Same hash exists, check if text changed
-                        for n_text, n_hash in new_xrefs.items():
-                            if n_hash == t_hash and n_text != t_text:
+            t_text = edit.target_text or ""
+            n_text = edit.new_text or ""
+
+            # VAL-CRIT-3 & VAL-CRIT-4: Footnotes/Endnotes Structural Integrity
+            if "[^" in t_text or "[^" in n_text:
+                t_fns = re.findall(r"\[\^(?:fn|en)-[^\]]+\]", t_text)
+                n_fns = re.findall(r"\[\^(?:fn|en)-[^\]]+\]", n_text)
+                if sorted(t_fns) != sorted(n_fns):
+                    if len(n_fns) > len(t_fns) or any(n_fns.count(f) > t_fns.count(f) for f in n_fns):
+                        errors.append(
+                            f"- Edit {i + 1} Failed: Cannot insert footnote/endnote markers via text replace. "
+                            "Markers like `[^fn-N]` are read-only projections. Use Word's References menu."
+                        )
+                    else:
+                        errors.append(
+                            f"- Edit {i + 1} Failed: Cannot delete footnote/endnote references via text replace. "
+                            "The marker corresponds to a structural XML element."
+                        )
+
+            # VAL-CRIT-5: Hyperlink Structural Integrity
+            if "](" in t_text or "](" in n_text:
+                # Exclude cross-references using a negative lookahead for `~` immediately after `[`
+                t_links = re.findall(r"\[(?!~)[^\]]+\]\([^)]+\)", t_text)
+                n_links = re.findall(r"\[(?!~)[^\]]+\]\([^)]+\)", n_text)
+                if len(t_links) != len(n_links):
+                    if len(n_links) > len(t_links):
+                        errors.append(
+                            f"- Edit {i + 1} Failed: Cannot insert hyperlinks via text replace. "
+                            "Use a dedicated structural operation."
+                        )
+                    else:
+                        errors.append(
+                            f"- Edit {i + 1} Failed: Cannot delete hyperlinks via text replace. "
+                            "The marker corresponds to a structural XML element."
+                        )
+                elif len(t_links) > 1 and sorted(t_links) != sorted(n_links):
+                    errors.append(
+                        f"- Edit {i + 1} Failed: Can only edit or retarget one hyperlink per text replacement. "
+                        "Please split into multiple edits."
+                    )
+
+            # VAL-CRIT-5: Cross-reference Structural Integrity
+            if "[~" in t_text or "[~" in n_text:
+                t_xrefs_list = re.findall(r"\[~[^~]+~\]\(#[^\)]+\)", t_text)
+                n_xrefs_list = re.findall(r"\[~[^~]+~\]\(#[^\)]+\)", n_text)
+
+                if len(t_xrefs_list) != len(n_xrefs_list):
+                    if len(n_xrefs_list) > len(t_xrefs_list):
+                        errors.append(
+                            f"- Edit {i + 1} Failed: Cannot insert cross-references via text replace. "
+                            "Markers are read-only projections."
+                        )
+                    else:
+                        errors.append(
+                            f"- Edit {i + 1} Failed: Cannot delete cross-references via text replace. "
+                            "The marker corresponds to a structural XML element."
+                        )
+                else:
+                    target_xrefs = dict(re.findall(r"\[~([^~]+)~\]\(#([^\)]+)\)", t_text))
+                    new_xrefs = dict(re.findall(r"\[~([^~]+)~\]\(#([^\)]+)\)", n_text))
+                    for t_ref_text, t_hash in target_xrefs.items():
+                        if t_hash in new_xrefs.values():
+                            for n_ref_text, n_hash in new_xrefs.items():
+                                if n_hash == t_hash and n_ref_text != t_ref_text:
+                                    errors.append(
+                                        f"- Edit {i + 1} Failed: Cross-reference display text is computed. "
+                                        "To change it, edit the heading or paragraph at the target instead."
+                                    )
+                        elif t_ref_text in new_xrefs:
+                            if new_xrefs[t_ref_text] != t_hash:
                                 errors.append(
-                                    f"- Edit {i + 1} Failed: Cross-reference display text is computed "
-                                    "from the target. To change what this reference says, edit the heading "
-                                    "or paragraph at the target instead."
+                                    f"- Edit {i + 1} Failed: Directly retargeting cross-references via text "
+                                    "replacement is disallowed to prevent dependency corruption."
                                 )
-                    if t_text in new_xrefs:
-                        # Same text exists, check if hash changed
-                        if new_xrefs[t_text] != t_hash:
+                        else:
                             errors.append(
-                                f"- Edit {i + 1} Failed: Directly retargeting cross-references via text "
-                                "replacement is disallowed to prevent dependency corruption."
-                                " Edit the target text directly."
+                                f"- Edit {i + 1} Failed: Modifying cross-reference markers is disallowed "
+                                "to prevent dependency corruption."
                             )
 
             if edit.new_text:

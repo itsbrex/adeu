@@ -1,5 +1,6 @@
 import io
 
+import pytest
 from docx import Document
 from docx.opc.packuri import PackURI
 from docx.opc.part import XmlPart
@@ -8,7 +9,7 @@ from docx.oxml.ns import qn
 
 from adeu.ingest import extract_text_from_stream
 from adeu.models import ModifyText
-from adeu.redline.engine import RedlineEngine
+from adeu.redline.engine import BatchValidationError, RedlineEngine
 
 
 def setup_footnotes_fixture() -> io.BytesIO:
@@ -111,3 +112,33 @@ def test_footnote_accept_changes():
     assert "w:del" not in xml_after, "Footnote deletions not accepted"
     assert "Edited" in xml_after
     assert "content." in xml_after
+
+
+def test_footnote_deletion_rejected():
+    """VAL-CRIT-3: Verify that attempting to delete a footnote reference via text replacement is rejected."""
+    stream = setup_footnotes_fixture()
+    engine = RedlineEngine(stream)
+
+    # Try to delete [^fn-1]
+    edit = ModifyText(target_text="Sentence with footnote[^fn-1]", new_text="Sentence with footnote")
+
+    with pytest.raises(BatchValidationError) as exc_info:
+        engine.process_batch([edit])
+
+    assert "footnote" in str(exc_info.value).lower()
+    assert "delete" in str(exc_info.value).lower() or "remove" in str(exc_info.value).lower()
+
+
+def test_footnote_insertion_rejected():
+    """VAL-CRIT-4: Verify that attempting to fabricate a footnote reference via text replacement is rejected."""
+    stream = setup_footnotes_fixture()
+    engine = RedlineEngine(stream)
+
+    # Try to inject a new [^fn-99]
+    edit = ModifyText(target_text="Sentence with footnote", new_text="Sentence with footnote[^fn-99]")
+
+    with pytest.raises(BatchValidationError) as exc_info:
+        engine.process_batch([edit])
+
+    assert "footnote" in str(exc_info.value).lower()
+    assert "insert" in str(exc_info.value).lower() or "create" in str(exc_info.value).lower()
