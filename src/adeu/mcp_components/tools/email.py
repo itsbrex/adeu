@@ -108,7 +108,6 @@ def strip_tags(html: str) -> str:
     if not html:
         return ""
     try:
-
         normalized = re.sub(
             r"</(p|div|br|hr|tr|li|h[1-6]|blockquote)\s*/?>",
             "\n",
@@ -218,16 +217,10 @@ def _get_unique_filepath(save_dir: Path, filename: str) -> Path:
 )
 async def search_and_fetch_emails(
     ctx: Context,
-    sender: Annotated[
-        Optional[str], "Filter by the sender's email address or name."
-    ] = None,
+    sender: Annotated[Optional[str], "Filter by the sender's email address or name."] = None,
     subject: Annotated[Optional[str], "Filter by keywords in the subject line."] = None,
-    has_attachments: Annotated[
-        Optional[bool], "If True, only returns emails that contain file attachments."
-    ] = None,
-    attachment_name: Annotated[
-        Optional[str], "Filter by a specific attachment filename."
-    ] = None,
+    has_attachments: Annotated[Optional[bool], "If True, only returns emails that contain file attachments."] = None,
+    attachment_name: Annotated[Optional[str], "Filter by a specific attachment filename."] = None,
     is_unread: Annotated[
         Optional[bool],
         "If True, returns ONLY unread emails. If False, returns ONLY read emails. Leave empty for both.",
@@ -261,9 +254,7 @@ async def search_and_fetch_emails(
     ] = None,
     api_key: str = Depends(get_cloud_auth_token),
 ) -> ToolResult:
-    await ctx.info(
-        "Starting live email search", extra={"email_id": email_id, "subject": subject}
-    )
+    await ctx.info("Starting live email search", extra={"email_id": email_id, "subject": subject})
     real_email_id = resolve_email_id(email_id) if email_id else None
     payload_dict = {
         "email_id": real_email_id,
@@ -300,9 +291,7 @@ async def search_and_fetch_emails(
     except urllib.error.HTTPError as e:
         if e.code == 401:
             DesktopAuthManager.clear_api_key()
-            raise ToolError(
-                "Authentication expired. Please call `login_to_adeu_cloud` to re-authenticate."
-            ) from e
+            raise ToolError("Authentication expired. Please call `login_to_adeu_cloud` to re-authenticate.") from e
         error_body = e.read().decode("utf-8")
         raise ToolError(f"Cloud search failed (HTTP {e.code}): {error_body}") from e
     except Exception as e:
@@ -354,17 +343,11 @@ async def search_and_fetch_emails(
     elif response_type == "full_email":
         full_email = data.get("full_email", {})
         if not full_email:
-            return ToolResult(
-                content="Failed to retrieve full email.", structured_content=data
-            )
+            return ToolResult(content="Failed to retrieve full email.", structured_content=data)
 
         email_id_str = full_email.get("id", "unknown_id")
         id_cache = load_id_cache()
-        short_target_id = (
-            minify_email_id(email_id_str, id_cache)
-            if email_id_str != "unknown_id"
-            else "unknown_id"
-        )
+        short_target_id = minify_email_id(email_id_str, id_cache) if email_id_str != "unknown_id" else "unknown_id"
         full_email["id"] = short_target_id
         for hist_msg in full_email.get("messages", []):
             if "id" in hist_msg:
@@ -380,9 +363,7 @@ async def search_and_fetch_emails(
             local_files = []
             for att in message_data.get("attachments", []):
                 filename = att.get("filename", "unnamed_file")
-                b64_data = att.pop(
-                    "base64_data", None
-                )  # Remove from UI payload to save IPC memory
+                b64_data = att.pop("base64_data", None)  # Remove from UI payload to save IPC memory
 
                 if b64_data:
                     try:
@@ -403,9 +384,7 @@ async def search_and_fetch_emails(
         clean_body = remove_nested_quotes(raw_clean_body)
 
         llm_lines.append("## Target Message (Newest):")
-        llm_lines.append(
-            f"**From**: {full_email.get('sender_name')} <{full_email.get('sender_email')}>"
-        )
+        llm_lines.append(f"**From**: {full_email.get('sender_name')} <{full_email.get('sender_email')}>")
         llm_lines.append(f"**Date**: {full_email.get('received_datetime')}")
 
         if target_local_files:
@@ -436,9 +415,7 @@ async def search_and_fetch_emails(
                 clean_hist = remove_nested_quotes(raw_clean_hist)
 
                 llm_lines.append(f"### Message {-1 * (idx + 1)} (Older)")
-                llm_lines.append(
-                    f"**From**: {hist_msg.get('sender_name')} <{hist_msg.get('sender_email')}>"
-                )
+                llm_lines.append(f"**From**: {hist_msg.get('sender_name')} <{hist_msg.get('sender_email')}>")
                 llm_lines.append(f"**Date**: {hist_msg.get('received_datetime')}")
 
                 if hist_local_files:
@@ -449,18 +426,14 @@ async def search_and_fetch_emails(
                 llm_lines.append(f"**Body**:\n```\n{clean_hist}\n```\n")
             llm_lines.append("---")
 
-        if target_local_files or any(
-            m.get("attachments") for m in full_email.get("messages", [])
-        ):
+        if target_local_files or any(m.get("attachments") for m in full_email.get("messages", [])):
             llm_lines.append(
                 "\n*You can now use tools like `read_docx`, `diff_docx_files`, or `validate_documents` "
                 "on the local file paths listed under each message.*"
             )
 
         return ToolResult(content="\n".join(llm_lines), structured_content=data)
-    return ToolResult(
-        content="Unknown response format from backend.", structured_content=data
-    )
+    return ToolResult(content="Unknown response format from backend.", structured_content=data)
 
 
 @tool(
@@ -476,18 +449,10 @@ async def search_and_fetch_emails(
 )
 async def create_email_draft(
     ctx: Context,
-    body_markdown: Annotated[
-        str, "The body of the email in Markdown format. Will be converted to HTML."
-    ],
-    reply_to_email_id: Annotated[
-        Optional[str], "Provide the short email ID to reply to an existing thread."
-    ] = None,
-    subject: Annotated[
-        Optional[str], "The subject line. Required if starting a NEW email."
-    ] = None,
-    to_recipients: Annotated[
-        Optional[list[str] | str], "List of emails. Required if starting a NEW email."
-    ] = None,
+    body_markdown: Annotated[str, "The body of the email in Markdown format. Will be converted to HTML."],
+    reply_to_email_id: Annotated[Optional[str], "Provide the short email ID to reply to an existing thread."] = None,
+    subject: Annotated[Optional[str], "The subject line. Required if starting a NEW email."] = None,
+    to_recipients: Annotated[Optional[list[str] | str], "List of emails. Required if starting a NEW email."] = None,
     attachment_paths: Annotated[
         Optional[list[str] | str],
         "List of absolute file paths on the local system to attach to the draft.",
@@ -523,9 +488,7 @@ async def create_email_draft(
     parsed_attachments = _parse_list(attachment_paths)
 
     # 2. Resolve Minified ID to Real Graph ID
-    real_reply_to_id = (
-        resolve_email_id(reply_to_email_id) if reply_to_email_id else None
-    )
+    real_reply_to_id = resolve_email_id(reply_to_email_id) if reply_to_email_id else None
 
     # Prepare text fields
     fields = {
@@ -568,18 +531,12 @@ async def create_email_draft(
         with urllib.request.urlopen(req) as response:
             data = json.loads(response.read().decode("utf-8"))
             draft_id = data.get("id")
-            return ToolResult(
-                content=f"Successfully created email draft! Draft ID: {draft_id}"
-            )
+            return ToolResult(content=f"Successfully created email draft! Draft ID: {draft_id}")
     except urllib.error.HTTPError as e:
         if e.code == 401:
             DesktopAuthManager.clear_api_key()
-            raise ToolError(
-                "Authentication expired. Please call `login_to_adeu_cloud` to re-authenticate."
-            ) from e
+            raise ToolError("Authentication expired. Please call `login_to_adeu_cloud` to re-authenticate.") from e
         error_body = e.read().decode("utf-8")
-        raise ToolError(
-            f"Cloud draft creation failed (HTTP {e.code}): {error_body}"
-        ) from e
+        raise ToolError(f"Cloud draft creation failed (HTTP {e.code}): {error_body}") from e
     except Exception as e:
         raise ToolError(f"Failed to communicate with Adeu Cloud: {str(e)}") from e
