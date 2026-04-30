@@ -9,13 +9,14 @@ import enum
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
-from typing import Optional
+from typing import Optional, cast
 
 import structlog
 from docx import Document
 
 from adeu.diff import generate_edits_from_text
 from adeu.ingest import extract_text_from_stream
+from adeu.models import DeleteTableRow, InsertTableRow, ModifyText
 from adeu.redline.comments import CommentsManager
 from adeu.redline.engine import RedlineEngine
 from adeu.sanitize import transforms
@@ -263,7 +264,8 @@ def _sanitize_baseline(doc, input_path: str, baseline_path: str, report: Sanitiz
                 )
 
     # Step 2: Compute word-level diff
-    edits = generate_edits_from_text(baseline_text, working_text)
+    raw_edits = generate_edits_from_text(baseline_text, working_text)
+    edits = cast(list[ModifyText | InsertTableRow | DeleteTableRow], raw_edits)
 
     # Step 3: Apply edits to baseline as track changes
     baseline_stream.seek(0)

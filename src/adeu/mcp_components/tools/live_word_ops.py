@@ -250,19 +250,28 @@ def _apply_structured_com_replacement(
 
     line_1 = full_plain_parts[0]
 
+    # === SACRIFICIAL X START ===
+    # Insert a dummy character to absorb Word's aggressive leftward comment snapping.
+    # This prevents the comment anchor from bleeding into the preceding un-tracked sentence.
+    doc.TrackRevisions = False
+    doc.Range(base_start, base_start).Text = "X"
+    actual_base = base_start + 1
+    doc.TrackRevisions = was_tracking
+    # === SACRIFICIAL X END ===
+
     # 3. Insert Line 1 BEFORE the original text (inline)
-    logger.debug(f"Inserting Line 1 before deletion at index {base_start}")
-    doc.Range(base_start, base_start).Text = line_1
+    logger.debug(f"Inserting Line 1 before deletion at index {actual_base}")
+    doc.Range(actual_base, actual_base).Text = line_1
 
     # 4. Insert remaining lines AFTER the current paragraph
     # BUG-03 fix: Multi-paragraph inserts inside a sentence should split the new
     # paragraphs *after* the entire current paragraph, matching the disk engine.
-    after_orig = base_start + len(line_1) + original_len
+    after_orig = actual_base + len(line_1) + original_len
 
     rest_text_start = None
     if len(full_plain_parts) > 1:
         # Find the end of the current paragraph
-        p_end = doc.Range(base_start, base_start).Paragraphs(1).Range.End
+        p_end = doc.Range(actual_base, actual_base).Paragraphs(1).Range.End
 
         # Word's Range.End includes the \r. We want to insert after the paragraph break,
         # so we just insert at p_end. We append the new lines, each terminated by \r.
@@ -278,7 +287,8 @@ def _apply_structured_com_replacement(
     # leftwards into the preceding un-tracked text. By anchoring across the insertion
     # AND the target text, we force Word to grip the normal text. When we delete the
     # target text in Step 6, the anchor perfectly collapses onto the insertion.
-    combined_rng = doc.Range(base_start, after_orig)
+    # NOTE: It still snaps leftwards, but it will safely absorb our Sacrificial 'X'.
+    combined_rng = doc.Range(actual_base, after_orig)
     logger.info(
         "Attaching comments to combined range.",
         range_start=combined_rng.Start,
@@ -286,26 +296,46 @@ def _apply_structured_com_replacement(
     )
 
     current_user = app.UserName
-    for c_data in rescued_comments:
-        try:
-            app.UserName = c_data["author"]
-            doc.Comments.Add(combined_rng, c_data["text"])
-            logger.debug(f"Rescued comment re-attached: '{c_data['text'][:20]}...'")
-        except Exception as e:
-            logger.warning(f"Failed to re-attach rescued comment: {e}")
-    app.UserName = current_user
 
-    if comment_text:
+    # Surgically disable SmartSelection to prevent Word from aggressively snapping
+    # the comment anchor leftwards across spaces.
+    original_smart = True
+    try:
+        original_smart = app.Options.SmartSelection
+        app.Options.SmartSelection = False
+    except Exception:
+        pass
+
+    try:
+        for c_data in rescued_comments:
+            try:
+                app.UserName = c_data["author"]
+                doc.Comments.Add(combined_rng, c_data["text"])
+            except Exception as e:
+                logger.warning(f"Failed to re-attach rescued comment: {e}")
+        app.UserName = current_user
+
+        if comment_text:
+            try:
+                doc.Comments.Add(combined_rng, comment_text)
+            except Exception as e:
+                logger.error(f"Failed to attach edit comment: {e}")
+    finally:
         try:
-            doc.Comments.Add(combined_rng, comment_text)
-            logger.debug("New comment attached successfully.")
-        except Exception as e:
-            logger.error(f"Failed to attach edit comment: {e}")
+            app.Options.SmartSelection = original_smart
+        except Exception:
+            pass
 
     # 6. Execute the explicit Deletion LAST
     logger.debug("Executing deletion of original text to finalize Sandwich.")
-    orig_rng_to_delete = doc.Range(base_start + len(line_1), after_orig)
+    orig_rng_to_delete = doc.Range(actual_base + len(line_1), after_orig)
     orig_rng_to_delete.Delete()
+
+    # === SACRIFICIAL X CLEANUP ===
+    doc.TrackRevisions = False
+    doc.Range(base_start, base_start + 1).Delete()
+    doc.TrackRevisions = was_tracking
+    # =============================
 
     # 7. Post-Replacement Formatting & Styles (Tracking OFF)
     logger.debug("Toggling TrackRevisions OFF for styling phase.")
@@ -325,18 +355,11 @@ def _apply_structured_com_replacement(
 
         # Format remaining lines
         if rest_text_start is not None:
-            # We inserted the original text length earlier, but orig_rng_to_delete.Delete()
-            # was called. If tracking is ON, the deleted text remains in the document
-            # length. But p_end was captured BEFORE orig_rng_to_delete.Delete()!
-            # Wait, if p_end was captured before Delete(), but Delete() was called,
-            # does the absolute index shift?
-            # Tracked deletions DO NOT shift indices. Untracked deletions DO.
-            # To be safe, we recalculate the offset based on doc.Range shifting.
-            # Actually, since we appended the text at p_end, we can just use rest_text_start
-            # but adjusted if orig_rng_to_delete was a real deletion (tracking off).
-            shift = 0
+            # We explicitly deleted the 1-character Sacrificial 'X' (untracked),
+            # so all absolute offsets after base_start shift backwards by 1.
+            shift = -1
             if not was_tracking:
-                shift = -original_len
+                shift -= original_len
 
             current_abs_offset = rest_text_start + shift
 

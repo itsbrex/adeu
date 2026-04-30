@@ -278,7 +278,8 @@ if sys.platform == "win32":
                     if isinstance(change, (InsertTableRow, DeleteTableRow)):
                         stats["failed"] += 1
                         stats["skipped_details"].append(
-                            f"- Structural table edits ({change.type}) are currently only supported for disk-based DOCX files. "
+                            f"- Structural table edits ({change.type}) are currently only "
+                            "supported for disk-based DOCX files. "
                             "Please provide an 'original_docx_path' to use this feature."
                         )
                         continue

@@ -143,6 +143,7 @@ def test_ingest_structural_row_changes():
     assert "{++ New | Row |Chg:2++}" in raw_text
     assert "{-- B1 | B2 |Chg:1--}" in raw_text
 
+
 def test_clean_view_omits_deleted_row():
     doc = Document()
     table = doc.add_table(rows=2, cols=2)
@@ -158,9 +159,9 @@ def test_clean_view_omits_deleted_row():
 
     engine = RedlineEngine(stream)
     engine.process_batch([change])
-    
+
     # DO NOT accept revisions. We want to test how clean_view handles the active tracked deletion.
     clean_text = extract_text_from_stream(engine.save_to_stream(), clean_view=True)
-    
+
     assert "A1 | A2" in clean_text
     assert "B1 | B2" not in clean_text  # <--- THIS FAILS WITHOUT THE FIX

@@ -125,10 +125,10 @@ def _extract_table(table: Table, comments_map, clean_view: bool) -> str:
         if trPr is not None:
             ins = trPr.find(qn("w:ins"))
             del_node = trPr.find(qn("w:del"))
-            
+
             if clean_view and del_node is not None:
                 continue
-                
+
             if not clean_view:
                 if ins is not None:
                     row_str = f"{{++ {row_str} |Chg:{ins.get(qn('w:id'))}++}}"
@@ -278,12 +278,15 @@ def _build_paragraph_text(paragraph, comments_map, clean_view: bool = False):
                         deferred_meta_states = []
 
         elif isinstance(item, DocxEvent):
-            if pending_text:
-                s_tok, e_tok = current_wrappers
-                parts.append(f"{s_tok}{pending_text}{e_tok}")
-                pending_text = ""
-                current_wrappers = ("", "")
-                current_style = ("", "")
+            # Only flush pending text for structural events (like comments, links, footnotes).
+            # Pure state transitions (like adjacent w:ins/w:del tags splitting a run) must coalesce.
+            if item.type not in ("ins_start", "ins_end", "del_start", "del_end", "fmt_start", "fmt_end"):
+                if pending_text:
+                    s_tok, e_tok = current_wrappers
+                    parts.append(f"{s_tok}{pending_text}{e_tok}")
+                    pending_text = ""
+                    current_wrappers = ("", "")
+                    current_style = ("", "")
 
             if item.type == "start":
                 active_comments.add(item.id)

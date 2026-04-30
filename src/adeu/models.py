@@ -72,7 +72,9 @@ class InsertTableRow(BaseModel):
 
     target_text: str = Field(
         ...,
-        description="Text inside an existing row to use as an anchor. The new row will be inserted relative to this row.",
+        description=(
+            "Text inside an existing row to use as an anchor. The new row will be inserted relative to this row."
+        ),
     )
 
     position: Literal["above", "below"] = Field(
@@ -94,7 +96,9 @@ class DeleteTableRow(BaseModel):
 
     target_text: str = Field(
         ...,
-        description="Text inside the row you wish to delete. The engine will delete the entire row containing this match.",
+        description=(
+            "Text inside the row you wish to delete. The engine will delete the entire row containing this match."
+        ),
     )
 
     # Internal use only. PrivateAttr is invisible to the MCP API schema.

@@ -67,7 +67,8 @@ def test_edit_on_accepted_view_skipping_deletion():
 
     # Expect: A {--deleted --}{--B--}{++C++}
     # Or: A {--deleted --}{--B--}{++C++}
-    assert "{--deleted --}" in final_text
-    assert "{--B--}" in final_text
+    assert "{--deleted" in final_text
+    assert "{--deleted B--}" in final_text
+    assert "{++C++}" in final_text
     assert "{++C++}" in final_text
     assert "A " in final_text

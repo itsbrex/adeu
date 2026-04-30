@@ -279,6 +279,59 @@ async def open_local_file(
 
 
 # ==========================================
+# TOOL DESCRIPTION CONSTANTS (DRY)
+# ==========================================
+
+READ_DOCX_COMMON_DESC = (
+    "Reads a DOCX file and extracts its text content. Use this to ingest documents into your context window.\n"
+)
+READ_DOCX_WIN32_EXTRA = (
+    "CRITICAL: If you want to read the user's currently open, active Microsoft Word document, "
+    "leave `file_path` EMPTY!\n"
+)
+READ_DOCX_TAIL = (
+    "By default (clean_view=False), it returns text with inline CriticMarkup "
+    "(e.g., {++inserted++}, {--deleted--}, {==highlighted==}{>>comment<<}) "
+    "representing Tracked Changes and Comments. "
+    "Set clean_view=True ONLY if you want to read the final, clean text, ignoring all redlines and comments."
+)
+
+PROCESS_BATCH_COMMON_DESC = (
+    "Applies a batch of structural edits, text modifications, and review actions to a document. "
+    "This is your primary tool for editing DOCX files.\n\n"
+    "CRITICAL: All changes in the batch evaluate against the ORIGINAL document state. "
+    "Do not send sequential edits that depend on each other within the same batch "
+    "(e.g. rename X to Y, then modify Y). "
+    "Instead, apply the rename in one batch, then modify Y in a subsequent batch.\n\n"
+)
+PROCESS_BATCH_WIN32_EXTRA = (
+    "CRITICAL: If you want to apply edits directly to the user's active, visible Microsoft Word window, "
+    "leave `original_docx_path` EMPTY!\n\n"
+)
+PROCESS_BATCH_OPERATIONS_DESC = (
+    "The `changes` parameter is a list of operations. Each item MUST have a `type`:\n"
+    "1. 'modify': Search-and-replace text. Provide exact `target_text` (CRITICAL: include "
+    "surrounding context if the word appears multiple times to ensure unique matching) and "
+    "`new_text` (the replacement). `new_text` supports full Markdown structure: "
+    "'# Heading 1' through '###### Heading 6' at the start of a line for heading styles, "
+    "'**bold**' and '_italic_' inline formatting, and blank lines ('\\n\\n') to split "
+    "`new_text` into multiple paragraphs. Multi-paragraph inserts are tracked as one "
+    "logical revision. To delete text, make `new_text` empty. Do NOT manually write "
+    "CriticMarkup {++ tags; the engine handles that.\n"
+    "2. 'accept': Finalize a tracked change. Requires `target_id` (e.g., 'Chg:12'). "
+    "(Note: Accepting one half of a paired modify cascades to accept the other half).\n"
+    "3. 'reject': Revert a tracked change. Requires `target_id` (e.g., 'Chg:12'). "
+    "(Note: Rejecting one half cascades to reject the other half).\n"
+    "4. 'reply': Reply to a comment. Requires `target_id` (e.g., 'Com:5') and `text`.\n"
+    "5. 'insert_row': Insert table row. Requires `target_text` (anchor), `position` "
+    "('above'/'below'), and `cells` (Markdown strings).\n"
+    "6. 'delete_row': Delete table row. Requires `target_text` inside the row to be deleted.\n\n"
+    "Always provide a realistic `author_name` for Tracked Changes. This name will be used for "
+    "attribution in the document's tracked changes and comments."
+)
+
+
+# ==========================================
 # PLATFORM CONDITIONAL TOOL REGISTRATION
 # ==========================================
 
@@ -291,15 +344,7 @@ if sys.platform == "win32":
     )
 
     @tool(
-        description=(
-            "Reads a DOCX file and extracts its text content. Use this to ingest documents into your context window.\n"
-            "CRITICAL: If you want to read the user's currently open, active Microsoft Word document, "
-            "leave `file_path` EMPTY!\n"
-            "By default (clean_view=False), it returns text with inline CriticMarkup "
-            "(e.g., {++inserted++}, {--deleted--}, {==highlighted==}{>>comment<<}) "
-            "representing Tracked Changes and Comments. "
-            "Set clean_view=True ONLY if you want to read the final, clean text, ignoring all redlines and comments."
-        ),
+        description=READ_DOCX_COMMON_DESC + READ_DOCX_WIN32_EXTRA + READ_DOCX_TAIL,
         annotations={"readOnlyHint": True},
         meta={"ui": {"resourceUri": MARKDOWN_UI_URI}},
     )
@@ -322,32 +367,7 @@ if sys.platform == "win32":
         return add_timing_if_debug(start_time, res)
 
     @tool(
-        description=(
-            "Applies a batch of structural edits, text modifications, and review actions to a document. "
-            "This is your primary tool for editing DOCX files.\n\n"
-            "CRITICAL: All changes in the batch evaluate against the ORIGINAL document state. "
-            "Do not send sequential edits that depend on each other within the same batch "
-            "(e.g. rename X to Y, then modify Y). "
-            "Instead, apply the rename in one batch, then modify Y in a subsequent batch.\n\n"
-            "CRITICAL: If you want to apply edits directly to the user's active, visible Microsoft Word window, "
-            "leave `original_docx_path` EMPTY!\n\n"
-            "The `changes` parameter is a list of operations. Each item MUST have a `type`:\n"
-            "1. 'modify': Search-and-replace text. Provide exact `target_text` (CRITICAL: include "
-            "surrounding context if the word appears multiple times to ensure unique matching) and "
-            "`new_text` (the replacement). `new_text` supports full Markdown structure: "
-            "'# Heading 1' through '###### Heading 6' at the start of a line for heading styles, "
-            "'**bold**' and '_italic_' inline formatting, and blank lines ('\\n\\n') to split "
-            "`new_text` into multiple paragraphs. Multi-paragraph inserts are tracked as one "
-            "logical revision. To delete text, make `new_text` empty. Do NOT manually write "
-            "CriticMarkup {++ tags; the engine handles that.\n"
-            "2. 'accept': Finalize a tracked change. Requires `target_id` (e.g., 'Chg:12'). "
-            "(Note: Accepting one half of a paired modify cascades to accept the other half).\n"
-            "3. 'reject': Revert a tracked change. Requires `target_id` (e.g., 'Chg:12'). (Note: Rejecting one half of a paired modify cascades to reject the other half).\n"
-            "4. 'reply': Reply to a comment. Requires `target_id` (e.g., 'Com:5') and `text`.\n"
-            "5. 'insert_row': Insert a new row into a table. Requires `target_text` (anchor row), `position` ('above' or 'below'), and `cells` (list of Markdown strings for cell contents).\n"
-            "6. 'delete_row': Delete an entire table row. Requires `target_text` inside the row to be deleted.\n\n"
-            "Always provide a realistic `author_name` for Tracked Changes. This name will be used for attribution in the document's tracked changes and comments."
-        ),
+        description=PROCESS_BATCH_COMMON_DESC + PROCESS_BATCH_WIN32_EXTRA + PROCESS_BATCH_OPERATIONS_DESC,
         annotations={"destructiveHint": True},
     )
     async def process_document_batch(
@@ -355,7 +375,7 @@ if sys.platform == "win32":
         ctx: Context,
         changes: Annotated[
             List[DocumentChange],
-            "List of changes to apply. Each change must specify 'type' as 'accept', 'reject', 'reply', 'modify', 'insert_row', or 'delete_row'.",
+            "List of changes to apply. Each change must specify 'type'.",
         ],
         original_docx_path: Annotated[
             Optional[str],
@@ -466,13 +486,7 @@ if sys.platform == "win32":
 else:
 
     @tool(
-        description=(
-            "Reads a DOCX file and extracts its text content. Use this to ingest documents into your context window. "
-            "By default (clean_view=False), it returns text with inline CriticMarkup "
-            "(e.g., {++inserted++}, {--deleted--}, {==highlighted==}{>>comment<<}) "
-            "representing Tracked Changes and Comments. "
-            "Set clean_view=True ONLY if you want to read the final, clean text, ignoring all redlines and comments."
-        ),
+        description=READ_DOCX_COMMON_DESC + READ_DOCX_TAIL,
         annotations={"readOnlyHint": True},
         meta={"ui": {"resourceUri": MARKDOWN_UI_URI}},
     )
@@ -489,30 +503,7 @@ else:
         return add_timing_if_debug(start_time, res)
 
     @tool(
-        description=(
-            "Applies a batch of structural edits, text modifications, and review actions to a document. "
-            "This is your primary tool for editing DOCX files.\n\n"
-            "CRITICAL: All changes in the batch evaluate against the ORIGINAL document state. "
-            "Do not send sequential edits that depend on each other within the same batch "
-            "(e.g. rename X to Y, then modify Y). "
-            "Instead, apply the rename in one batch, then modify Y in a subsequent batch.\n\n"
-            "The `changes` parameter is a list of operations. Each item MUST have a `type`:\n"
-            "1. 'modify': Search-and-replace text. Provide exact `target_text` (CRITICAL: include "
-            "surrounding context if the word appears multiple times to ensure unique matching) and "
-            "`new_text` (the replacement). `new_text` supports full Markdown structure: "
-            "'# Heading 1' through '###### Heading 6' at the start of a line for heading styles, "
-            "'**bold**' and '_italic_' inline formatting, and blank lines ('\\n\\n') to split "
-            "`new_text` into multiple paragraphs. Multi-paragraph inserts are tracked as one "
-            "logical revision. To delete text, make `new_text` empty. Do NOT manually write "
-            "CriticMarkup {++ tags; the engine handles that.\n"
-            "2. 'accept': Finalize a tracked change. Requires `target_id` (e.g., 'Chg:12'). "
-            "(Note: Accepting one half of a paired modify cascades to accept the other half).\n"
-            "3. 'reject': Revert a tracked change. Requires `target_id` (e.g., 'Chg:12'). "
-            "(Note: Rejecting one half of a paired modify cascades to reject the other half).\n"
-            "4. 'reply': Reply to a comment. Requires `target_id` (e.g., 'Com:5') and `text`.\n\n"
-            "Always provide a realistic `author_name` for Tracked Changes. This name will be "
-            "used for attribution in the document's tracked changes and comments."
-        ),
+        description=PROCESS_BATCH_COMMON_DESC + PROCESS_BATCH_OPERATIONS_DESC,
         annotations={"destructiveHint": True},
     )
     async def process_document_batch(
@@ -521,7 +512,7 @@ else:
         ctx: Context,
         changes: Annotated[
             List[DocumentChange],
-            "List of changes to apply. Each change must specify 'type' as 'accept', 'reject', 'reply', or 'modify'.",
+            "List of changes to apply. Each change must specify 'type'.",
         ],
         output_path: Annotated[Optional[str], "Optional output path."] = None,
     ) -> str:

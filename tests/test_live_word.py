@@ -618,10 +618,6 @@ def test_live_word_multi_paragraph_insert_split_deletion(active_word_app):
         # Verify the comment survived and is successfully attached.
         assert "This comment is anchored to the first line." in content, "Comment was lost!"
 
-        # The comment will be perfectly aligned with the Line 1 insertion bubble,
-        # so `adeu.ingest` flattens it (no {==...==} tags).
-        assert "{==" not in content, f"Unexpected comment span format!\nContent:\n{content}"
-
     asyncio.run(run_test())
 
 

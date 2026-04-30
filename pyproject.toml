@@ -35,6 +35,7 @@ dev = [
     "mypy",
     "hypothesis",
     "pre-commit>=4.5.1",
+    "pytest-cov>=7.1.0",
 ]
 
 [tool.hatch.build.targets.wheel]

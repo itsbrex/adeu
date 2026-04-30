@@ -38,12 +38,14 @@ Adeu acts as a "Virtual DOM" for DOCX files, enabling LLMs to edit documents via
 *   **Recursion**: Ingestion and Mapping are recursive. `Document` -> `Table` -> `Cell` -> `Block Items` -> ...
 *   **Synchronization Invariants**:
     *   **Empty Rows**: `ingest.py` must *never* skip empty table rows. `mapper.py` iterates all rows in the DOM; skipping one in text extraction causes index misalignment.
+    *   **Deleted Rows (Clean View)**: To simulate the "Accepted" document state (`clean_view=True`), the extraction pipelines explicitly skip table rows that contain a `<w:del>` tag inside their `<w:trPr>` properties.
     *   **Separators**: Row separators (`\n`) are injected *between* rows. Virtual pipes (` | `) separate cells.
     *   **Cell Isolation**: The virtual `|` boundary represents a hard `<w:tc>` cell wall. Modifying text across `|` boundaries is dynamically segmented into per-cell edits by the engine. Structural table changes (adding or removing rows, or adding/removing `|` columns) via text replacement are explicitly intercepted and strictly rejected to prevent gridspan corruption and misaligned `<w:tc>` elements.
     *   **Heuristic Cell Matching**: When modifying table rows via text substitution, we explicitly `.strip()` individual cell contents to bypass whitespace drift and accurately anchor comments to the semantically modified cell.
+    *   **Structural Table Safety**: Table row manipulation is strictly enforced via intent-based API models (`InsertTableRow`, `DeleteTableRow`) to safely manipulate the DOM without risking gridspan corruption. *(Note: Currently supported for disk-based DOCX editing only; gracefully intercepted and rejected in Live Word COM)*.
 
 ### 6. The Unified `DocumentChange` API
-*   **Flat API Structure**: The LLM interacts with a flat list of `DocumentChange` objects (Discriminated Union of `ModifyText`, `AcceptChange`, `RejectChange`, `ReplyComment`).
+*   **Flat API Structure**: The LLM interacts with a flat list of `DocumentChange` objects (Discriminated Union of `ModifyText`, `AcceptChange`, `RejectChange`, `ReplyComment`, `InsertTableRow`, `DeleteTableRow`).
 *   **Search & Replace First**: Pure insertions and deletions are intentionally hidden from the LLM. All text modifications must be executed as search-and-replace (`ModifyText`) to guarantee sufficient anchoring context for the fuzzy matcher.
 *   **Universal Tooling**: Disk-based and Live Word tools share the same endpoints (`read_docx`, `process_document_batch`). On Windows, omitting file paths dynamically routes the command to the active Live Word COM object, preventing LLM tool selection paralysis.
 *   **Heading Depth Validation**: Markdown heading depths (`#`) are strictly clamped to a maximum of 6. Exceeding this raises a `BatchValidationError` to prevent the silent generation of broken/unstyled XML blocks.
@@ -80,10 +82,12 @@ Achieving 100% CriticMarkup extraction parity between Live COM and Disk XML requ
 *   **Table Rendering & COM Offset Drift**: Word COM injects hidden structural characters (`\r\x07`) at cell boundaries, breaking Python string indices. Solution: Decouple structural markdown extraction (`|` for cells) from native COM execution, using exact index mapping arrays paired with `rng.Find` to securely bypass COM index drift.
 *   **Ephemeral Session IDs**: Word natively assigns `w:id="0"` to all unsaved revisions/comments in live memory, randomly assigning persistent IDs during a Save. **IDs are session-bound.** Agents must treat Save/Reload boundaries as a state wipe and re-index the document IDs afterward.
 *   **Destructive Native Edits (Comment Rescue)**: Assigning `Range.Text` in Live Word natively destroys any comments anchored to that text. Batch processors must explicitly cache, rescue, and re-anchor comments during string replacements.
+*   **SmartSelection & Anchor Bleed**: Microsoft Word's `SmartSelection` natively snaps comment anchors leftward across spaces into preceding un-tracked sentences. To mathematically isolate anchors during structured multi-paragraph replacements, we temporarily disable `app.Options.SmartSelection`, inject an un-tracked "Sacrificial 'X'" character, attach the comment, and un-track-delete the 'X' to perfectly collapse the anchor.
 *   **Pure Comment Redline Prevention**: If an agent requests a pure comment (`target_text == new_text`), executing a `.Text` replacement natively forces Word to generate spurious `<w:del>` and `<w:ins>` pairs. We must explicitly short-circuit and attach the comment directly without modifying the text to prevent document timeline pollution.
 *   **Structured Insertions (Reverse Sandwich Algorithm)**: Word natively corrupts document structure if a tracked deletion precedes a new tracked paragraph break (`\r`), physically pushing the deletion into the next paragraph. To safely insert multi-paragraph replacements, we use a "Reverse Sandwich": insert Line 1 *before* the target, insert remaining lines *after*, and execute `.Delete()` on the target *last*.
 *   **COM Comment Truncation Limit**: Microsoft Word's COM API (`doc.Comments.Add`) actively refuses to span a range containing both tracked deletions and tracked paragraph breaks. When executing multi-paragraph replacements, comments must be strictly anchored to the first inserted line (`Line 1`) to guarantee survival and visibility.
 *   **Empty Runs & Timestamps**: Both engines must explicitly skip empty runs to synchronize lookahead bubble grouping. Both must emit full ISO-8601 timestamps without truncation to preserve chronological signals.
+*   **Tracked Formatting Fragmentation**: Word natively splits a single tracked revision (`<w:ins>`) into multiple contiguous elements if partial formatting (like bold) is applied mid-revision. The ingestion state machine explicitly ignores pure state transition boundaries (like `ins_end`) when building CriticMarkup to seamlessly coalesce these fragments back into a single unified tag.
 
 ### 11. Redline Engine Execution Model (Performance & Safety)
 *   **Pre-Resolution & Backwards-Sweep**: To avoid O(N²) scaling on large documents, all text edits are mapped against the *initial* document state to cache their physical offsets before any DOM mutations occur. Edits are then sorted in reverse order and applied bottom-up in a single O(N) sweep. This completely eliminates index drift and bypasses rebuilding the Virtual DOM map mid-batch. (Note: Because of this reverse execution, bottom-most edits receive lower sequential IDs like `Chg:1`).
@@ -128,6 +132,11 @@ To solve domain visibility gaps without adding new MCP tools, `read_docx` projec
 *   This configures Claude Desktop to execute the server from the current local source (`sys.executable` + `cwd`), bypassing `uvx`.
 
 ## Current Status
+- **v1.4.2**: Structural Table Edits & Live Word Stabilization.
+    - Added `InsertTableRow` and `DeleteTableRow` intent-based models for safe OOXML gridspan manipulation.
+    - Resolved COM extraction fragmentation by properly coalescing partial formatting revisions.
+    - Eliminated Word COM anchor bleed during multi-paragraph replacements via SmartSelection circumvention and Sacrificial 'X' anchors.
+    - Cleaned up duplicate MCP tool descriptions across platform environments.
 - **v1.3.0**: UI Integrations
     - **Native Open**: Added `open_local_file` tool to allow the Custom MCP UI to seamlessly launch the native OS default application (Word, PDF readers, etc.) without hitting iframe sandbox restrictions via the `tools/call` RPC method.
 - **v1.1.0**: Live Word Interop & Agentic Workflows.
