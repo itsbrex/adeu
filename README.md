@@ -8,17 +8,17 @@
 
 **LLMs speak Markdown; Lawyers speak "Track Changes."** 
 
-Adeu is a Model Context Protocol (MCP) server and Python SDK that provides a two-way abstraction layer between AI agents and Microsoft Word.
+Adeu is a Model Context Protocol (MCP) server and Python SDK that acts as a **"Virtual DOM" for Microsoft Word**. It provides a two-way abstraction layer that lets AI agents freely edit document text without destroying the underlying formatting or complex DOCX XML.
 
 While standard libraries like `python-docx` excel at generating documents from scratch, they fail at non-destructive redlining. Adeu solves this by translating `.docx` files into a token-efficient Markdown representation. This frees AI agents to focus entirely on document semantics instead of wasting tokens wrestling with OpenXML.
 
 Adeu acts as an **intelligent proxy**, processing AI edits as safe, atomic transactions:
 
-1. **Extract:** Translates the document (from disk or live Word memory) into LLM-friendly **CriticMarkup**, exposing native Track Changes and margin comments. It also generates a semantic appendix flagging defined terms and potential typos for the AI.
+1. **Extract:** Translates the document (from disk or live Word) into LLM-friendly **CriticMarkup** with a **Semantic Appendix** of defined terms, cross-references, and likely typos. Agent starts with structure and not raw data.
 2. **Validate:** Acts as a strict safety gate. It protects the document's integrity by automatically blocking ambiguous text matches or invalid structural changes before they touch the file.
 3. **Commit:** Translates the AI's text edits into native Word Track Changes. Adeu handles the complex XML under the hood, ensuring existing layouts, fonts, and margin comments are perfectly preserved.
 
-Adeu Open Source Software is developed by [Adeu](https://adeu.ai).
+Maintained by [Adeu](https://adeu.ai).
 
 ---
 
@@ -106,7 +106,7 @@ To maximize the AI's effectiveness, paste this context into Claude's **Project I
 > - `process_document_batch`: **Commit & Negotiate Mode.** Apply a unified list of changes. Use `type: "modify"` for specific search-and-replace text edits, and `type: "accept"`, `"reject"`, or `"reply"` to manage existing Track Changes and Comments by ID.
 > - `sanitize_docx`: **Pre-Send Scrub.** Strip dangerous metadata, author names, and internal tracking IDs before sharing. Can preserve existing markup (`keep_markup=True`) or generate a clean delta against a baseline.
 
-### Windows Copilot: Live Word Integration
+### Live MS Word Integration
 If you are running on Windows with Microsoft Word installed, Adeu can act as a real-time copilot, editing the active document right in front of you.
 *   `read_active_word_document`: Extracts text, tracked changes, and comments directly from the live, open Word window.
 *   `process_active_word_batch`: Translates the LLM's edits into native COM macros, watching Word type, delete, and add comments on the canvas automatically.
@@ -171,6 +171,7 @@ Adeu does not "rewrite" the document. It patches it.
 
 - **Images & Layouts:** Untouched.
 - **Numbering & Headers:** Preserved.
+- **Tables & Lists:** Complex gridspans and multi-level legal numbering are explicitly protected.
 - **Complex XML:** It only modifies the text runs targeted by the edit.
 
 ### CriticMarkup Representation
@@ -183,6 +184,10 @@ Intermediate representations matter. Adeu uses [CriticMarkup](http://criticmarku
 | `{++text++}` | Insertion | `{++Lessee++}`            |
 | `{>>text<<}` | Comment   | `{>>Clarify this term<<}` |
 
+### Semantic Appendix
+
+Contracts are full of landmines an LLM will miss on a first pass: defined terms used inconsistently, broken cross-references, OCR typos in scanned PDFs converted to Word. Adeu pre-computes these on extract and hands the agent a structured appendix alongside the text.
+
 ### Intelligent Mapping
 
 Word documents are messy. A word like "Contract" might be split into XML runs like `["Con", "tract"]` due to spellcheck or formatting history.
@@ -193,6 +198,25 @@ Word documents are messy. A word like "Contract" might be split into XML runs li
 ### Metadata Sanitization
 
 Existing metadata scrubbers break redlines or silently strip data. Adeu's `sanitize` command surgically removes dangerous trackers (rsids, templates, internal paths, timestamps) and orphaned content while preserving valid track changes. Crucially, it generates a transparent audit report proving exactly what was stripped and what will be visible to the recipient.
+
+---
+
+## Adeu Cloud
+
+By default, the core Adeu redlining engine and local file tools are fully open-source and execute entirely on your machine. **Adeu never phones home with your local documents** (though your chosen LLM provider will naturally process the text the agent reads).
+
+However, you can explicitly opt-in to connect your MCP server to **Adeu Cloud** to unlock:
+
+- **Agentic Email Integration:** Securely search, fetch, and draft email replies with attachments directly from the LLM.
+- **Advanced Document Validation:** Run complex, multi-document semantic validation tasks asynchronously. By securely routing these massive contexts to Adeu Cloud for processing, you prevent your local AI agent from burning millions of tokens or hitting context limits.
+
+[Learn more about Adeu Cloud](https://adeu.ai).
+
+---
+
+## Contributing
+
+We welcome contributions from the community! Whether it's fixing bugs, adding capabilities, or improving documentation, please see our [Contributing Guide](CONTRIBUTING.md) for instructions on setting up the local `uv` environment, running tests, and understanding the project's strict XML safety guidelines.
 
 ---
 
