@@ -1264,16 +1264,14 @@ class RedlineEngine:
                     ]
                 )
 
-        if actual_doc_text == effective_new_text:
-            if edit.comment:
-                proxy_edit = ModifyText(
-                    type="modify", target_text=actual_doc_text, new_text=effective_new_text, comment=edit.comment
-                )
-                proxy_edit._match_start_index = start_idx
-                proxy_edit._internal_op = "COMMENT_ONLY"
-                proxy_edit._active_mapper_ref = active_mapper
-                return proxy_edit
-            return edit
+        if actual_doc_text == effective_new_text or edit.target_text == effective_new_text:
+            proxy_edit = ModifyText(
+                type="modify", target_text=actual_doc_text, new_text=actual_doc_text, comment=edit.comment
+            )
+            proxy_edit._match_start_index = start_idx
+            proxy_edit._internal_op = "COMMENT_ONLY"
+            proxy_edit._active_mapper_ref = active_mapper
+            return proxy_edit
 
         if effective_new_text.startswith(actual_doc_text):
             effective_op = EditOperationType.INSERTION
