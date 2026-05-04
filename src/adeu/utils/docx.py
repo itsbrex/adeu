@@ -16,6 +16,33 @@ from docx.text.run import Run
 logger = structlog.get_logger(__name__)
 
 
+def _install_styles_default_cache():
+    try:
+        from docx.styles.styles import Styles as _DocxStyles
+    except Exception:
+        return
+    if getattr(_DocxStyles, "_adeu_default_cached", False):
+        return
+    _orig_default = _DocxStyles.default
+
+    def _cached_default(self, style_type):
+        cache = self.__dict__.get("_adeu_default_cache")
+        if cache is None:
+            cache = {}
+            self.__dict__["_adeu_default_cache"] = cache
+        if style_type in cache:
+            return cache[style_type]
+        result = _orig_default(self, style_type)
+        cache[style_type] = result
+        return result
+
+    _DocxStyles.default = _cached_default  # type: ignore[method-assign]
+    _DocxStyles._adeu_default_cached = True  # type: ignore[attr-defined]
+
+
+_install_styles_default_cache()
+
+
 # --- Types ---
 class DocxEvent(NamedTuple):
     type: str  # 'start', 'end', 'ref' (for comments); 'ins_start', etc.
@@ -66,12 +93,38 @@ def _is_page_instr(instr: str) -> bool:
     return parts[0] in ("PAGE", "NUMPAGES")
 
 
+_STYLE_CACHE_MISS = object()
+
+
 def _get_paragraph_style_safe(paragraph: Paragraph):
+    """
+    Returns paragraph.style or None.
+
+    PERF: python-docx's `paragraph.style` access is extremely expensive on
+    large docs because the underlying part.get_style → styles.get_by_id →
+    styles.default → default_for chain re-walks styles.xml on every call,
+    burning 80-90% of read/projection wall time on a doc with thousands of
+    paragraphs. We cache the resolved style on the Paragraph instance for
+    the duration of one projection pass.
+
+    The cache attribute is set on the Paragraph object, NOT the underlying
+    XML element, so it disappears naturally when the wrapper is GC'd. If a
+    caller mutates a paragraph's pStyle after caching, they must clear the
+    attribute manually (no current code path does this during projection).
+    """
+    cached = getattr(paragraph, "_adeu_cached_style", _STYLE_CACHE_MISS)
+    if cached is not _STYLE_CACHE_MISS:
+        return cached
     try:
-        return paragraph.style
+        style = paragraph.style
     except AttributeError:
-        # Handle generic XmlParts (like footnotes.xml) that lack get_style()
-        return None
+        style = None
+    try:
+        paragraph._adeu_cached_style = style  # type: ignore[attr-defined]
+    except AttributeError:
+        # Some odd Paragraph wrappers may be slot-defined; fall back gracefully.
+        pass
+    return style
 
 
 def get_paragraph_prefix(paragraph: Paragraph) -> str:

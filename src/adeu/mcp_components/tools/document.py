@@ -3,25 +3,46 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Annotated, List, Optional
+from typing import Annotated, List, Literal, Optional
 
+from docx import Document as load_document
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from fastmcp.tools.tool import ToolResult
 
 from adeu.diff import generate_edits_from_text
-from adeu.ingest import extract_text_from_stream
-from adeu.mcp_components.shared import MARKDOWN_UI_URI, add_timing_if_debug, read_file_bytes, save_stream
+from adeu.ingest import _extract_text_from_doc, extract_text_from_stream
+from adeu.mcp_components._response_builders import (
+    build_outline_response,
+    build_paginated_response,
+)
+from adeu.mcp_components.shared import (
+    MARKDOWN_UI_URI,
+    add_timing_if_debug,
+    read_file_bytes,
+    save_stream,
+)
 from adeu.models import DocumentChange, ModifyText
 from adeu.redline.engine import BatchValidationError, RedlineEngine
 
 
-async def _read_docx_disk(file_path: str, ctx: Context, clean_view: bool) -> ToolResult:
-    """Core logic for reading a DOCX from disk."""
+async def _read_docx_disk(
+    file_path: str,
+    ctx: Context,
+    clean_view: bool,
+    mode: str = "full",
+    page: int = 1,
+) -> ToolResult:
+    """Core logic for reading a DOCX from disk. Dispatches on `mode`."""
     await ctx.info(
         f"Reading DOCX file: {Path(file_path).name}",
-        extra={"file_path": file_path, "clean_view": clean_view},
+        extra={
+            "file_path": file_path,
+            "clean_view": clean_view,
+            "mode": mode,
+            "page": page,
+        },
     )
 
     try:
@@ -31,17 +52,17 @@ async def _read_docx_disk(file_path: str, ctx: Context, clean_view: bool) -> Too
             extra={"size_bytes": len(stream.getvalue())},
         )
 
-        text = extract_text_from_stream(stream, filename=Path(file_path).name, clean_view=clean_view)
+        doc = load_document(stream)
+        text = _extract_text_from_doc(doc, clean_view=clean_view)
         await ctx.info("Successfully extracted text from DOCX", extra={"text_length": len(text)})
-        return ToolResult(
-            content=text,
-            structured_content={
-                "markdown": text,
-                "title": Path(file_path).name,
-                "file_path": str(Path(file_path).resolve()),
-            },
-        )
 
+        if mode == "outline":
+            return build_outline_response(doc, text, file_path)
+        # mode == "full"
+        return build_paginated_response(text, page, file_path)
+
+    except ToolError:
+        raise
     except FileNotFoundError as e:
         await ctx.error("File not found", extra={"file_path": file_path})
         raise ToolError(f"Error reading file: {str(e)}") from e
@@ -295,7 +316,16 @@ READ_DOCX_TAIL = (
     "By default (clean_view=False), it returns text with inline CriticMarkup "
     "(e.g., {++inserted++}, {--deleted--}, {==highlighted==}{>>comment<<}) "
     "representing Tracked Changes and Comments. "
-    "Set clean_view=True ONLY if you want to read the final, clean text, ignoring all redlines and comments."
+    "Set clean_view=True ONLY if you want to read the final, clean text, ignoring all redlines and comments.\n\n"
+    "PAGINATION & OUTLINE:\n"
+    "- mode='outline' returns a structural map of headings with page numbers, styles, "
+    "table presence, and referenced footnotes. Body content is omitted. Use this first "
+    "on large documents to plan targeted reads.\n"
+    "- mode='full' (default) returns the document body. Documents over ~19,000 characters "
+    "are split into pages; use page=N to read a specific page (1-indexed). Documents under "
+    "the limit are returned in full on page 1.\n"
+    "- Page boundaries differ between clean_view=True and clean_view=False.\n"
+    "- The Structural Appendix (defined terms, anchors, diagnostics) is repeated on every page."
 )
 
 PROCESS_BATCH_COMMON_DESC = (
@@ -362,19 +392,35 @@ if sys.platform == "win32":
             bool,
             "If False (default), returns the 'Raw' text with inline CriticMarkup. If True, returns 'Accepted' text.",
         ] = False,
+        mode: Annotated[
+            Literal["full", "outline"],
+            "'full' returns body content (paginated for large docs). 'outline' returns "
+            "a structural heading map with page numbers; body content is omitted.",
+        ] = "full",
+        page: Annotated[
+            int,
+            "Page number (1-indexed) for mode='full'. Defaults to 1. Ignored when mode='outline'.",
+        ] = 1,
     ) -> ToolResult:
         start_time = time.perf_counter()
         if not file_path:
             # Read active document directly. No disk fallback available if this fails.
-            res = await read_active_word_document(ctx, clean_view, None)
+            res = await read_active_word_document(ctx, clean_view, None, mode=mode, page=page)
         else:
             # Try Live Word first. Fallback to Disk if Word is closed or document isn't open.
             try:
-                res = await read_active_word_document(ctx, clean_view, file_path)
+                res = await read_active_word_document(ctx, clean_view, file_path, mode=mode, page=page)
                 await ctx.debug("Read document via Live Word COM.")
+            except ToolError:
+                # ToolError = Live Word read succeeded but the request itself failed
+                # (e.g. page out of range). Do not fall back to disk; the disk doc
+                # would produce the same error and might also have stale content.
+                raise
             except Exception:
+                # Any other exception means Live Word couldn't extract at all
+                # (e.g. doc not open, COM unavailable). Fall back to disk.
                 await ctx.debug("Document not open in live Word, falling back to disk read.")
-                res = await _read_docx_disk(file_path, ctx, clean_view)
+                res = await _read_docx_disk(file_path, ctx, clean_view, mode, page)
         return add_timing_if_debug(start_time, res)
 
     @tool(
@@ -452,7 +498,11 @@ if sys.platform == "win32":
 
                 diff_lines = list(
                     difflib.unified_diff(
-                        xml_a.splitlines(), xml_b.splitlines(), fromfile="Baseline", tofile="Modified", lineterm=""
+                        xml_a.splitlines(),
+                        xml_b.splitlines(),
+                        fromfile="Baseline",
+                        tofile="Modified",
+                        lineterm="",
                     )
                 )
                 res = "No structural XML differences found." if not diff_lines else "\n".join(diff_lines)
@@ -514,9 +564,18 @@ else:
             bool,
             "If False (default), returns the 'Raw' text with inline CriticMarkup. If True, returns 'Accepted' text.",
         ] = False,
+        mode: Annotated[
+            Literal["full", "outline"],
+            "'full' returns body content (paginated for large docs). 'outline' returns "
+            "a structural heading map with page numbers; body content is omitted.",
+        ] = "full",
+        page: Annotated[
+            int,
+            "Page number (1-indexed) for mode='full'. Defaults to 1. Ignored when mode='outline'.",
+        ] = 1,
     ) -> ToolResult:
         start_time = time.perf_counter()
-        res = await _read_docx_disk(file_path, ctx, clean_view)
+        res = await _read_docx_disk(file_path, ctx, clean_view, mode, page)
         return add_timing_if_debug(start_time, res)
 
     @tool(

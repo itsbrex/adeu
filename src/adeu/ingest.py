@@ -19,7 +19,6 @@ from adeu.utils.docx import (
     iter_block_items,
     iter_document_parts,
     iter_paragraph_content,
-    normalize_docx,
 )
 
 logger = structlog.get_logger(__name__)
@@ -39,31 +38,37 @@ def extract_text_from_stream(file_stream: io.BytesIO, filename: str = "document.
     try:
         file_stream.seek(0)
         doc = Document(file_stream)
-
-        # FIX C: Normalize in-memory DOM so ingest sees coalesced runs regardless
-        # of whether the source is an on-disk file or a Flat OPC synthesised stream
-        # from live Word (which emits run fragmentation from cursor/undo state).
-        normalize_docx(doc)
-
-        comments_mgr = CommentsManager(doc)
-        comments_map = comments_mgr.extract_comments_data()
-
-        full_text = []
-
-        for part in iter_document_parts(doc):
-            part_text = _extract_blocks(part, comments_map, clean_view)
-            if part_text:
-                full_text.append(part_text)
-
-        base_text = "\n\n".join(full_text)
-        appendix = build_structural_appendix(doc, base_text)
-        if appendix:
-            return base_text + appendix
-        return base_text
-
+        return _extract_text_from_doc(doc, clean_view)
     except Exception as e:
         logger.error(f"Text extraction failed: {e}", exc_info=True)
         raise ValueError(f"Could not extract text: {str(e)}") from e
+
+
+def _extract_text_from_doc(doc, clean_view: bool = False) -> str:
+    """
+    Extracts text from an already-loaded python-docx Document.
+
+    PERF: We no longer call normalize_docx() here. The ingest pipeline tolerates
+    fragmented runs (build_paragraph_text coalesces marker/wrapper boundaries
+    via FIX C logic). normalize_docx remains called by the RedlineEngine on
+    edit paths via the engine's own initialization, where DOM mutation is
+    already happening anyway. Read-only ingest skipping it is safe.
+    """
+    comments_mgr = CommentsManager(doc)
+    comments_map = comments_mgr.extract_comments_data()
+
+    full_text = []
+
+    for part in iter_document_parts(doc):
+        part_text = _extract_blocks(part, comments_map, clean_view)
+        if part_text:
+            full_text.append(part_text)
+
+    base_text = "\n\n".join(full_text)
+    appendix = build_structural_appendix(doc, base_text)
+    if appendix:
+        return base_text + appendix
+    return base_text
 
 
 def _extract_blocks(container, comments_map, clean_view: bool) -> str:
@@ -90,12 +95,12 @@ def _extract_blocks(container, comments_map, clean_view: bool) -> str:
             prefix = get_paragraph_prefix(item)
             if is_first_para and c_type == "FootnoteItem":
                 prefix = f"[^{container.note_type}-{container.id}]: " + prefix
-            p_text = _build_paragraph_text(item, comments_map, clean_view)
+            p_text = build_paragraph_text(item, comments_map, clean_view)
             blocks.append(prefix + p_text)
             is_first_para = False
 
         elif isinstance(item, Table):
-            table_text = _extract_table(item, comments_map, clean_view)
+            table_text = extract_table(item, comments_map, clean_view)
             if table_text:
                 blocks.append(table_text)
             is_first_para = False
@@ -103,7 +108,7 @@ def _extract_blocks(container, comments_map, clean_view: bool) -> str:
     return "\n\n".join(blocks)
 
 
-def _extract_table(table: Table, comments_map, clean_view: bool) -> str:
+def extract_table(table: Table, comments_map, clean_view: bool) -> str:
     rows_text = []
     for row in table.rows:
         cell_texts = []
@@ -140,7 +145,7 @@ def _extract_table(table: Table, comments_map, clean_view: bool) -> str:
     return "\n".join(rows_text)
 
 
-def _build_paragraph_text(paragraph, comments_map, clean_view: bool = False):
+def build_paragraph_text(paragraph, comments_map, clean_view: bool = False):
     """
     Flatten overlapping comments into sequential CriticMarkup blocks.
     Merges metadata for adjacent Redline blocks (Substitutions).
@@ -280,7 +285,14 @@ def _build_paragraph_text(paragraph, comments_map, clean_view: bool = False):
         elif isinstance(item, DocxEvent):
             # Only flush pending text for structural events (like comments, links, footnotes).
             # Pure state transitions (like adjacent w:ins/w:del tags splitting a run) must coalesce.
-            if item.type not in ("ins_start", "ins_end", "del_start", "del_end", "fmt_start", "fmt_end"):
+            if item.type not in (
+                "ins_start",
+                "ins_end",
+                "del_start",
+                "del_end",
+                "fmt_start",
+                "fmt_end",
+            ):
                 if pending_text:
                     s_tok, e_tok = current_wrappers
                     parts.append(f"{s_tok}{pending_text}{e_tok}")

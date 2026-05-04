@@ -920,7 +920,6 @@ class RedlineEngine:
             if skipped_actions > 0:
                 raise BatchValidationError(self.skipped_details)
             if edits:
-                self.mapper._build_map()
                 self.clean_mapper = None
 
         if edits:
@@ -1047,10 +1046,6 @@ class RedlineEngine:
                     )
                 self.skipped_details.append(msg)
 
-        if applied > 0:
-            self.mapper._build_map()
-            self.clean_mapper = None
-
         return applied, skipped
 
     def _apply_insert_row(self, edit: InsertTableRow) -> bool:
@@ -1170,7 +1165,12 @@ class RedlineEngine:
                 sub_edits = []
                 if t_text != n_text:
                     t_idx = actual_doc_text.find(t_text)
-                    txt_edit = ModifyText(type="modify", target_text=t_text, new_text=n_text, comment=edit.comment)
+                    txt_edit = ModifyText(
+                        type="modify",
+                        target_text=t_text,
+                        new_text=n_text,
+                        comment=edit.comment,
+                    )
                     txt_edit._match_start_index = start_idx + t_idx
                     txt_edit._internal_op = EditOperationType.MODIFICATION
                     txt_edit._active_mapper_ref = active_mapper
@@ -1274,7 +1274,10 @@ class RedlineEngine:
 
         if actual_doc_text == effective_new_text or edit.target_text == effective_new_text:
             proxy_edit = ModifyText(
-                type="modify", target_text=actual_doc_text, new_text=actual_doc_text, comment=edit.comment
+                type="modify",
+                target_text=actual_doc_text,
+                new_text=actual_doc_text,
+                comment=edit.comment,
             )
             proxy_edit._match_start_index = start_idx
             proxy_edit._internal_op = "COMMENT_ONLY"
@@ -1310,21 +1313,32 @@ class RedlineEngine:
                 effective_op = EditOperationType.MODIFICATION
             else:
                 proxy_edit = ModifyText(
-                    type="modify", target_text=final_target, new_text=final_new, comment=edit.comment
+                    type="modify",
+                    target_text=final_target,
+                    new_text=final_new,
+                    comment=edit.comment,
                 )
                 proxy_edit._match_start_index = effective_start_idx
                 proxy_edit._internal_op = "COMMENT_ONLY"
                 proxy_edit._active_mapper_ref = active_mapper
                 return proxy_edit
 
-        proxy_edit = ModifyText(type="modify", target_text=final_target, new_text=final_new, comment=edit.comment)
+        proxy_edit = ModifyText(
+            type="modify",
+            target_text=final_target,
+            new_text=final_new,
+            comment=edit.comment,
+        )
         proxy_edit._match_start_index = effective_start_idx
         proxy_edit._internal_op = effective_op
         proxy_edit._active_mapper_ref = active_mapper
         return proxy_edit
 
     def _apply_single_edit_indexed(
-        self, edit: ModifyText, original_new_text: Optional[str] = None, rebuild_map: bool = True
+        self,
+        edit: ModifyText,
+        original_new_text: Optional[str] = None,
+        rebuild_map: bool = True,
     ) -> bool:
         op = edit._internal_op
         active_mapper = edit._active_mapper_ref or self.mapper
@@ -1446,7 +1460,13 @@ class RedlineEngine:
                 if start_p == end_p:
                     self._attach_comment(start_p, first_del_element, last_del_element, edit.comment)
                 else:
-                    self._attach_comment_spanning(start_p, first_del_element, end_p, last_del_element, edit.comment)
+                    self._attach_comment_spanning(
+                        start_p,
+                        first_del_element,
+                        end_p,
+                        last_del_element,
+                        edit.comment,
+                    )
 
         elif op == EditOperationType.MODIFICATION:
             first_del_element = None
@@ -1491,15 +1511,32 @@ class RedlineEngine:
                         if last_p is not None:
                             end_p = last_p
                             last_ins = last_p.findall(f".//{qn('w:ins')}")[-1]
-                            self._attach_comment_spanning(start_p, first_del_element, end_p, last_ins, edit.comment)
+                            self._attach_comment_spanning(
+                                start_p,
+                                first_del_element,
+                                end_p,
+                                last_ins,
+                                edit.comment,
+                            )
                         elif ins_elem is not None:
                             end_p = ins_elem.getparent()
                             if start_p == end_p:
                                 self._attach_comment(parent, first_del_element, ins_elem, edit.comment)
                             else:
-                                self._attach_comment_spanning(start_p, first_del_element, end_p, ins_elem, edit.comment)
+                                self._attach_comment_spanning(
+                                    start_p,
+                                    first_del_element,
+                                    end_p,
+                                    ins_elem,
+                                    edit.comment,
+                                )
                         else:
-                            self._attach_comment(start_p, first_del_element, last_del_element, edit.comment)
+                            self._attach_comment(
+                                start_p,
+                                first_del_element,
+                                last_del_element,
+                                edit.comment,
+                            )
 
         # PHASE 2: OOXML Paragraph Merge Protocol
         if op in (EditOperationType.DELETION, EditOperationType.MODIFICATION):
@@ -1600,7 +1637,12 @@ class RedlineEngine:
 
         for part in self.doc.part.package.parts:
             if hasattr(part, "_adeu_element"):
-                part._blob = etree.tostring(part._adeu_element, xml_declaration=True, encoding="UTF-8", standalone=True)
+                part._blob = etree.tostring(
+                    part._adeu_element,
+                    xml_declaration=True,
+                    encoding="UTF-8",
+                    standalone=True,
+                )
         output = BytesIO()
         self.doc.save(output)
         output.seek(0)

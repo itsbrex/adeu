@@ -1,0 +1,579 @@
+# FILE: src/adeu/outline.py
+"""
+Structural outline extractor.
+
+Walks a python-docx Document in document order, identifies headings (matching
+the same rules used by ingest.get_paragraph_prefix), and emits a flat list of
+OutlineNode records with per-heading metadata.
+
+Used by read_docx mode='outline'. The outline is computed from the live
+Document object — same source as the projected body — so heading text and
+page assignments stay consistent with what mode='full' returns.
+
+Heading ownership: a heading owns the document range from its position up to
+(but not including) the next heading of equal or higher level. has_table and
+footnote_ids are computed over that owned range.
+"""
+
+import re
+from dataclasses import dataclass, field
+from typing import Any, Iterator, List, Optional
+
+from docx.document import Document as DocumentObject
+from docx.table import Table
+from docx.text.paragraph import Paragraph
+
+from adeu.ingest import build_paragraph_text, extract_table
+from adeu.redline.comments import CommentsManager
+from adeu.utils.docx import (
+    DocxEvent,
+    get_paragraph_prefix,
+    iter_block_items,
+    iter_document_parts,
+    iter_paragraph_content,
+)
+
+
+@dataclass
+class OutlineNode:
+    level: int  # 1–6
+    text: str  # heading text, no markdown markers, no CriticMarkup
+    page: int  # 1-indexed page on which this heading appears
+    style: str  # "Heading 1" / "Title" / "(heuristic)" / "(outline_level)"
+    has_table: bool  # True if owned range contains a Table
+    footnote_ids: List[str] = field(default_factory=list)  # e.g. ["fn-3", "en-1"]
+
+
+# ---------------------------------------------------------------------------
+# Internal walk records
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _BlockRecord:
+    """One walked block item with its projected length and start offset."""
+
+    item: Any  # Paragraph | Table | (FootnoteItem skipped — see _walk_doc)
+    is_paragraph: bool
+    is_table: bool
+    start_offset: int  # offset in projected body where this block starts
+    projected_length: int  # length of the projected text for this block
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def extract_outline(
+    doc: DocumentObject,
+    projected_body: str,
+    body_pages: List[str],
+    body_page_offsets: List[int],
+) -> List[OutlineNode]:
+    """
+    Walks the document and returns a flat list of OutlineNode records in document order.
+
+    Args:
+        doc: the python-docx Document.
+        projected_body: post-projection Markdown, BODY ONLY (no appendix). Required
+            for sanity (length validation against walked blocks); not currently
+            consumed beyond that.
+        body_pages: pre-appendix-injection page bodies, in order.
+        body_page_offsets: start offset (in projected_body) of each entry in body_pages.
+            Must satisfy len(body_pages) == len(body_page_offsets).
+
+    Returns:
+        Flat list of OutlineNode. Empty if no headings detected.
+    """
+    if len(body_pages) != len(body_page_offsets):
+        raise ValueError(
+            f"body_pages ({len(body_pages)}) and body_page_offsets ({len(body_page_offsets)}) length mismatch"
+        )
+
+    # Build the comments map once — required by build_paragraph_text.
+    comments_map = CommentsManager(doc).extract_comments_data()
+
+    # 1. Walk the document body in projection order, recording each block's offset
+    #    and projected length. The walk mirrors ingest._extract_blocks.
+    block_records = _walk_doc_body(doc, comments_map)
+
+    # 2. Identify headings among the records.
+    heading_indices: List[int] = []
+    for idx, rec in enumerate(block_records):
+        if not (rec.is_paragraph and _is_heading(rec.item)):
+            continue
+        if not _heading_passes_quality_filter(rec.item, comments_map):
+            continue
+        heading_indices.append(idx)
+
+    if not heading_indices:
+        return []
+
+    # 3. For each heading, compute owned range, metadata, and resolved page.
+    nodes: List[OutlineNode] = []
+    for h_pos, rec_idx in enumerate(heading_indices):
+        rec = block_records[rec_idx]
+        paragraph = rec.item
+
+        level = _heading_level(paragraph)
+        text = _heading_text(paragraph, comments_map)
+        style = _determine_heading_style(paragraph)
+
+        # Owned range: blocks strictly between this heading and the next equal-or-
+        # higher heading.
+        owned_end = _find_owned_end(block_records, heading_indices, h_pos, level)
+        owned_blocks = block_records[rec_idx + 1 : owned_end]
+
+        has_table = any(b.is_table for b in owned_blocks)
+        footnote_ids = _collect_footnote_ids(owned_blocks)
+
+        page_num = _offset_to_page(rec.start_offset, body_page_offsets)
+
+        nodes.append(
+            OutlineNode(
+                level=level,
+                text=text,
+                page=page_num,
+                style=style,
+                has_table=has_table,
+                footnote_ids=footnote_ids,
+            )
+        )
+
+    return nodes
+
+
+# ---------------------------------------------------------------------------
+# Internal: document walk with offset tracking
+# ---------------------------------------------------------------------------
+def _walk_doc_body(doc: DocumentObject, comments_map: dict) -> List[_BlockRecord]:
+    """
+    Walks doc in projection order, emitting one _BlockRecord per Paragraph or Table.
+
+    PERF: We deliberately do NOT re-project blocks here. Instead we walk the body
+    structure once to enumerate (paragraph|table) items, and compute offsets by
+    splitting the already-projected body string on the same `\n\n` boundaries
+    that ingest._extract_blocks emits. Length is taken from the split slice.
+
+    Tables: we still descend into cells to find inner headings, but we do NOT
+    measure inner-paragraph projected lengths (outline doesn't use them — it
+    just needs to know which paragraphs exist for heading detection).
+    """
+    # Compute offset of body part inside projected_body. Header/footer parts
+    # come first in iter_document_parts. We need their projected LENGTHS only,
+    # not their text — but the cheapest way to know "where does the body start
+    # in projected_body" is to skip past header/footer joins. Since we don't
+    # have those lengths cached, we accept a one-time projection of header/
+    # footer parts here. They are typically tiny vs. the body, so this is fast.
+    parts = list(iter_document_parts(doc))
+
+    body_start_offset = 0
+    body_part = None
+    for part in parts:
+        if part is doc:
+            body_part = part
+            break
+        part_text = _project_part(part, comments_map)
+        if part_text:
+            if body_start_offset > 0:
+                body_start_offset += 2
+            body_start_offset += len(part_text)
+
+    if body_part is None:
+        body_part = doc
+        body_start_offset = 0
+    else:
+        if body_start_offset > 0:
+            body_start_offset += 2
+
+    # Walk body block-by-block. We compute each block's projected length lazily
+    # by calling build_paragraph_text/extract_table — but ONLY for blocks that
+    # we need length for. For outline purposes, the only thing that matters is
+    # heading position; non-heading lengths only matter as cumulative offsets.
+    #
+    # Tradeoff: we still call build_paragraph_text per paragraph here. That's
+    # O(N) over body paragraphs, same complexity as before, but the per-call
+    # cost is unchanged. The win comes from removing the recursive table
+    # measuring (which previously called extract_table AND walked cells AND
+    # called build_paragraph_text per inner paragraph).
+    records: List[_BlockRecord] = []
+    cursor = body_start_offset
+    is_first_block = True
+
+    for item in iter_block_items(body_part):
+        if isinstance(item, Paragraph):
+            prefix = get_paragraph_prefix(item)
+            p_text = build_paragraph_text(item, comments_map, clean_view=False)
+            block_len = len(prefix + p_text)
+
+            if not is_first_block:
+                cursor += 2
+
+            records.append(
+                _BlockRecord(
+                    item=item,
+                    is_paragraph=True,
+                    is_table=False,
+                    start_offset=cursor,
+                    projected_length=block_len,
+                )
+            )
+            cursor += block_len
+            is_first_block = False
+
+        elif isinstance(item, Table):
+            table_text = extract_table(item, comments_map, clean_view=False)
+            block_len = len(table_text) if table_text else 0
+
+            if not is_first_block:
+                cursor += 2
+
+            table_start = cursor
+            records.append(
+                _BlockRecord(
+                    item=item,
+                    is_paragraph=False,
+                    is_table=True,
+                    start_offset=table_start,
+                    projected_length=block_len,
+                )
+            )
+            # Record inner blocks for heading detection — but DO NOT call
+            # build_paragraph_text on them (we don't need their lengths).
+            _record_table_inner_blocks_lite(item, table_start, records)
+            cursor += block_len
+            is_first_block = False
+
+    return records
+
+
+def _record_table_inner_blocks_lite(
+    table: Table,
+    inherited_offset: int,
+    records: List[_BlockRecord],
+) -> None:
+    """
+    PERF-optimized version of _record_table_inner_blocks: records inner
+    paragraphs/tables for heading detection WITHOUT projecting their text.
+    projected_length=0 because it's never read for these inner records
+    (pagination is at the table level; headings only need start_offset).
+    """
+    seen_cells: set = set()
+    for row in table.rows:
+        for cell in row.cells:
+            cell_id = id(cell._tc)
+            if cell_id in seen_cells:
+                continue
+            seen_cells.add(cell_id)
+
+            for inner_item in iter_block_items(cell):
+                if isinstance(inner_item, Paragraph):
+                    records.append(
+                        _BlockRecord(
+                            item=inner_item,
+                            is_paragraph=True,
+                            is_table=False,
+                            start_offset=inherited_offset,
+                            projected_length=0,
+                        )
+                    )
+                elif isinstance(inner_item, Table):
+                    records.append(
+                        _BlockRecord(
+                            item=inner_item,
+                            is_paragraph=False,
+                            is_table=True,
+                            start_offset=inherited_offset,
+                            projected_length=0,
+                        )
+                    )
+                    _record_table_inner_blocks_lite(inner_item, inherited_offset, records)
+
+
+def _project_part(part, comments_map: dict) -> str:
+    """
+    Renders a non-body document part (header/footer/notes) to measure its
+    projected length. Mirrors ingest._extract_blocks but inlined here so we
+    don't reach into ingest's private helpers.
+
+    Headers and footers iterate as Paragraphs/Tables. NotesPart is iterated
+    via FootnoteItem children.
+    """
+    blocks: List[str] = []
+    c_type = type(part).__name__
+
+    if c_type == "NotesPart":
+        header = "## Footnotes" if part.note_type == "fn" else "## Endnotes"
+        blocks.append(f"---\n{header}")
+
+    is_first_para = True
+    for item in iter_block_items(part):
+        i_type = type(item).__name__
+
+        if i_type == "FootnoteItem":
+            fn_text = _project_part(item, comments_map)
+            if fn_text:
+                blocks.append(fn_text)
+        elif isinstance(item, Paragraph):
+            prefix = get_paragraph_prefix(item)
+            if is_first_para and c_type == "FootnoteItem":
+                prefix = f"[^{part.note_type}-{part.id}]: " + prefix
+            p_text = build_paragraph_text(item, comments_map, clean_view=False)
+            blocks.append(prefix + p_text)
+            is_first_para = False
+        elif isinstance(item, Table):
+            table_text = extract_table(item, comments_map, clean_view=False)
+            if table_text:
+                blocks.append(table_text)
+            is_first_para = False
+
+    return "\n\n".join(blocks)
+
+
+# ---------------------------------------------------------------------------
+# Internal: heading detection
+# ---------------------------------------------------------------------------
+
+
+_HEADING_PREFIX_RE = re.compile(r"^(#{1,6}) ")
+
+# Minimum word count for a heading promoted by the all-caps-bold heuristic.
+# Real section titles ("CODE OF CONDUCT", "STANDARD PROCUREMENT DOCUMENT") have
+# >= 3 words. Single-word or two-word emphatic fragments ("OR", "ES-MSIP",
+# decorative underscores) are noise and clutter the outline.
+_HEURISTIC_MIN_WORDS = 3
+
+
+def _is_heading(paragraph: Paragraph) -> bool:
+    """
+    A paragraph is a heading iff get_paragraph_prefix returns "# " through "###### ".
+    List items ("* ") and plain paragraphs ("") are excluded by the regex anchor.
+    """
+    prefix = get_paragraph_prefix(paragraph)
+    return bool(_HEADING_PREFIX_RE.match(prefix))
+
+
+def _heading_passes_quality_filter(paragraph: Paragraph, comments_map: dict) -> bool:
+    """
+    Filters out low-signal headings before they reach the outline.
+
+    Real Heading-styled paragraphs (Heading 1..6, Title) always pass — the
+    document author explicitly marked them as headings, so we trust them even
+    if they're short.
+
+    Heuristic-promoted paragraphs (all-caps + bold + short, see
+    get_paragraph_prefix) only pass if the cleaned heading text has at least
+    _HEURISTIC_MIN_WORDS word tokens. This drops "OR", "_ _", "ES-MSIP",
+    and similar fragments without affecting genuine all-caps section titles.
+    """
+    style = _determine_heading_style(paragraph)
+    if style != "(heuristic)":
+        return True
+
+    text = _heading_text(paragraph, comments_map)
+    if not text:
+        return False
+    word_count = len(re.findall(r"\w+", text))
+    return word_count >= _HEURISTIC_MIN_WORDS
+
+
+def _heading_level(paragraph: Paragraph) -> int:
+    """Returns the heading level 1..6 for a confirmed heading paragraph."""
+    prefix = get_paragraph_prefix(paragraph)
+    m = _HEADING_PREFIX_RE.match(prefix)
+    if not m:
+        # Defensive: caller is supposed to guard with _is_heading first.
+        return 1
+    level = len(m.group(1))
+    return min(level, 6)
+
+
+# ---------------------------------------------------------------------------
+# Internal: heading text extraction
+# ---------------------------------------------------------------------------
+
+
+def _heading_text(paragraph: Paragraph, comments_map: dict) -> str:
+    """
+    Returns the heading text as the user would see it:
+      - same projection as build_paragraph_text (so tracked changes / formatting
+        look the same as in the body)
+      - heading prefix removed
+      - CriticMarkup tags stripped (insertions kept as plain text, deletions
+        and meta-blocks dropped)
+      - leading/trailing whitespace stripped
+      - inline bold/italic markers stripped (outline is a summary, not a faithful
+        re-render of formatting — see Concern 5).
+    """
+    p_text = build_paragraph_text(paragraph, comments_map, clean_view=False)
+    cleaned = _strip_critic_markup(p_text)
+    cleaned = _strip_inline_formatting(cleaned)
+    return cleaned.strip()
+
+
+def _strip_critic_markup(text: str) -> str:
+    """
+    Removes CriticMarkup tags. Insertions ({++X++}) keep their inner text;
+    deletions ({--X--}) and meta-blocks ({>>X<<}) are dropped. Highlights
+    ({==X==}) keep their inner text.
+
+    This matches the philosophy of presenting the *intended* heading text in
+    the outline — what the heading would say if all current edits were accepted.
+    """
+    if not text:
+        return ""
+    text = re.sub(r"\{--.*?--\}", "", text, flags=re.DOTALL)
+    text = re.sub(r"\{>>.*?<<\}", "", text, flags=re.DOTALL)
+    text = re.sub(r"\{\+\+(.*?)\+\+\}", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"\{==(.*?)==\}", r"\1", text, flags=re.DOTALL)
+    return text
+
+
+def _strip_inline_formatting(text: str) -> str:
+    """
+    Strips inline **bold** and _italic_ markers from heading text.
+    Conservative — only strips when the markers wrap word content, not standalone.
+    """
+    if not text:
+        return ""
+    # Bold: **X** or __X__
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"__(.+?)__", r"\1", text)
+    # Italic: _X_ at word boundaries (avoid eating snake_case)
+    text = re.sub(r"(?<!\w)_(\S(?:.*?\S)?)_(?!\w)", r"\1", text)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Internal: heading style attribution
+# ---------------------------------------------------------------------------
+
+
+def _determine_heading_style(paragraph: Paragraph) -> str:
+    """
+    Mirrors get_paragraph_prefix's priority order:
+      1. outline_level (any 0..8) → return style name if it's a Heading/Title,
+         otherwise "(outline_level)"
+      2. style.name starts with "Heading" or equals "Title" → return that name
+      3. fallthrough → all-caps + bold heuristic → "(heuristic)"
+    """
+    # 1. Outline level
+    try:
+        lvl = paragraph.paragraph_format.outline_level
+        if lvl is not None and 0 <= lvl <= 8:
+            style = _safe_style_name(paragraph)
+            if style and (style.startswith("Heading") or style == "Title"):
+                return style
+            return "(outline_level)"
+    except Exception:
+        pass
+
+    # 2. Explicit Heading/Title style
+    style = _safe_style_name(paragraph)
+    if style and (style.startswith("Heading") or style == "Title"):
+        return style
+
+    # 3. All-caps + bold heuristic
+    return "(heuristic)"
+
+
+def _safe_style_name(paragraph: Paragraph) -> Optional[str]:
+    """
+    Returns paragraph.style.name or None. Mirrors ingest._get_paragraph_style_safe
+    but inlined to avoid pulling in another private import.
+    """
+    try:
+        style = paragraph.style
+    except AttributeError:
+        return None
+    if style is None:
+        return None
+    return getattr(style, "name", None)
+
+
+# ---------------------------------------------------------------------------
+# Internal: heading ownership ranges
+# ---------------------------------------------------------------------------
+
+
+def _find_owned_end(
+    block_records: List[_BlockRecord],
+    heading_indices: List[int],
+    current_h_pos: int,
+    current_level: int,
+) -> int:
+    """
+    Returns the exclusive end index in block_records for the current heading's
+    owned range. Walks forward through subsequent headings until one with
+    level <= current_level is found.
+    """
+    for next_h_pos in range(current_h_pos + 1, len(heading_indices)):
+        next_idx = heading_indices[next_h_pos]
+        next_paragraph = block_records[next_idx].item
+        next_level = _heading_level(next_paragraph)
+        if next_level <= current_level:
+            return next_idx
+    return len(block_records)
+
+
+# ---------------------------------------------------------------------------
+# Internal: footnote/endnote ID collection
+# ---------------------------------------------------------------------------
+
+
+def _collect_footnote_ids(owned_blocks: List[_BlockRecord]) -> List[str]:
+    """
+    Walks every paragraph in the owned range, collecting footnote/endnote
+    references in document order, deduplicated, with first-seen order preserved.
+    """
+    seen: set = set()
+    ordered: List[str] = []
+
+    for rec in owned_blocks:
+        if not rec.is_paragraph:
+            continue
+        paragraph: Paragraph = rec.item  # type: ignore[assignment]
+        for event in _iter_paragraph_events(paragraph):
+            if event.type == "footnote":
+                fn_id = f"fn-{event.id}"
+            elif event.type == "endnote":
+                fn_id = f"en-{event.id}"
+            else:
+                continue
+            if fn_id not in seen:
+                seen.add(fn_id)
+                ordered.append(fn_id)
+
+    return ordered
+
+
+def _iter_paragraph_events(paragraph: Paragraph) -> Iterator[DocxEvent]:
+    """Yields just the DocxEvent objects from iter_paragraph_content."""
+    for item in iter_paragraph_content(paragraph):
+        if isinstance(item, DocxEvent):
+            yield item
+
+
+# ---------------------------------------------------------------------------
+# Internal: offset → page mapping
+# ---------------------------------------------------------------------------
+
+
+def _offset_to_page(offset: int, body_page_offsets: List[int]) -> int:
+    """
+    Returns the 1-indexed page number for a given body offset.
+
+    body_page_offsets[i] is the start of page i+1 (0-indexed array, 1-indexed
+    page numbers). The page containing `offset` is the largest i such that
+    body_page_offsets[i] <= offset, returned as i+1.
+    """
+    if not body_page_offsets:
+        return 1
+    page = 1
+    for i, start in enumerate(body_page_offsets):
+        if offset >= start:
+            page = i + 1
+        else:
+            break
+    return page

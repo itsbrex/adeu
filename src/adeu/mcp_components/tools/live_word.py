@@ -2,14 +2,19 @@ import io
 import re
 import sys
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 import structlog
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from fastmcp.tools.tool import ToolResult
 
+from adeu.mcp_components._response_builders import build_outline_response, build_paginated_response
+
 logger = structlog.get_logger(__name__)
+
+if TYPE_CHECKING:
+    from docx.document import Document as DocumentObject
 
 
 def _build_mock_docx_stream(word_open_xml: str) -> io.BytesIO:
@@ -200,18 +205,27 @@ if sys.platform == "win32":
 
         raise LiveDocumentNotOpenError(f"Document {file_path} is not open in Word.")
 
-    def _read_active_word_document_core(clean_view: bool = False, file_path: Optional[str] = None) -> Tuple[str, str]:
+    def _read_active_word_document_core(
+        clean_view: bool = False, file_path: Optional[str] = None
+    ) -> Tuple[str, str, "DocumentObject"]:
         """
         Reads the live active Word document (or specific open file) by extracting its
         Flat OPC XML via doc.WordOpenXML, wrapping it into an in-memory DOCX zip stream,
         and routing it through the same ingest pipeline used for disk files.
-        Returns (extracted_text, absolute_file_path).
+
+        Returns (extracted_text, absolute_file_path, python_docx_document).
+
+        The Document object is returned so callers that need structural traversal
+        (e.g. outline mode) can reuse it without a second WordOpenXML extraction.
+        Pagination-only callers can ignore the third element.
 
         This unifies the live and disk paths for both normal and clean_view reads
         and avoids the COM round-trip overhead that dominated the old character-by-
         character traversal.
         """
-        from adeu.ingest import extract_text_from_stream
+        from docx import Document as load_document
+
+        from adeu.ingest import _extract_text_from_doc
 
         pythoncom.CoInitialize()
         try:
@@ -219,35 +233,50 @@ if sys.platform == "win32":
         except Exception as e:  # Catch pywintypes.com_error
             raise RuntimeError(f"Could not connect to active Word document. {e}") from e
 
-        doc = _get_word_doc(app, file_path)
-        xml_str = doc.WordOpenXML
+        word_doc = _get_word_doc(app, file_path)
+        xml_str = word_doc.WordOpenXML
         stream = _build_mock_docx_stream(xml_str)
-        actual_path = doc.FullName
-        return extract_text_from_stream(stream, filename=Path(actual_path).name, clean_view=clean_view), actual_path
+        actual_path = word_doc.FullName
+
+        py_doc = load_document(stream)
+        text = _extract_text_from_doc(py_doc, clean_view=clean_view)
+        return text, actual_path, py_doc
 
     async def read_active_word_document(
         ctx: Context,
         clean_view: bool = False,
         file_path: Optional[str] = None,
+        mode: str = "full",
+        page: int = 1,
     ) -> ToolResult:
-        await ctx.info(f"Extracting live Word document via WordOpenXML (clean_view={clean_view}, path={file_path})")
+        await ctx.info(
+            f"Extracting live Word document via WordOpenXML "
+            f"(clean_view={clean_view}, path={file_path}, mode={mode}, page={page})"
+        )
         try:
-            final_text, actual_path = _read_active_word_document_core(clean_view, file_path)
+            # Note: extraction errors (LiveDocumentNotOpenError, "Could not connect to
+            # active Word", etc.) are NOT caught here. They propagate as their original
+            # exception types so the disk-fallback dispatcher in document.py can
+            # distinguish "Word doesn't have this doc open, try disk" from
+            # "Live Word read it fine but the request was invalid (e.g. page OOR)".
+            final_text, actual_path, py_doc = _read_active_word_document_core(clean_view, file_path)
             await ctx.info(f"Live Word extraction successful: {len(final_text)} characters.")
 
-            llm_content = f"Active Document Path: {actual_path}\n\n{final_text}"
+            try:
+                if mode == "outline":
+                    res = build_outline_response(py_doc, final_text, actual_path)
+                else:
+                    res = build_paginated_response(final_text, page, actual_path)
+            except ToolError:
+                # Post-extraction errors (e.g. page out of range) propagate as-is —
+                # the document was read successfully; the user's request was bad.
+                raise
+            except Exception as e:
+                raise ToolError(str(e)) from e
 
-            return ToolResult(
-                content=llm_content,
-                structured_content={
-                    "markdown": final_text,
-                    "title": Path(actual_path).name,
-                    "file_path": actual_path,
-                    "live_word": True,
-                },
-            )
-        except Exception as e:
-            raise ToolError(str(e)) from e
+            return res
+        except ToolError:
+            raise
 
     def _process_active_word_batch_core(
         changes: List[DocumentChange], author_name: str, file_path: Optional[str] = None
@@ -357,7 +386,10 @@ if sys.platform == "win32":
 
                                 # Bug #8 Fix: Mathematically shrink the replacement range by trimming common context
                                 actual_start, actual_end, final_new_text = _shrink_replacement_range(
-                                    exact_substring, effective_new, actual_start, actual_end
+                                    exact_substring,
+                                    effective_new,
+                                    actual_start,
+                                    actual_end,
                                 )
 
                                 replace_rng = doc.Range(Start=actual_start, End=actual_end)
@@ -597,7 +629,9 @@ else:
     # Stubs for non-Windows platforms to satisfy static type checkers (mypy)
     from adeu.models import DocumentChange
 
-    def _read_active_word_document_core(clean_view: bool = False, file_path: Optional[str] = None) -> Tuple[str, str]:
+    def _read_active_word_document_core(
+        clean_view: bool = False, file_path: Optional[str] = None
+    ) -> Tuple[str, str, "DocumentObject"]:
         raise NotImplementedError("Live Word is only supported on Windows.")
 
     def _process_active_word_batch_core(
@@ -606,12 +640,19 @@ else:
         raise NotImplementedError("Live Word is only supported on Windows.")
 
     async def read_active_word_document(
-        ctx: Context, clean_view: bool = False, file_path: Optional[str] = None
+        ctx: Context,
+        clean_view: bool = False,
+        file_path: Optional[str] = None,
+        mode: str = "full",
+        page: int = 1,
     ) -> ToolResult:
         raise NotImplementedError("Live Word is only supported on Windows.")
 
     async def process_active_word_batch(
-        ctx: Context, changes: List[DocumentChange], author_name: str, file_path: Optional[str] = None
+        ctx: Context,
+        changes: List[DocumentChange],
+        author_name: str,
+        file_path: Optional[str] = None,
     ) -> str:
         raise NotImplementedError("Live Word is only supported on Windows.")
 

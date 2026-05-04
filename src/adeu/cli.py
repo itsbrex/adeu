@@ -162,7 +162,7 @@ def handle_extract(args):
             sys.exit(1)
         from adeu.mcp_components.tools.live_word import _read_active_word_document_core
 
-        text, _ = _read_active_word_document_core(clean_view=False)
+        text, _, _ = _read_active_word_document_core(clean_view=False)
     else:
         if not args.input:
             print("❌ Must provide input file or use --live", file=sys.stderr)
@@ -224,9 +224,11 @@ def handle_apply(args):
             if sys.platform != "win32":
                 print("❌ --live is only supported on Windows.", file=sys.stderr)
                 sys.exit(1)
-            from adeu.mcp_components.tools.live_word import _read_active_word_document_core
+            from adeu.mcp_components.tools.live_word import (
+                _read_active_word_document_core,
+            )
 
-            text_orig, _ = _read_active_word_document_core(clean_view=False)
+            text_orig, _, _ = _read_active_word_document_core(clean_view=False)
         else:
             if not args.original:
                 print("❌ Must provide original file if not using --live", file=sys.stderr)
@@ -245,7 +247,10 @@ def handle_apply(args):
 
         print(f"Applying {len(changes)} changes to live Word document...", file=sys.stderr)
         stats = _process_active_word_batch_core(changes, args.author)
-        print(f"✅ Live Word Batch complete. Applied: {stats['applied']}, Failed: {stats['failed']}", file=sys.stderr)
+        print(
+            f"✅ Live Word Batch complete. Applied: {stats['applied']}, Failed: {stats['failed']}",
+            file=sys.stderr,
+        )
         if stats["failed"] > 0:
             sys.exit(1)
         return
@@ -262,7 +267,10 @@ def handle_apply(args):
     try:
         stats = engine.process_batch(changes)
     except BatchValidationError as e:
-        print(f"\n❌ Batch rejected. {len(e.errors)} edits failed validation:\n", file=sys.stderr)
+        print(
+            f"\n❌ Batch rejected. {len(e.errors)} edits failed validation:\n",
+            file=sys.stderr,
+        )
         for err in e.errors:
             print(err, file=sys.stderr)
             print("", file=sys.stderr)
@@ -461,7 +469,11 @@ def main():
 
     p_extract = subparsers.add_parser("extract", help="Extract raw text from a DOCX file")
     p_extract.add_argument("input", type=Path, nargs="?", help="Input DOCX file (omit if --live)")
-    p_extract.add_argument("--live", action="store_true", help="Extract text from live active Word document")
+    p_extract.add_argument(
+        "--live",
+        action="store_true",
+        help="Extract text from live active Word document",
+    )
     p_extract.add_argument("-o", "--output", type=Path, help="Output file (default: stdout)")
     p_extract.set_defaults(func=handle_extract)
 
