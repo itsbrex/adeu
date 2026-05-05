@@ -376,117 +376,243 @@ if sys.platform == "win32":
                         start_idx, end_idx = _find_match_in_text(current_text, clean_target)
 
                         if start_idx != -1:
-                            # _find_match_in_text gave us indices into current_text
-                            # (Content.Text coordinate space). The `mapping` array
-                            # translates current_text → raw_text indices, but raw_text
-                            # indices CANNOT be passed directly to doc.Range() —
-                            # Word's Range coordinates include hidden characters not
-                            # present in Content.Text, so the two coordinate systems
-                            # drift apart progressively through the document.
+                            # =====================================================================
+                            # 🛑 CRITICAL SAFETY WARNING: COM vs CONTENT.TEXT COORDINATE DRIFT 🛑
+                            # =====================================================================
+                            # Do NOT pass `mapping`-derived indices directly to `doc.Range()` to
+                            # mutate text! `mapping` translates Virtual String -> `doc.Content.Text`
+                            # indices. However, `doc.Range` coordinates include hidden structural
+                            # elements (like \r\x07) that are excluded from `Content.Text`.
                             #
-                            # Use the mapping only to slice exact_substring out of
-                            # raw_text, then hand that text to Find.Execute to locate
-                            # it in proper Range coordinates.
-                            actual_start = mapping[start_idx]
-                            actual_end = mapping[end_idx]
-                            exact_substring = raw_text[actual_start:actual_end]
+                            # The two coordinate systems DRIFT APART progressively.
+                            # You MUST use these mapped indices purely to extract the `exact_substring`
+                            # and provide a narrow search window for `rng.Find.Execute()`. Word's
+                            # internal engine will resolve the true COM Range.
+                            # =====================================================================
 
-                            # Use raw_text indices ONLY as a hint for the search
-                            # window. Find.Execute does the actual locating in Range
-                            # coordinate space. Widen the window to absorb the
-                            # Content.Text vs Range coordinate drift, which grows
-                            # with document size.
-                            search_start = max(0, actual_start - 5000)
-                            search_end = min(doc.Content.End, actual_end + 5000)
-                            rng = doc.Range(Start=search_start, End=search_end)
+                            is_table_edit = "|" in clean_target
+                            table_edit_success = False
 
-                            search_text = exact_substring[:250] if len(exact_substring) > 250 else exact_substring
+                            if is_table_edit:
+                                # OPTION A: Cell-Splitting Structural Execution (LW-1 Fix)
+                                t_cells = [c.strip() for c in change.target_text.split("|")]
+                                n_cells = [c.strip() for c in (change.new_text or "").split("|")]
 
-                            rng.Find.ClearFormatting()
-                            rng.Find.Text = search_text
-                            rng.Find.Forward = True
-                            rng.Find.Wrap = 0  # wdFindStop
+                                if len(t_cells) == len(n_cells):
+                                    # 1. Find a non-empty cell to act as our structural Anchor
+                                    anchor_idx = -1
+                                    anchor_text = ""
+                                    for i, c in enumerate(t_cells):
+                                        if c:
+                                            anchor_idx = i
+                                            anchor_text = c
+                                            break
 
-                            if rng.Find.Execute():
-                                actual_start = rng.Start
-                                actual_end = actual_start + len(exact_substring)
+                                    if anchor_idx != -1:
+                                        # 2. Map the anchor text offset within the matched virtual block
+                                        clean_anchor = strip_markdown_formatting(strip_critic_markup(anchor_text))
+                                        local_anchor_start = clean_target.find(clean_anchor)
+                                        if local_anchor_start == -1:
+                                            local_anchor_start = 0
 
-                                effective_new = change.new_text or ""
+                                        anchor_start_idx = start_idx + local_anchor_start
+                                        anchor_end_idx = anchor_start_idx + len(clean_anchor)
 
-                                # Pure comment detection: skip text replacement to
-                                # prevent spurious w:del/w:ins tags
-                                if change.target_text == effective_new:
-                                    if change.comment:
-                                        replace_rng = doc.Range(Start=actual_start, End=actual_end)
-                                        try:
-                                            doc.Comments.Add(replace_rng, change.comment)
-                                        except Exception as e:
-                                            logger.warning(f"Failed to attach comment for same->same edit: {e}")
-                                    stats["applied"] += 1
-                                    _invalidate_haystack()
-                                    continue
+                                        actual_anchor_start = mapping[anchor_start_idx]
+                                        actual_anchor_end = mapping[anchor_end_idx]
 
-                                # Bug #8 Fix: Mathematically shrink the replacement
-                                # range by trimming common context
-                                actual_start, actual_end, final_new_text = _shrink_replacement_range(
-                                    exact_substring,
-                                    effective_new,
-                                    actual_start,
-                                    actual_end,
-                                )
+                                        exact_anchor_substring = raw_text[actual_anchor_start:actual_anchor_end]
 
-                                replace_rng = doc.Range(Start=actual_start, End=actual_end)
-                                apply_com_replacement(
-                                    doc,
-                                    app,
-                                    replace_rng,
-                                    final_new_text,
-                                    change.comment,
-                                )
-                                stats["applied"] += 1
-                                _invalidate_haystack()
-                            else:
-                                # Fallback: search entire document. Find cannot
-                                # cross structural chars (\r, \x07), so cell-spanning
-                                # targets will fail here — this matches disk-path
-                                # design where cell-splitting handles such cases.
-                                doc_rng = doc.Content
-                                doc_rng.Find.ClearFormatting()
-                                doc_rng.Find.Text = search_text
-                                if doc_rng.Find.Execute():
-                                    replace_rng = doc.Range(
-                                        Start=doc_rng.Start,
-                                        End=doc_rng.Start + len(exact_substring),
-                                    )
+                                        # 3. Execute COM Search for the Anchor
+                                        search_start = max(0, actual_anchor_start - 5000)
+                                        search_end = min(doc.Content.End, actual_anchor_end + 5000)
+                                        rng = doc.Range(Start=search_start, End=search_end)
+
+                                        search_text = (
+                                            exact_anchor_substring[:250]
+                                            if len(exact_anchor_substring) > 250
+                                            else exact_anchor_substring
+                                        )
+                                        rng.Find.ClearFormatting()
+                                        rng.Find.Text = search_text
+                                        rng.Find.Forward = True
+                                        rng.Find.Wrap = 0  # wdFindStop
+
+                                        if rng.Find.Execute() and rng.Information(12):  # 12 = wdWithInTable
+                                            table_edit_success = True
+                                            anchor_cell = rng.Cells(1)
+
+                                            # Determine which cell gets the comment
+                                            target_comment_idx = 0
+                                            for i, (t, n) in enumerate(zip(t_cells, n_cells, strict=True)):
+                                                if t != n:
+                                                    target_comment_idx = i
+                                                    break
+
+                                            cells_updated = 0
+                                            for i in range(len(t_cells)):
+                                                t_c = t_cells[i]
+                                                n_c = n_cells[i]
+
+                                                should_comment = (change.comment is not None) and (
+                                                    i == target_comment_idx
+                                                )
+
+                                                if t_c != n_c or should_comment:
+                                                    target_cell = anchor_cell
+                                                    diff = i - anchor_idx
+                                                    if diff > 0:
+                                                        for _ in range(diff):
+                                                            if target_cell:
+                                                                target_cell = target_cell.Next
+                                                    elif diff < 0:
+                                                        for _ in range(-diff):
+                                                            if target_cell:
+                                                                target_cell = target_cell.Previous
+
+                                                    if not target_cell:
+                                                        continue
+
+                                                    cell_rng = target_cell.Range
+                                                    cell_rng.End -= 1  # Crucial: Exclude the hidden \x07 cell marker!
+
+                                                    actual_start = cell_rng.Start
+                                                    actual_end = cell_rng.End
+                                                    exact_substring = cell_rng.Text
+
+                                                    if not t_c:
+                                                        # If target is fully empty, it's a pure insertion.
+                                                        actual_end = actual_start
+                                                        exact_substring = ""
+
+                                                    if t_c == n_c:  # Comment only
+                                                        if should_comment:
+                                                            try:
+                                                                doc.Comments.Add(
+                                                                    cell_rng,
+                                                                    change.comment,
+                                                                )
+                                                            except Exception as e:
+                                                                logger.warning(f"Failed to attach comment to cell: {e}")
+                                                        cells_updated += 1
+                                                        continue
+
+                                                    # Execute the localized replacement inside the cell
+                                                    (
+                                                        final_start,
+                                                        final_end,
+                                                        final_new_text,
+                                                    ) = _shrink_replacement_range(
+                                                        exact_substring,
+                                                        n_c,
+                                                        actual_start,
+                                                        actual_end,
+                                                    )
+
+                                                    replace_rng = doc.Range(Start=final_start, End=final_end)
+                                                    apply_com_replacement(
+                                                        doc,
+                                                        app,
+                                                        replace_rng,
+                                                        final_new_text,
+                                                        (change.comment if should_comment else None),
+                                                    )
+                                                    cells_updated += 1
+
+                                            if cells_updated > 0:
+                                                stats["applied"] += 1
+                                                _invalidate_haystack()
+
+                            # Fallback if it wasn't a table edit OR the anchor wasn't found in a table
+                            if not table_edit_success:
+                                # NORMAL TEXT REPLACEMENT
+                                actual_start = mapping[start_idx]
+                                actual_end = mapping[end_idx]
+                                exact_substring = raw_text[actual_start:actual_end]
+
+                                search_start = max(0, actual_start - 5000)
+                                search_end = min(doc.Content.End, actual_end + 5000)
+                                rng = doc.Range(Start=search_start, End=search_end)
+
+                                search_text = exact_substring[:250] if len(exact_substring) > 250 else exact_substring
+
+                                rng.Find.ClearFormatting()
+                                rng.Find.Text = search_text
+                                rng.Find.Forward = True
+                                rng.Find.Wrap = 0  # wdFindStop
+
+                                if rng.Find.Execute():
+                                    actual_start = rng.Start
+                                    actual_end = actual_start + len(exact_substring)
 
                                     effective_new = change.new_text or ""
-                                    # Pure comment detection (Fallback path)
+
                                     if change.target_text == effective_new:
                                         if change.comment:
+                                            replace_rng = doc.Range(Start=actual_start, End=actual_end)
                                             try:
                                                 doc.Comments.Add(replace_rng, change.comment)
                                             except Exception as e:
-                                                logger.warning(
-                                                    f"Failed to attach comment for same->same fallback edit: {e}"
-                                                )
+                                                logger.warning(f"Failed to attach comment for same->same edit: {e}")
                                         stats["applied"] += 1
                                         _invalidate_haystack()
                                         continue
 
+                                    actual_start, actual_end, final_new_text = _shrink_replacement_range(
+                                        exact_substring,
+                                        effective_new,
+                                        actual_start,
+                                        actual_end,
+                                    )
+
+                                    replace_rng = doc.Range(Start=actual_start, End=actual_end)
                                     apply_com_replacement(
                                         doc,
                                         app,
                                         replace_rng,
-                                        change.new_text,
+                                        final_new_text,
                                         change.comment,
                                     )
                                     stats["applied"] += 1
                                     _invalidate_haystack()
                                 else:
-                                    stats["failed"] += 1
-                                    stats["skipped_details"].append(
-                                        f"- Failed to find match in document for: '{change.target_text[:40]}...'"
-                                    )
+                                    # Fallback: search entire document.
+                                    doc_rng = doc.Content
+                                    doc_rng.Find.ClearFormatting()
+                                    doc_rng.Find.Text = search_text
+                                    if doc_rng.Find.Execute():
+                                        replace_rng = doc.Range(
+                                            Start=doc_rng.Start,
+                                            End=doc_rng.Start + len(exact_substring),
+                                        )
+
+                                        effective_new = change.new_text or ""
+                                        if change.target_text == effective_new:
+                                            if change.comment:
+                                                try:
+                                                    doc.Comments.Add(replace_rng, change.comment)
+                                                except Exception as e:
+                                                    logger.warning(
+                                                        f"Failed to attach comment for same->same fallback edit: {e}"
+                                                    )
+                                            stats["applied"] += 1
+                                            _invalidate_haystack()
+                                            continue
+
+                                        apply_com_replacement(
+                                            doc,
+                                            app,
+                                            replace_rng,
+                                            change.new_text,
+                                            change.comment,
+                                        )
+                                        stats["applied"] += 1
+                                        _invalidate_haystack()
+                                    else:
+                                        stats["failed"] += 1
+                                        stats["skipped_details"].append(
+                                            f"- Failed to find match in document for: '{change.target_text[:40]}...'"
+                                        )
                         else:
                             stats["failed"] += 1
                             stats["skipped_details"].append(

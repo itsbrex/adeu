@@ -11,7 +11,10 @@ if sys.platform == "win32":
     import win32com.client
     from fastmcp.tools.tool import ToolResult
 
-    from adeu.mcp_components.tools.live_word import process_active_word_batch, read_active_word_document
+    from adeu.mcp_components.tools.live_word import (
+        process_active_word_batch,
+        read_active_word_document,
+    )
     from adeu.models import ModifyText
 
 
@@ -74,7 +77,11 @@ def test_live_word_read_and_modify(active_word_app):
 
         # Step 2: Apply a Modification
         changes = [
-            ModifyText(target_text="live testing document", new_text="fully verified dynamic canvas", comment=None)
+            ModifyText(
+                target_text="live testing document",
+                new_text="fully verified dynamic canvas",
+                comment=None,
+            )
         ]
 
         # Process batch as "Testing Agent"
@@ -113,7 +120,13 @@ def test_live_word_modify_with_comment(active_word_app):
 
     async def run_test():
         # 1. Apply a Modification WITH a comment
-        changes = [ModifyText(target_text="quick", new_text="sleepy", comment="Foxes are very tired today.")]
+        changes = [
+            ModifyText(
+                target_text="quick",
+                new_text="sleepy",
+                comment="Foxes are very tired today.",
+            )
+        ]
 
         res = await process_active_word_batch(ctx, changes=changes, author_name="Testing Agent", file_path=None)
         assert "Applied: 1, Failed: 0" in res
@@ -737,7 +750,13 @@ def test_live_word_obs_01_author_name_respected(active_word_app):
     doc.Range(0, doc.Content.End).Text = "Test document.\n"
 
     async def run_test():
-        changes = [ModifyText(target_text="Test document.", new_text="Modified document.", comment="Spoof test.")]
+        changes = [
+            ModifyText(
+                target_text="Test document.",
+                new_text="Modified document.",
+                comment="Spoof test.",
+            )
+        ]
 
         res = await process_active_word_batch(ctx, changes=changes, author_name="Sherlock Holmes", file_path=None)
 
@@ -783,5 +802,69 @@ def test_live_word_obs_02_deletion_insertion_order(active_word_app):
         # Confirm the literal string pattern places deletion before insertion
         # e.g., "The quick {--brown--}{++red++} fox."
         assert "{--brown--}{++red++}" in content
+
+    asyncio.run(run_test())
+
+
+def test_live_word_table_spanning_edits(active_word_app):
+    """
+    Tests that the Live Word engine can successfully execute `ModifyText` operations
+    that span across virtual table cell boundaries (" | "), including injecting text
+    into entirely empty cells via structural COM traversal.
+    """
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from adeu.mcp_components.tools.live_word import process_active_word_batch
+    from adeu.models import ModifyText
+
+    app, doc = active_word_app
+    ctx = AsyncMock()
+
+    # Clear document and construct table
+    doc.Range(0, doc.Content.End).Text = ""
+    table = doc.Tables.Add(doc.Range(0, 0), NumRows=2, NumColumns=2)
+
+    # Row 1: Two populated cells
+    table.Cell(1, 1).Range.Text = "Header 1"
+    table.Cell(1, 2).Range.Text = "Header 2"
+
+    # Row 2: One populated, one completely EMPTY (testing the critical edge case)
+    table.Cell(2, 1).Range.Text = "Site Organization"
+    # table.Cell(2, 2) is natively left empty
+
+    async def run_test():
+        changes = [
+            # Edit 1: Standard cell-spanning replacement
+            ModifyText(
+                target_text="Header 1 | Header 2",
+                new_text="New Header 1 | Header 2",
+                comment="Updated header",
+            ),
+            # Edit 2: The LW-1 Empty Cell Injection Fix
+            ModifyText(
+                target_text="Site Organization | ",
+                new_text="Site Organization | 20%",
+                comment=None,
+            ),
+        ]
+
+        # Execute the Batch
+        result = await process_active_word_batch(ctx=ctx, changes=changes, author_name="Adeu Tester", file_path=None)
+
+        # Assertions on the Engine Output
+        assert "Applied: 2" in result, f"Expected 2 applied edits, but got: {result}"
+        assert "Failed: 0" in result, f"Expected 0 failures, but got: {result}"
+
+        # Assertions on the actual MS Word COM state
+        # (We strip '\r\x07' because Word's .Text property includes the raw cell markers)
+        val1 = table.Cell(1, 1).Range.Text.replace("\r\x07", "")
+        assert val1 == "New Header 1", "Standard cell replacement failed."
+
+        val2 = table.Cell(2, 2).Range.Text.replace("\r\x07", "")
+        assert val2 == "20%", "Empty cell injection failed."
+
+        # Ensure MS Word natively tracked the changes
+        assert doc.Revisions.Count > 0, "Changes were not recorded as Tracked Revisions."
 
     asyncio.run(run_test())
