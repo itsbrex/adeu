@@ -32,7 +32,9 @@ def strip_markdown_formatting(text: str) -> str:
     return text
 
 
-def parse_markdown_for_com(text: str) -> Tuple[str, List[Tuple[int, int]], List[Tuple[int, int]]]:
+def parse_markdown_for_com(
+    text: str,
+) -> Tuple[str, List[Tuple[int, int]], List[Tuple[int, int]]]:
     """Parses bold and italic markdown, returning plain text and index ranges."""
     bold_ranges = []
     italic_ranges = []
@@ -217,7 +219,10 @@ def _apply_structured_com_replacement(
     try:
         for i in range(1, target_rng.Comments.Count + 1):
             c = target_rng.Comments(i)
-            rescued_comments.append({"author": c.Author, "text": c.Range.Text})
+            # Only rescue if the comment is FULLY encapsulated by the deletion.
+            # If it extends outside, deleting target_rng will simply shrink the anchor safely.
+            if c.Scope.Start >= target_rng.Start and c.Scope.End <= target_rng.End:
+                rescued_comments.append({"author": c.Author, "text": c.Range.Text})
         if rescued_comments:
             logger.debug(f"Rescued {len(rescued_comments)} comments before payload execution.")
     except Exception as e:
@@ -401,7 +406,9 @@ def apply_com_replacement(doc: Any, app: Any, target_rng: Any, new_text: str, co
     try:
         for i in range(1, target_rng.Comments.Count + 1):
             c = target_rng.Comments(i)
-            rescued_comments.append({"author": c.Author, "text": c.Range.Text})
+            # Only rescue if the comment is FULLY encapsulated by the deletion.
+            if c.Scope.Start >= target_rng.Start and c.Scope.End <= target_rng.End:
+                rescued_comments.append({"author": c.Author, "text": c.Range.Text})
     except Exception as e:
         logger.warning(f"Failed to rescue comments: {e}")
 

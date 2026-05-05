@@ -5,7 +5,9 @@ import pytest
 from tests.utils import extract_content, get_mock_ctx, run_async
 
 # Only run these tests on Windows since COM requires it
-pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Live Word COM tests require Windows platform")
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32", reason="Live Word COM tests require Windows platform"
+)
 
 if sys.platform == "win32":
     from adeu.mcp_components.tools.live_word import (
@@ -26,8 +28,15 @@ def test_live_word_read_and_modify(active_word_app):
         assert "Hello world!" in content
 
         # Step 2: Apply a Modification
-        changes = [ModifyText(target_text="live testing document", new_text="fully verified dynamic canvas")]
-        result = await process_active_word_batch(ctx, changes=changes, author_name="Testing Agent")
+        changes = [
+            ModifyText(
+                target_text="live testing document",
+                new_text="fully verified dynamic canvas",
+            )
+        ]
+        result = await process_active_word_batch(
+            ctx, changes=changes, author_name="Testing Agent"
+        )
         assert "Applied: 1, Failed: 0" in result
 
         # Step 3: Re-read to verify CriticMarkup injection
@@ -47,8 +56,16 @@ def test_live_word_modify_with_comment(active_word_app):
     doc.Range(0, doc.Content.End).Text = "The quick brown fox.\n"
 
     async def run_test():
-        changes = [ModifyText(target_text="quick", new_text="sleepy", comment="Foxes are very tired today.")]
-        res = await process_active_word_batch(ctx, changes=changes, author_name="Testing Agent")
+        changes = [
+            ModifyText(
+                target_text="quick",
+                new_text="sleepy",
+                comment="Foxes are very tired today.",
+            )
+        ]
+        res = await process_active_word_batch(
+            ctx, changes=changes, author_name="Testing Agent"
+        )
         assert "Applied: 1, Failed: 0" in res
 
         # Check if comment was physically added and extracted back
@@ -72,7 +89,10 @@ def test_live_word_vs_redline_engine_parity(active_word_app, tmp_path):
     doc.Range(0, doc.Content.End).Text = "Base text for parity test.\n"
     doc.TrackRevisions = True
     doc.Range(0, 9).Text = "Modified text"
-    doc.Comments.Add(doc.Range(doc.Content.Text.find("parity"), doc.Content.Text.find("parity") + 6), "Parity comment")
+    doc.Comments.Add(
+        doc.Range(doc.Content.Text.find("parity"), doc.Content.Text.find("parity") + 6),
+        "Parity comment",
+    )
 
     async def run_test():
         live_text = extract_content(await read_active_word_document(ctx))
@@ -197,7 +217,9 @@ def test_live_word_accept_reject_reply(active_word_app):
     doc.TrackRevisions = False
 
     async def run_test():
-        content = extract_content(await read_active_word_document(ctx, clean_view=False))
+        content = extract_content(
+            await read_active_word_document(ctx, clean_view=False)
+        )
         assert "{--brown --}" in content and "{++red ++}" in content
 
         changes = [
@@ -207,7 +229,9 @@ def test_live_word_accept_reject_reply(active_word_app):
         ]
         await process_active_word_batch(ctx, changes=changes, author_name="QA Agent")
 
-        final_content = extract_content(await read_active_word_document(ctx, clean_view=False))
+        final_content = extract_content(
+            await read_active_word_document(ctx, clean_view=False)
+        )
         assert "{++" not in final_content and "{--" not in final_content
         assert "red fox" in final_content
         assert "Yes, absolutely." in final_content
@@ -411,7 +435,9 @@ def test_live_word_bug_04_garbled_text(active_word_app):
 
         assert "{--business identity code [ID]--}" in content
         assert "{++**business identity code** [ID]++}" in content
-        assert "the laws of [Country], business identity code" not in content.replace(original, "")
+        assert "the laws of [Country], business identity code" not in content.replace(
+            original, ""
+        )
 
     run_async(run_test())
 
@@ -426,9 +452,234 @@ def test_live_word_obs_02_deletion_insertion_order(active_word_app):
 
     async def run_test():
         changes = [ModifyText(target_text="brown", new_text="red")]
-        await process_active_word_batch(ctx, changes=changes, author_name="Testing Agent")
+        await process_active_word_batch(
+            ctx, changes=changes, author_name="Testing Agent"
+        )
         content = extract_content(await read_active_word_document(ctx))
 
         assert "{--brown--}{++red++}" in content
+
+
+run_async(run_test())
+
+
+def test_live_word_table_spanning_edits(active_word_app):
+    """
+    Tests that the Live Word engine can successfully execute `ModifyText` operations
+    that span across virtual table cell boundaries (" | "), including injecting text
+    into entirely empty cells via structural COM traversal.
+    """
+    from adeu.mcp_components.tools.live_word import process_active_word_batch
+    from adeu.models import ModifyText
+
+    app, doc = active_word_app
+    ctx = get_mock_ctx()
+
+    # Clear document and construct table
+    doc.Range(0, doc.Content.End).Text = ""
+    table = doc.Tables.Add(doc.Range(0, 0), NumRows=2, NumColumns=2)
+
+    # Row 1: Two populated cells
+    table.Cell(1, 1).Range.Text = "Header 1"
+    table.Cell(1, 2).Range.Text = "Header 2"
+
+    # Row 2: One populated, one completely EMPTY (testing the critical edge case)
+    table.Cell(2, 1).Range.Text = "Site Organization"
+    # table.Cell(2, 2) is natively left empty
+
+    async def run_test():
+        changes = [
+            # Edit 1: Standard cell-spanning replacement
+            ModifyText(
+                target_text="Header 1 | Header 2",
+                new_text="New Header 1 | Header 2",
+                comment="Updated header",
+            ),
+            # Edit 2: The LW-1 Empty Cell Injection Fix
+            ModifyText(
+                target_text="Site Organization | ",
+                new_text="Site Organization | 20%",
+                comment=None,
+            ),
+        ]
+
+        # Execute the Batch
+        result = await process_active_word_batch(
+            ctx=ctx, changes=changes, author_name="Adeu Tester", file_path=None
+        )
+
+        # Assertions on the Engine Output
+        assert "Applied: 2" in result, f"Expected 2 applied edits, but got: {result}"
+        assert "Failed: 0" in result, f"Expected 0 failures, but got: {result}"
+
+        # Assertions on the actual MS Word COM state
+        # (We strip '\r\x07' because Word's .Text property includes the raw cell markers)
+        val1 = table.Cell(1, 1).Range.Text.replace("\r\x07", "")
+        assert val1 == "New Header 1", "Standard cell replacement failed."
+
+        val2 = table.Cell(2, 2).Range.Text.replace("\r\x07", "")
+        assert val2 == "20%", "Empty cell injection failed."
+
+        # Ensure MS Word natively tracked the changes
+        assert (
+            doc.Revisions.Count > 0
+        ), "Changes were not recorded as Tracked Revisions."
+
+    run_async(run_test())
+
+
+def test_live_word_obs_03_styled_whitespace_trimming(active_word_app):
+    """
+    Test for OBS-03 (Bug #2): Modifying whitespace adjacent to styled markdown
+    markers (like **bold**) must not trigger paragraph restructuring that
+    corrupts or shears formatting. The styling must remain intact.
+    """
+    from adeu.mcp_components.tools.live_word import (
+        process_active_word_batch,
+        read_active_word_document,
+    )
+    from adeu.models import ModifyText
+
+    app, doc = active_word_app
+    ctx = get_mock_ctx()
+
+    # 1. Setup the document to exactly match the failing state
+    doc.TrackRevisions = False
+    doc.Range(0, doc.Content.End).Text = (
+        "(After Prequalification)\n\nFor Projects with Project Concept Notes (PCN) "
+    )
+
+    # 2. Explicitly apply Bold formatting to the paragraphs
+    # Paragraphs are 1-indexed. '\n\n' creates 3 paragraphs.
+    doc.Paragraphs(1).Range.Font.Bold = True
+    doc.Paragraphs(3).Range.Font.Bold = True
+
+    async def run_test():
+        target_text = "**(After Prequalification)**\n\n**For Projects with Project Concept Notes (PCN) **"
+        new_text = "**(After Prequalification)**\n\n**For Projects with Project Concept Notes (PCN)**"
+
+        changes = [
+            ModifyText(
+                target_text=target_text,
+                new_text=new_text,
+                comment="Testing whitespace trim",
+            )
+        ]
+
+        # Execute the Batch
+        result = await process_active_word_batch(
+            ctx=ctx, changes=changes, author_name="Adeu Tester", file_path=None
+        )
+
+        assert "Applied: 1" in result, f"Expected 1 applied edit, but got: {result}"
+        assert "Failed: 0" in result, f"Expected 0 failures, but got: {result}"
+
+        # Read the document back to verify CriticMarkup and Formatting Integrity
+        content = extract_content(
+            await read_active_word_document(ctx, clean_view=False, file_path=None)
+        )
+
+        # 3. Assert formatting was not sheared off.
+        assert (
+            "**For Projects" in content
+        ), "Formatting corruption detected! The leading bold marker was sheared off."
+
+        # Ensure the trailing space was handled safely
+        assert (
+            "(PCN) **" not in content
+        ), "The trailing space was not successfully removed."
+
+    run_async(run_test())
+
+
+def test_live_word_batch_fixes_ambiguity_and_comment_duplication(active_word_app):
+    """
+    End-to-end test verifying three major Live Word fixes:
+    1. Ambiguous targets are safely rejected (Issue 2).
+    2. Sub-edits inside existing comments do not duplicate the comment (Issue 4).
+    3. AcceptChange uses Semantic/Proximity mapping to survive ID drift (Issue 1 & 5).
+    """
+    from docx import Document
+    from adeu.mcp_components.tools.live_word import (
+        _build_mock_docx_stream,
+        process_active_word_batch,
+    )
+    from adeu.models import AcceptChange, ModifyText
+    from adeu.redline.mapper import DocumentMapper
+
+    app, doc = active_word_app
+    ctx = get_mock_ctx()
+
+    # 1. Setup specific edge-case state
+    doc.TrackRevisions = False
+    doc.Range(0, doc.Content.End).Text = (
+        "Banana. Banana.\rThis is a CommentRegion.\rWe have DeletedText here.\n"
+    )
+
+    doc.TrackRevisions = True
+    app.UserName = "Test Reviewer"
+
+    # Create Deletion
+    rng_del = doc.Content
+    if rng_del.Find.Execute("DeletedText"):
+        rng_del.Delete()
+
+    # Create Comment
+    rng_com = doc.Content
+    if rng_com.Find.Execute("CommentRegion"):
+        doc.Comments.Add(rng_com, "This is a test comment")
+
+    async def run_test():
+        # 2. Extract Virtual Map to find dynamic XML ID
+        xml_str = doc.WordOpenXML
+        stream = _build_mock_docx_stream(xml_str)
+        mapper = DocumentMapper(Document(stream))
+
+        target_chg_id = next(
+            (s.del_id for s in mapper.spans if "DeletedText" in s.text and s.del_id),
+            None,
+        )
+        assert (
+            target_chg_id is not None
+        ), "Failed to setup: Could not find XML ID for DeletedText."
+
+        # 3. Build Batch Payloads
+        ambiguous_batch = [
+            ModifyText(
+                type="modify", target_text="Banana", new_text="Apple", comment=None
+            ),
+        ]
+        valid_batch = [
+            ModifyText(
+                type="modify", target_text="Region", new_text="Zone", comment=None
+            ),
+            AcceptChange(type="accept", target_id=f"Chg:{target_chg_id}", comment=None),
+        ]
+
+        # 4. Execute Batches
+        ambig_res = await process_active_word_batch(
+            ctx=ctx, changes=ambiguous_batch, author_name="Adeu AI", file_path=None
+        )
+        assert "Failed: 1" in ambig_res
+        assert "Ambiguous match" in ambig_res
+
+        result = await process_active_word_batch(
+            ctx=ctx, changes=valid_batch, author_name="Adeu AI", file_path=None
+        )
+
+        # 5. Assertions
+        assert "Applied: 2" in result, f"Expected 2 applied edits. Result: {result}"
+        assert "Failed: 0" in result, f"Expected 0 failed edits. Result: {result}"
+
+        # The original deletion should be accepted (gone).
+        assert (
+            doc.Revisions.Count == 2
+        ), f"Expected 2 revisions remaining, found {doc.Revisions.Count}."
+        assert "Zone" in doc.Revisions(2).Range.Text, "New revision text mismatch."
+
+        # The comment must not be duplicated.
+        assert (
+            doc.Comments.Count == 1
+        ), f"Expected exactly 1 comment, found {doc.Comments.Count} (Duplication bug!)."
 
     run_async(run_test())
