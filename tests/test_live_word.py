@@ -389,11 +389,14 @@ def test_live_word_multi_paragraph_insert_split_deletion(active_word_app):
 
 def test_live_word_bug_04_garbled_text(active_word_app):
     """Ensures new_text with paragraph breaks and formatting does not garble text."""
-    app, doc = active_word_app
+    _, doc = active_word_app
     ctx = get_mock_ctx()
 
     doc.TrackRevisions = False
-    original = "Company, incorporated under the laws of [Country], business identity code [ID], having its principal place of business.\n"
+    original = (
+        "Company, incorporated under the laws of [Country], "
+        + "business identity code [ID], having its principal place of business.\n"
+    )
     doc.Range(0, doc.Content.End).Text = original
 
     async def run_test():

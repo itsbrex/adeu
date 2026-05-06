@@ -224,7 +224,7 @@ class TestSanitizeIntegration:
         """Full sanitize with --accept-all warns if multiple authors are detected (VAL-OBS-NEW-9)."""
         stream = _make_doc_with_multi_author_track_changes()
         input_path = _save_to_tmp(stream)
-        
+
         result = sanitize_docx(input_path, accept_all=True)
         assert result.status == "clean_with_warnings"
         assert any("Multiple authors detected" in w for w in result.warnings)
