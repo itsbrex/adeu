@@ -13,19 +13,15 @@ import sys
 
 import pytest
 
+from tests.utils import run_async, get_mock_ctx, extract_content
+
 pytestmark = pytest.mark.skipif(
     sys.platform != "win32",
     reason="Live Word COM tests require Windows platform",
 )
 
 if sys.platform == "win32":
-    import asyncio
-    from unittest.mock import AsyncMock
-
-    import pythoncom
-    import win32com.client
     from fastmcp.tools.tool import ToolResult
-
     from adeu.mcp_components.tools.live_word import (
         process_active_word_batch,
         read_active_word_document,
@@ -33,36 +29,15 @@ if sys.platform == "win32":
     from adeu.models import ModifyText
 
 
-@pytest.fixture
-def active_word_app():
-    """Fresh Word instance + blank document for each test."""
-    pythoncom.CoInitialize()
-    app = None
-    try:
-        app = win32com.client.Dispatch("Word.Application")
-        app.Visible = True
-        doc = app.Documents.Add()
-        app.Activate()
-        yield app, doc
-    except Exception as e:
-        pytest.skip(f"Could not initialize Word COM: {e}")
-    finally:
-        if app:
-            try:
-                doc.Close(0)
-            except Exception:
-                pass
-
-
 def _read(ctx):
     """Synchronously resolve a live read."""
-    res = asyncio.run(read_active_word_document(ctx, clean_view=False))
-    return res.structured_content["markdown"] if isinstance(res, ToolResult) else str(res)
+    res = run_async(read_active_word_document(ctx, clean_view=False))
+    return extract_content(res)
 
 
 def _run_batch(ctx, changes):
     """Synchronously apply a batch of changes."""
-    return asyncio.run(process_active_word_batch(ctx, changes=changes, author_name="Test Agent"))
+    return run_async(process_active_word_batch(ctx, changes=changes, author_name="Test Agent"))
 
 
 def _strip_criticmarkup(s: str) -> str:
@@ -93,7 +68,7 @@ def test_structured_insert_single_heading(active_word_app):
         '# New Section Heading'.
     """
     app, doc = active_word_app
-    ctx = AsyncMock()
+    ctx = get_mock_ctx()
     doc.Range(0, doc.Content.End).Text = "Original paragraph.\r"
 
     changes = [
@@ -131,7 +106,7 @@ def test_structured_insert_multi_paragraph_body(active_word_app):
     inserted paragraphs, each tracked.
     """
     app, doc = active_word_app
-    ctx = AsyncMock()
+    ctx = get_mock_ctx()
     doc.Range(0, doc.Content.End).Text = "Replace me.\r"
 
     changes = [
@@ -168,7 +143,7 @@ def test_structured_insert_heading_then_body(active_word_app):
       * Comment is attached.
     """
     app, doc = active_word_app
-    ctx = AsyncMock()
+    ctx = get_mock_ctx()
     doc.Range(0, doc.Content.End).Text = "Anchor text.\r"
 
     new_text = (
@@ -207,7 +182,7 @@ def test_structured_insert_bold_inside_new_paragraph(active_word_app):
     do not leak across paragraph boundaries.
     """
     app, doc = active_word_app
-    ctx = AsyncMock()
+    ctx = get_mock_ctx()
     doc.Range(0, doc.Content.End).Text = "Start.\r"
 
     changes = [
@@ -238,7 +213,7 @@ def test_simple_inline_replacement_unchanged(active_word_app):
     the structured-path fix.
     """
     app, doc = active_word_app
-    ctx = AsyncMock()
+    ctx = get_mock_ctx()
     doc.Range(0, doc.Content.End).Text = "The quick brown fox.\r"
 
     changes = [
@@ -256,3 +231,4 @@ def test_simple_inline_replacement_unchanged(active_word_app):
     assert "{++**red**++}" in content
     # bold is applied inside the insertion; when read raw it's markdown-wrapped
     assert "**red**" in content
+

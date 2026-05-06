@@ -8,6 +8,62 @@ from adeu.models import ModifyText, ReplyComment
 from adeu.redline.engine import RedlineEngine
 
 
+def test_reply_creates_new_comment_entry():
+    """
+    Verifies that replying to a comment creates a separate comment entry
+    targeting the same text range, rather than appending text to the old comment.
+    """
+    doc = Document()
+    doc.add_paragraph("Text with comment.")
+
+    stream = io.BytesIO()
+    doc.save(stream)
+    stream.seek(0)
+
+    # 1. Create initial comment via modification
+    # We change "Text" to "TextModified" to ensure the engine processes it and attaches the comment.
+    engine = RedlineEngine(stream, author="Author1")
+    edit = ModifyText(target_text="Text", new_text="TextModified", comment="Initial Comment")
+    engine.apply_edits([edit])
+
+    stream_mid = engine.save_to_stream()
+
+    # Verify initial state
+    text_mid = extract_text_from_stream(stream_mid)
+
+    # Extract Comment ID. Expect [Com:1] or similar.
+    match = re.search(r"\[Com:(\d+)\]", text_mid)
+    assert match, f"Initial comment not found in text: {text_mid}"
+    com_id = match.group(1)
+
+    # 2. Reply to the comment
+    engine2 = RedlineEngine(stream_mid, author="Author2")
+    action = ReplyComment(target_id=f"Com:{com_id}", text="This is a reply.")
+
+    applied, skipped = engine2.apply_review_actions([action])
+
+    assert applied == 1, "Reply action should be applied"
+    assert skipped == 0
+
+    stream_final = engine2.save_to_stream()
+    text_final = extract_text_from_stream(stream_final)
+
+    print(f"Final Text:\n{text_final}")
+
+    # Expectation: TWO distinct comment IDs in the output
+    # We look for [Com:X] patterns.
+    com_ids = re.findall(r"\[Com:(\d+)\]", text_final)
+    unique_ids = set(com_ids)
+
+    assert len(unique_ids) == 2, f"Should have 2 distinct comments, found: {unique_ids}\nText: {text_final}"
+
+    # Verify content
+    assert "Initial Comment" in text_final
+    assert "This is a reply." in text_final
+    assert "Author1" in text_final
+    assert "Author2" in text_final
+
+
 def test_threaded_comment_structure():
     """
     Verifies that replying to a comment creates a valid threaded structure
@@ -138,3 +194,85 @@ def test_threaded_rendering_order():
     assert "Root" in text
     assert "Reply1" in text
     assert "Reply2" in text
+
+
+def test_threading_creates_extended_part():
+    """
+    Verifies that adding comments to a clean doc creates commentsExtended.xml,
+    which is required for visible threading in modern Word.
+    """
+    doc = Document()
+    doc.add_paragraph("Content")
+
+    stream = io.BytesIO()
+    doc.save(stream)
+    stream.seek(0)
+
+    # 1. Add Root Comment
+    engine = RedlineEngine(stream)
+    # Note: Must change text so the edit is not skipped as no-op
+    engine.apply_edits([ModifyText(target_text="Content", new_text="Content Modified", comment="Root")])
+    stream_1 = engine.save_to_stream()
+
+    # Check if Extended part exists immediately
+    doc_1 = Document(stream_1)
+    extended_rel = "http://schemas.microsoft.com/office/2011/relationships/commentsExtended"
+    has_extended = any(rel.reltype == extended_rel for rel in doc_1.part.rels.values())
+    assert has_extended, "commentsExtended.xml should be created with the first comment"
+
+    # 2. Add Reply
+    engine2 = RedlineEngine(stream_1)
+    # Get root ID
+    root_id = list(engine2.comments_manager.extract_comments_data().keys())[0]
+
+    engine2.apply_review_actions([ReplyComment(target_id=f"Com:{root_id}", text="Reply")])
+    stream_2 = engine2.save_to_stream()
+
+    # 3. Inspect XML for Threading
+    doc_2 = Document(stream_2)
+    extended_part = None
+    for rel in doc_2.part.rels.values():
+        if rel.reltype == extended_rel:
+            extended_part = rel.target_part
+            break
+
+    xml = extended_part.blob.decode("utf-8")
+    print(xml)
+
+    # Should contain paraIdParent linking
+    assert "w15:paraIdParent" in xml
+
+
+def test_full_modern_comments_triad_creation():
+    doc = Document()
+    doc.add_paragraph("Content")
+    stream = io.BytesIO()
+    doc.save(stream)
+    stream.seek(0)
+
+    engine = RedlineEngine(stream)
+    engine.apply_edits([ModifyText(target_text="Content", new_text="Content Changed", comment="Modern")])
+    stream_out = engine.save_to_stream()
+
+    doc_out = Document(stream_out)
+    rels = [rel.reltype for rel in doc_out.part.rels.values()]
+
+    rel_extended = "http://schemas.microsoft.com/office/2011/relationships/commentsExtended"
+    rel_ids = "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds"
+    rel_extensible = "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible"
+
+    assert any(r == rel_extended for r in rels), "Missing commentsExtended"
+    assert any(r == rel_ids for r in rels), "Missing commentsIds"
+    assert any(r == rel_extensible for r in rels), "Missing commentsExtensible"
+
+    # Check Extensible Content
+    extensible_part = None
+    for rel in doc_out.part.rels.values():
+        if rel.reltype == rel_extensible:
+            extensible_part = rel.target_part
+            break
+
+    xml = extensible_part.blob.decode("utf-8")
+    print(xml)
+    assert "w16cex:durableId" in xml
+    assert "w16cex:dateUtc" in xml

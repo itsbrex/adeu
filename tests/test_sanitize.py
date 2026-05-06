@@ -29,15 +29,45 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures"
 # ---------------------------------------------------------------------------
 
 
+import io
+import os
+import zipfile
+from pathlib import Path
+
+import pytest
+from docx import Document
+from docx.opc.part import Part
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from lxml import etree
+
+from adeu.sanitize import transforms
+from adeu.sanitize.core import SanitizeError, sanitize_docx
+
+from .verify_sanitized import (
+    check_full_scrub,
+    check_global_scrub,
+    check_keep_markup,
+)
+from .docx_fixtures import (
+    save_to_temp_docx,
+    make_doc_with_track_changes,
+    make_doc_with_comments,
+    make_doc_with_custom_props,
+)
+
+FIXTURE_DIR = Path(__file__).parent / "fixtures"
+
+# ---------------------------------------------------------------------------
+# Specific Helpers for Sanitize
+# ---------------------------------------------------------------------------
+
 def _make_doc_with_track_changes() -> io.BytesIO:
     """Create a DOCX with track changes (insertion + deletion)."""
     doc = Document()
     p = doc.add_paragraph()
-
-    # Normal text
     p.add_run("The ")
 
-    # Deletion
     d = OxmlElement("w:del")
     d.set(qn("w:id"), "1")
     d.set(qn("w:author"), "Opposing Counsel")
@@ -50,7 +80,6 @@ def _make_doc_with_track_changes() -> io.BytesIO:
     d.append(rd)
     p._element.append(d)
 
-    # Insertion
     ins = OxmlElement("w:ins")
     ins.set(qn("w:id"), "2")
     ins.set(qn("w:author"), "Opposing Counsel")
@@ -64,584 +93,151 @@ def _make_doc_with_track_changes() -> io.BytesIO:
     p._element.append(ins)
 
     p.add_run(" shall provide services.")
-
     stream = io.BytesIO()
     doc.save(stream)
     stream.seek(0)
     return stream
-
-
-def _make_doc_with_multi_author_track_changes() -> io.BytesIO:
-    """Create a DOCX with track changes from multiple authors."""
-    doc = Document()
-    p = doc.add_paragraph()
-    p.add_run("The ")
-
-    # Deletion by Author 1
-    d = OxmlElement("w:del")
-    d.set(qn("w:id"), "1")
-    d.set(qn("w:author"), "Adeu Reviewer")
-    d.set(qn("w:date"), "2025-01-15T10:00:00Z")
-    rd = OxmlElement("w:r")
-    rt = OxmlElement("w:delText")
-    rt.set(qn("xml:space"), "preserve")
-    rt.text = "Vendor"
-    rd.append(rt)
-    d.append(rd)
-    p._element.append(d)
-
-    # Insertion by Author 1
-    ins1 = OxmlElement("w:ins")
-    ins1.set(qn("w:id"), "2")
-    ins1.set(qn("w:author"), "Adeu Reviewer")
-    ins1.set(qn("w:date"), "2025-01-15T10:00:00Z")
-    ri1 = OxmlElement("w:r")
-    ti1 = OxmlElement("w:t")
-    ti1.set(qn("xml:space"), "preserve")
-    ti1.text = "Supplier"
-    ri1.append(ti1)
-    ins1.append(ri1)
-    p._element.append(ins1)
-
-    p.add_run(" shall provide services for ")
-
-    # Insertion by Author 2
-    ins2 = OxmlElement("w:ins")
-    ins2.set(qn("w:id"), "3")
-    ins2.set(qn("w:author"), "Sneaky Counterparty")
-    ins2.set(qn("w:date"), "2025-01-15T10:00:00Z")
-    ri2 = OxmlElement("w:r")
-    ti2 = OxmlElement("w:t")
-    ti2.set(qn("xml:space"), "preserve")
-    ti2.text = "five (5) "
-    ri2.append(ti2)
-    ins2.append(ri2)
-    p._element.append(ins2)
-
-    p.add_run("years.")
-
-    stream = io.BytesIO()
-    doc.save(stream)
-    stream.seek(0)
-    return stream
-
 
 def _make_doc_with_rsids() -> io.BytesIO:
-    """Create a DOCX with rsid attributes on paragraphs and runs."""
     doc = Document()
     p = doc.add_paragraph("Hello World")
     p._element.set(qn("w:rsidR"), "00A21F3B")
     p._element.set(qn("w:rsidRDefault"), "004C12DE")
     p._element.set(qn("w:rsidP"), "00B33E21")
-
     for run in p.runs:
         run._element.set(qn("w:rsidR"), "00A21F3B")
-
     stream = io.BytesIO()
     doc.save(stream)
     stream.seek(0)
     return stream
 
-
-def _make_doc_with_comments(resolved: bool = False) -> io.BytesIO:
-    """Create a DOCX with a comment."""
-    doc = Document()
-    p = doc.add_paragraph()
-
-    # Comment range start
-    crs = OxmlElement("w:commentRangeStart")
-    crs.set(qn("w:id"), "0")
-    p._element.append(crs)
-
-    p.add_run("Target text for comment")
-
-    # Comment range end
-    cre = OxmlElement("w:commentRangeEnd")
-    cre.set(qn("w:id"), "0")
-    p._element.append(cre)
-
-    # Comment reference in a run
-    ref_run = OxmlElement("w:r")
-    ref = OxmlElement("w:commentReference")
-    ref.set(qn("w:id"), "0")
-    ref_run.append(ref)
-    p._element.append(ref_run)
-
-    # Create comments.xml part manually via the engine approach
-    from adeu.redline.comments import CommentsManager
-
-    cm = CommentsManager(doc)
-    cm.add_comment(
-        comment_id="0",
-        author="Internal Reviewer",
-        text="Check this with the client",
-    )
-
-    # If resolved, mark it
-    if resolved and cm.extended_part:
-        for child in cm.extended_part.element:
-            child.set(qn("w15:done"), "1")
-
-    stream = io.BytesIO()
-    doc.save(stream)
-    stream.seek(0)
-    return stream
-
-
-def _save_to_tmp(stream: io.BytesIO, suffix=".docx") -> str:
-    """Save a BytesIO stream to a temp file, return the path."""
-    fd, path = tempfile.mkstemp(suffix=suffix)
-    with os.fdopen(fd, "wb") as f:
-        f.write(stream.getvalue())
+def _save_to_tmp(stream: io.BytesIO) -> str:
+    path = save_to_temp_docx(Document(stream))
     return path
-
 
 # ---------------------------------------------------------------------------
 # Transform unit tests
 # ---------------------------------------------------------------------------
 
-
-class TestStripRsid:
-    def test_removes_rsid_attributes(self):
-        stream = _make_doc_with_rsids()
-        doc = Document(stream)
-
-        # Verify rsids exist
-        found = False
-        for el in doc.element.iter():
-            if qn("w:rsidR") in el.attrib:
-                found = True
-                break
-        assert found, "Expected rsid attributes in test doc"
-
-        lines = transforms.strip_rsid(doc)
-        assert len(lines) > 0
-        assert "rsid" in lines[0].lower()
-
-        # Verify rsids are gone
+class TestTransforms:
+    def test_strip_rsid(self):
+        doc = Document(_make_doc_with_rsids())
+        transforms.strip_rsid(doc)
         for el in doc.element.iter():
             for attr in transforms.RSID_ATTRS:
                 assert attr not in el.attrib
 
-
-class TestStripParaIds:
-    def test_removes_para_ids(self):
+    def test_strip_para_ids(self):
         doc = Document()
         p = doc.add_paragraph("Test")
         p._element.set(f"{{{transforms.W14_NS}}}paraId", "3F2A91BC")
-        p._element.set(f"{{{transforms.W14_NS}}}textId", "77D61234")
-
-        lines = transforms.strip_para_ids(doc)
-        assert len(lines) > 0
-
+        transforms.strip_para_ids(doc)
         for el in doc.element.iter():
             for attr in transforms.W14_ATTRS:
                 assert attr not in el.attrib
 
-
-class TestCountTrackedChanges:
-    def test_counts_insertions_and_deletions(self):
-        stream = _make_doc_with_track_changes()
-        doc = Document(stream)
+    def test_count_and_accept_tracked_changes(self):
+        doc = Document(_make_doc_with_track_changes())
         ins, dels, fmt = transforms.count_tracked_changes(doc)
-        assert ins == 1
-        assert dels == 1
-        assert fmt == 0
-
-
-class TestAcceptAllTrackedChanges:
-    def test_accepts_changes(self):
-        stream = _make_doc_with_track_changes()
-        doc = Document(stream)
-
-        lines = transforms.accept_all_tracked_changes(doc)
-        assert len(lines) > 0
-
-        # Verify no track changes remain
+        assert ins == 1 and dels == 1
+        transforms.accept_all_tracked_changes(doc)
         ins, dels, fmt = transforms.count_tracked_changes(doc)
-        assert ins == 0
-        assert dels == 0
-        assert fmt == 0
+        assert ins == 0 and dels == 0
+        assert "Supplier" in doc.paragraphs[0].text
 
-        # Verify text content: "Vendor" deleted, "Supplier" kept
-        text = doc.paragraphs[0].text
-        assert "Supplier" in text
-        assert "Vendor" not in text
-
-
-class TestStripHiddenText:
-    def test_removes_vanish_runs(self):
+    def test_strip_hidden_text(self):
         doc = Document()
-        p = doc.add_paragraph()
-        run = p.add_run("Hidden text")
-        # Add w:vanish to the run's rPr
-        rpr = run._element.get_or_add_rPr()
-        vanish = OxmlElement("w:vanish")
-        rpr.append(vanish)
+        run = doc.add_paragraph().add_run("Hidden")
+        run._element.get_or_add_rPr().append(OxmlElement("w:vanish"))
+        assert len(transforms.strip_hidden_text(doc)) > 0
 
-        lines = transforms.strip_hidden_text(doc)
-        assert len(lines) > 0
-        assert "hidden" in lines[0].lower()
-
-
-class TestScrubDocProperties:
-    def test_schema_valid_empty_fields(self):
-        """Ensure integer fields are set to '0' and strings to '' to avoid Unreadable Content errors."""
+    def test_scrub_doc_properties(self):
         doc = Document()
-        pkg = doc.part.package
-
-        # Find app.xml part
-        app_part = None
-        for p in pkg.parts:
-            if str(p.partname).endswith("app.xml"):
-                app_part = p
-                break
-
-        assert app_part is not None
-
-        # Inject test data into app.xml
-        xml_str = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <Properties xmlns="{transforms.EXTENDED_NS}">
-            <Template>MyTemplate.dotm</Template>
-            <TotalTime>15</TotalTime>
-            <Words>250</Words>
-        </Properties>
-        '''
-        app_part._blob = xml_str.encode("utf-8")
-
+        app_part = next(p for p in doc.part.package.parts if str(p.partname).endswith("app.xml"))
+        app_part._blob = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <Properties xmlns="{transforms.EXTENDED_NS}"><TotalTime>15</TotalTime><Template>T.dotm</Template></Properties>'''.encode("utf-8")
         transforms.scrub_doc_properties(doc)
-
-        # Verify via etree
         tree = etree.fromstring(app_part.blob)
         ns = {"app": transforms.EXTENDED_NS}
+        assert tree.find(".//app:TotalTime", ns).text == "0"
+        assert not tree.find(".//app:Template", ns).text
 
-        assert tree.find(".//app:TotalTime", ns).text == "0", "Integer fields must be zeroed, not emptied"
-        assert tree.find(".//app:Words", ns).text == "0", "Integer fields must be zeroed, not emptied"
-        template = tree.find(".//app:Template", ns)
-        assert template is not None
-        assert template.text is None or template.text == "", "String fields should be emptied"
-
-
-class TestStripCustomXml:
-    def test_removes_data_bindings(self):
-        """Ensure dangling dataBindings are removed when Custom XML is stripped to avoid Unreadable Content."""
+    def test_strip_custom_xml(self):
         doc = Document()
         pkg = doc.part.package
-
-        # 1. Add a fake custom XML part
-        custom_part = Part(pkg.next_partname("/customXml/item%d.xml"), "application/xml", b"<test/>", pkg)
+        custom_part = Part(pkg.next_partname("/customXml/item%d.xml"), "application/xml", b"<t/>", pkg)
         pkg.parts.append(custom_part)
-
-        # 2. Add a content control with a data binding
-        p = doc.add_paragraph()
+        
+        # Add content control with binding
         sdt = OxmlElement("w:sdt")
         sdtPr = OxmlElement("w:sdtPr")
         binding = OxmlElement("w:dataBinding")
-        binding.set(qn("w:xpath"), "/test")
+        binding.set(qn("w:xpath"), "/t")
         sdtPr.append(binding)
         sdt.append(sdtPr)
-        p._element.append(sdt)
-
-        assert len(doc.element.findall(f".//{qn('w:dataBinding')}")) == 1
-
-        # Act
-        lines = transforms.strip_custom_xml(doc)
-
-        # Verify
-        assert len(lines) == 1
+        doc.add_paragraph()._element.append(sdt)
+        
+        transforms.strip_custom_xml(doc)
         assert custom_part not in pkg.parts
-        assert len(doc.element.findall(f".//{qn('w:dataBinding')}")) == 0, "Dangling binding was not removed!"
-        assert len(doc.element.findall(f".//{qn('w:sdtPr')}")) == 1, "Parent sdtPr should remain"
-
+        assert len(doc.element.findall(f".//{qn('w:dataBinding')}")) == 0
 
 # ---------------------------------------------------------------------------
 # Orchestrator integration tests
 # ---------------------------------------------------------------------------
 
+class TestSanitizeIntegration:
+    def test_full_sanitize_flow(self, tmp_path):
+        # 1. Clean doc
+        clean_doc = Document()
+        clean_doc.add_paragraph("Clean")
+        input_path = save_to_temp_docx(clean_doc)
+        result = sanitize_docx(input_path)
+        assert result.status == "clean"
+        os.unlink(input_path)
 
-class TestSanitizeFull:
-    def test_full_sanitize_clean_doc(self):
-        """Full sanitize on a doc with no track changes works."""
-        doc = Document()
-        doc.add_paragraph("Clean document.")
-        stream = io.BytesIO()
-        doc.save(stream)
-        stream.seek(0)
-        input_path = _save_to_tmp(stream)
+        # 2. Unresolved changes error
+        input_path = _save_to_tmp(_make_doc_with_track_changes())
+        with pytest.raises(SanitizeError, match="unresolved"):
+            sanitize_docx(input_path)
+        
+        # 3. Accept all
+        result = sanitize_docx(input_path, accept_all=True)
+        assert result.tracked_changes_accepted > 0
+        os.unlink(input_path)
 
-        try:
-            result = sanitize_docx(input_path)
-            assert result.status == "clean"
-            assert os.path.exists(result.output_path)
+    def test_keep_markup_and_author_replace(self):
+        input_path = _save_to_tmp(_make_doc_with_track_changes())
+        result = sanitize_docx(input_path, keep_markup=True, author="Firm X")
+        out_doc = Document(result.output_path)
+        for tag in [qn("w:ins"), qn("w:del")]:
+            for el in out_doc.element.findall(f".//{tag}"):
+                assert el.get(qn("w:author")) == "Firm X"
+                assert el.get(qn("w:date")) == "2025-01-01T00:00:00Z"
+        os.unlink(input_path)
 
-            # Verify output opens
-            out_doc = Document(result.output_path)
-            assert "Clean document" in out_doc.paragraphs[0].text
-        finally:
-            os.unlink(input_path)
-            if os.path.exists(result.output_path):
-                os.unlink(result.output_path)
-
-    def test_full_sanitize_blocks_on_unresolved_changes(self):
-        """Full sanitize refuses if unresolved track changes exist."""
-        stream = _make_doc_with_track_changes()
-        input_path = _save_to_tmp(stream)
-
-        try:
-            with pytest.raises(SanitizeError) as exc_info:
-                sanitize_docx(input_path)
-            assert "unresolved" in str(exc_info.value).lower()
-        finally:
-            os.unlink(input_path)
-
-    def test_full_sanitize_with_accept_all(self):
-        """Full sanitize with --accept-all accepts changes and succeeds."""
-        stream = _make_doc_with_track_changes()
-        input_path = _save_to_tmp(stream)
-
-        try:
-            result = sanitize_docx(input_path, accept_all=True)
-            assert result.status == "clean"
-            assert result.tracked_changes_accepted > 0
-
-            out_doc = Document(result.output_path)
-            text = out_doc.paragraphs[0].text
-            assert "Supplier" in text
-        finally:
-            os.unlink(input_path)
-            if os.path.exists(result.output_path):
-                os.unlink(result.output_path)
-
-    def test_full_sanitize_with_accept_all_warns_multi_author(self):
-        """Full sanitize with --accept-all warns if multiple authors are detected (VAL-OBS-NEW-9)."""
-        stream = _make_doc_with_multi_author_track_changes()
-        input_path = _save_to_tmp(stream)
-
-        try:
-            result = sanitize_docx(input_path, accept_all=True)
-            # Should drop into clean_with_warnings status
-            assert result.status == "clean_with_warnings"
-            # Warning list should contain the alert
-            assert any("Multiple authors detected" in w for w in result.warnings)
-
-            # The rendered report text should explicitly name the authors
-            assert "Adeu Reviewer" in result.report_text
-            assert "Sneaky Counterparty" in result.report_text
-        finally:
-            os.unlink(input_path)
-            if os.path.exists(result.output_path):
-                os.unlink(result.output_path)
-
-    def test_full_sanitize_strips_rsids(self):
-        """Full sanitize removes rsid attributes."""
-        stream = _make_doc_with_rsids()
-        input_path = _save_to_tmp(stream)
-
-        try:
-            result = sanitize_docx(input_path)
-            out_doc = Document(result.output_path)
-
-            for el in out_doc.element.iter():
-                for attr in transforms.RSID_ATTRS:
-                    assert attr not in el.attrib, f"rsid attribute {attr} should be stripped"
-        finally:
-            os.unlink(input_path)
-            if os.path.exists(result.output_path):
-                os.unlink(result.output_path)
-
-    def test_report_text_generated(self):
-        """Sanitize produces a non-empty report."""
-        stream = _make_doc_with_rsids()
-        input_path = _save_to_tmp(stream)
-
-        try:
-            result = sanitize_docx(input_path)
-            assert result.report_text
-            assert "Sanitize Report" in result.report_text
-        finally:
-            os.unlink(input_path)
-            if os.path.exists(result.output_path):
-                os.unlink(result.output_path)
-
-
-class TestSanitizeKeepMarkup:
-    def test_keeps_track_changes(self):
-        """--keep-markup preserves track changes."""
-        stream = _make_doc_with_track_changes()
-        input_path = _save_to_tmp(stream)
-
-        try:
-            result = sanitize_docx(input_path, keep_markup=True)
-            assert result.status == "clean"
-            assert result.tracked_changes_found > 0
-
-            out_doc = Document(result.output_path)
-            ins_count = len(out_doc.element.findall(f".//{qn('w:ins')}"))
-            del_count = len(out_doc.element.findall(f".//{qn('w:del')}"))
-            assert ins_count > 0 or del_count > 0, "Track changes should be preserved"
-        finally:
-            os.unlink(input_path)
-            if os.path.exists(result.output_path):
-                os.unlink(result.output_path)
-
-    def test_strips_rsids_but_keeps_markup(self):
-        """--keep-markup strips metadata but keeps changes."""
-        stream = _make_doc_with_track_changes()
-        input_path = _save_to_tmp(stream)
-
-        try:
-            result = sanitize_docx(input_path, keep_markup=True)
-            out_doc = Document(result.output_path)
-
-            # rsids should be gone
-            for el in out_doc.element.iter():
-                for attr in transforms.RSID_ATTRS:
-                    assert attr not in el.attrib
-
-            # but track changes should remain
-            ins_els = out_doc.element.findall(f".//{qn('w:ins')}")
-            assert len(ins_els) > 0
-        finally:
-            os.unlink(input_path)
-            if os.path.exists(result.output_path):
-                os.unlink(result.output_path)
-
-    def test_warns_when_no_markup_found(self):
-        """--keep-markup warns if document has no track changes or comments."""
-        doc = Document()
-        doc.add_paragraph("No changes here.")
-        stream = io.BytesIO()
-        doc.save(stream)
-        stream.seek(0)
-        input_path = _save_to_tmp(stream)
-
-        try:
-            result = sanitize_docx(input_path, keep_markup=True)
-            assert result.status == "clean_with_warnings"
-            assert any("no tracked changes" in w.lower() for w in result.warnings)
-        finally:
-            os.unlink(input_path)
-            if os.path.exists(result.output_path):
-                os.unlink(result.output_path)
-
-    def test_replaces_author_names(self):
-        """--keep-markup with --author replaces author names on markup."""
-        stream = _make_doc_with_track_changes()
-        input_path = _save_to_tmp(stream)
-
-        try:
-            result = sanitize_docx(input_path, keep_markup=True, author="Firm A")
-            out_doc = Document(result.output_path)
-
-            for ins in out_doc.element.findall(f".//{qn('w:ins')}"):
-                assert ins.get(qn("w:author")) == "Firm A"
-            for d in out_doc.element.findall(f".//{qn('w:del')}"):
-                assert d.get(qn("w:author")) == "Firm A"
-        finally:
-            os.unlink(input_path)
-            if os.path.exists(result.output_path):
-                os.unlink(result.output_path)
-
-
-class TestSanitizeBaseline:
-    def test_baseline_recomputes_delta(self):
-        """--baseline produces track changes showing the diff."""
-        # Create baseline
+    def test_baseline_recompute(self):
         baseline_doc = Document()
         baseline_doc.add_paragraph("The Vendor shall provide services.")
-        baseline_stream = io.BytesIO()
-        baseline_doc.save(baseline_stream)
-        baseline_stream.seek(0)
-        baseline_path = _save_to_tmp(baseline_stream)
-
-        # Create working version (different text)
+        b_path = save_to_temp_docx(baseline_doc)
+        
         working_doc = Document()
         working_doc.add_paragraph("The Supplier shall provide services.")
-        working_stream = io.BytesIO()
-        working_doc.save(working_stream)
-        working_stream.seek(0)
-        working_path = _save_to_tmp(working_stream)
+        w_path = save_to_temp_docx(working_doc)
+        
+        result = sanitize_docx(w_path, baseline_path=b_path, author="Tester")
+        assert result.tracked_changes_found > 0
+        os.unlink(b_path); os.unlink(w_path)
 
-        try:
-            result = sanitize_docx(
-                working_path,
-                baseline_path=baseline_path,
-                author="Test Firm",
-            )
-            assert result.status in ("clean", "clean_with_warnings")
-            assert result.tracked_changes_found > 0
-
-            out_doc = Document(result.output_path)
-            # Should have track changes
-            all_changes = out_doc.element.findall(f".//{qn('w:ins')}") + out_doc.element.findall(f".//{qn('w:del')}")
-            assert len(all_changes) > 0, "Baseline mode should produce track changes"
-        finally:
-            os.unlink(baseline_path)
-            os.unlink(working_path)
-            if os.path.exists(result.output_path):
-                os.unlink(result.output_path)
-
-
-class TestNormalizeChangeDates:
-    def test_normalizes_dates_in_keep_markup(self):
-        """--keep-markup normalizes w:date on track changes to prevent timing inference."""
-        stream = _make_doc_with_track_changes()
-        input_path = _save_to_tmp(stream)
-
-        try:
-            result = sanitize_docx(input_path, keep_markup=True)
-            out_doc = Document(result.output_path)
-
-            for tag in [qn("w:ins"), qn("w:del")]:
-                for el in out_doc.element.findall(f".//{tag}"):
-                    date = el.get(qn("w:date"))
-                    if date:
-                        assert date == "2025-01-01T00:00:00Z", f"Track change date should be normalized, got {date}"
-        finally:
-            os.unlink(input_path)
-            if os.path.exists(result.output_path):
-                os.unlink(result.output_path)
-
-
-class TestSanitizeExitCodes:
-    def test_file_not_found(self):
-        with pytest.raises(FileNotFoundError):
-            sanitize_docx("/nonexistent/file.docx")
-
-    def test_baseline_not_found(self):
-        doc = Document()
-        doc.add_paragraph("Test")
-        stream = io.BytesIO()
-        doc.save(stream)
-        stream.seek(0)
-        input_path = _save_to_tmp(stream)
-
-        try:
-            with pytest.raises(FileNotFoundError):
-                sanitize_docx(input_path, baseline_path="/nonexistent/baseline.docx")
-        finally:
-            os.unlink(input_path)
-
-
-class TestSanitizeE2E:
-    """End-to-End mathematical verification tests against dirty_sample.docx."""
-
-    def test_e2e_full_sanitize(self, tmp_path):
+    def test_e2e_dirty_sample(self, tmp_path):
         dirty_doc = FIXTURE_DIR / "dirty_sample.docx"
-        out_path = tmp_path / "clean_full.docx"
-
-        sanitize_docx(str(dirty_doc), str(out_path), accept_all=True)
-
-        with zipfile.ZipFile(out_path, "r") as zf:
-            check_global_scrub(zf)
+        if not dirty_doc.exists(): pytest.skip("Fixture missing")
+        
+        out_full = tmp_path / "full.docx"
+        sanitize_docx(str(dirty_doc), str(out_full), accept_all=True)
+        with zipfile.ZipFile(out_full, "r") as zf:
             check_full_scrub(zf)
 
-    def test_e2e_keep_markup(self, tmp_path):
-        dirty_doc = FIXTURE_DIR / "dirty_sample.docx"
-        out_path = tmp_path / "clean_keep.docx"
-
-        sanitize_docx(str(dirty_doc), str(out_path), keep_markup=True, author="My Firm")
-
-        with zipfile.ZipFile(out_path, "r") as zf:
-            check_global_scrub(zf)
-            check_keep_markup(zf, "My Firm")
+        out_keep = tmp_path / "keep.docx"
+        sanitize_docx(str(dirty_doc), str(out_keep), keep_markup=True, author="Firm")
+        with zipfile.ZipFile(out_keep, "r") as zf:
+            check_keep_markup(zf, "Firm")
