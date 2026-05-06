@@ -1,3 +1,4 @@
+# FILE: tests/test_live_word.py
 import sys
 
 import pytest
@@ -162,7 +163,7 @@ def test_live_word_multiple_comments_overwrite(active_word_app):
     async def run_test():
         content = extract_content(await read_active_word_document(ctx))
         assert "Comment One" in content and "Comment Two" in content
-        assert "Com:0" in content and "Com:1" in content
+        assert "Com:1" in content and "Com:2" in content
 
     run_async(run_test())
 
@@ -225,7 +226,7 @@ def test_live_word_accept_reject_reply(active_word_app):
         changes = [
             AcceptChange(target_id="Chg:1"),
             AcceptChange(target_id="Chg:2"),
-            ReplyComment(target_id="Com:0", text="Yes, absolutely."),
+            ReplyComment(target_id="Com:1", text="Yes, absolutely."),
         ]
         await process_active_word_batch(ctx, changes=changes, author_name="QA Agent")
 
@@ -442,6 +443,41 @@ def test_live_word_bug_04_garbled_text(active_word_app):
     run_async(run_test())
 
 
+def test_live_word_obs_01_author_name_respected(active_word_app):
+    """
+    Test for OBS-01: Word originally enforced the signed-in user's identity.
+    We now use app.Options.UseLocalUserInfo to force it to respect the
+    provided author_name, aligning it with the disk engine.
+    """
+    app, doc = active_word_app
+    ctx = get_mock_ctx()
+
+    doc.TrackRevisions = False
+    doc.Range(0, doc.Content.End).Text = "Test document.\n"
+
+    async def run_test():
+        changes = [
+            ModifyText(
+                target_text="Test document.",
+                new_text="Modified document.",
+                comment="Spoof test.",
+            )
+        ]
+
+        res = await process_active_word_batch(
+            ctx, changes=changes, author_name="Sherlock Holmes"
+        )
+
+        assert "Warning: Live Word natively enforces M365 identities" not in res
+
+        content = extract_content(
+            await read_active_word_document(ctx, clean_view=False)
+        )
+        assert "Sherlock Holmes" in content
+
+    run_async(run_test())
+
+
 def test_live_word_obs_02_deletion_insertion_order(active_word_app):
     """Ensures Live COM automation forces the insertion AFTER the original text before deleting."""
     app, doc = active_word_app
@@ -459,8 +495,7 @@ def test_live_word_obs_02_deletion_insertion_order(active_word_app):
 
         assert "{--brown--}{++red++}" in content
 
-
-run_async(run_test())
+    run_async(run_test())
 
 
 def test_live_word_table_spanning_edits(active_word_app):
@@ -469,9 +504,6 @@ def test_live_word_table_spanning_edits(active_word_app):
     that span across virtual table cell boundaries (" | "), including injecting text
     into entirely empty cells via structural COM traversal.
     """
-    from adeu.mcp_components.tools.live_word import process_active_word_batch
-    from adeu.models import ModifyText
-
     app, doc = active_word_app
     ctx = get_mock_ctx()
 
@@ -505,7 +537,7 @@ def test_live_word_table_spanning_edits(active_word_app):
 
         # Execute the Batch
         result = await process_active_word_batch(
-            ctx=ctx, changes=changes, author_name="Adeu Tester", file_path=None
+            ctx=ctx, changes=changes, author_name="Adeu Tester"
         )
 
         # Assertions on the Engine Output
@@ -534,12 +566,6 @@ def test_live_word_obs_03_styled_whitespace_trimming(active_word_app):
     markers (like **bold**) must not trigger paragraph restructuring that
     corrupts or shears formatting. The styling must remain intact.
     """
-    from adeu.mcp_components.tools.live_word import (
-        process_active_word_batch,
-        read_active_word_document,
-    )
-    from adeu.models import ModifyText
-
     app, doc = active_word_app
     ctx = get_mock_ctx()
 
@@ -568,7 +594,7 @@ def test_live_word_obs_03_styled_whitespace_trimming(active_word_app):
 
         # Execute the Batch
         result = await process_active_word_batch(
-            ctx=ctx, changes=changes, author_name="Adeu Tester", file_path=None
+            ctx=ctx, changes=changes, author_name="Adeu Tester"
         )
 
         assert "Applied: 1" in result, f"Expected 1 applied edit, but got: {result}"
@@ -576,7 +602,7 @@ def test_live_word_obs_03_styled_whitespace_trimming(active_word_app):
 
         # Read the document back to verify CriticMarkup and Formatting Integrity
         content = extract_content(
-            await read_active_word_document(ctx, clean_view=False, file_path=None)
+            await read_active_word_document(ctx, clean_view=False)
         )
 
         # 3. Assert formatting was not sheared off.
@@ -600,11 +626,8 @@ def test_live_word_batch_fixes_ambiguity_and_comment_duplication(active_word_app
     3. AcceptChange uses Semantic/Proximity mapping to survive ID drift (Issue 1 & 5).
     """
     from docx import Document
-    from adeu.mcp_components.tools.live_word import (
-        _build_mock_docx_stream,
-        process_active_word_batch,
-    )
-    from adeu.models import AcceptChange, ModifyText
+    from adeu.mcp_components.tools.live_word import _build_mock_docx_stream
+    from adeu.models import AcceptChange
     from adeu.redline.mapper import DocumentMapper
 
     app, doc = active_word_app
@@ -658,13 +681,13 @@ def test_live_word_batch_fixes_ambiguity_and_comment_duplication(active_word_app
 
         # 4. Execute Batches
         ambig_res = await process_active_word_batch(
-            ctx=ctx, changes=ambiguous_batch, author_name="Adeu AI", file_path=None
+            ctx=ctx, changes=ambiguous_batch, author_name="Adeu AI"
         )
         assert "Failed: 1" in ambig_res
         assert "Ambiguous match" in ambig_res
 
         result = await process_active_word_batch(
-            ctx=ctx, changes=valid_batch, author_name="Adeu AI", file_path=None
+            ctx=ctx, changes=valid_batch, author_name="Adeu AI"
         )
 
         # 5. Assertions
@@ -681,5 +704,38 @@ def test_live_word_batch_fixes_ambiguity_and_comment_duplication(active_word_app
         assert (
             doc.Comments.Count == 1
         ), f"Expected exactly 1 comment, found {doc.Comments.Count} (Duplication bug!)."
+
+    run_async(run_test())
+
+
+def test_live_word_structured_insertion_at_boundary(active_word_app):
+    """
+    Verifies Bug 2: When a structured insertion occurs with 0-length overlap (pure insertion),
+    the Live Word Reverse Sandwich algorithm appends a carriage return so the heading
+    does not fuse into the body paragraph and hijack its styling.
+    """
+    app, doc = active_word_app
+    ctx = get_mock_ctx()
+
+    doc.Range(0, doc.Content.End).Text = (
+        "OUR MISSION\nAlthough we have made outstanding progress over the past year.\n"
+    )
+    doc.Paragraphs(1).Range.Style = doc.Styles("Heading 1")
+
+    async def run_test():
+        edit = ModifyText(
+            type="modify",
+            target_text="# OUR MISSION\n\nAlthough we have made outstanding progress",
+            new_text="# OUR MISSION\n\n## Editorial Note\n\nAlthough we have made outstanding progress",
+            comment=None,
+        )
+
+        res = await process_active_word_batch(ctx=ctx, changes=[edit], author_name="QA")
+        assert "Applied: 1" in res
+
+        content = extract_content(await read_active_word_document(ctx, clean_view=True))
+
+        assert "OUR MISSION\n\n## Editorial Note\n\nAlthough we have" in content
+        assert "Editorial NoteAlthough" not in content  # Ensure they didn't fuse
 
     run_async(run_test())

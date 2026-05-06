@@ -114,17 +114,17 @@ def _is_structured_new_text(new_text: str) -> bool:
     return False
 
 
-def _split_new_text_into_lines(new_text: str) -> List[str]:
+def _split_new_text_into_lines(
+    new_text: str, keep_trailing_empty: bool = False
+) -> List[str]:
     """
     Splits new_text into lines for paragraph-wise insertion. Matches
     the disk engine's behaviour of splitting on any run of newline chars.
-    Trailing empty elements are dropped so we don't emit a trailing
-    empty paragraph.
     """
     lines = re.split(r"[\r\n]+", new_text)
-    # Disk engine also pops trailing empty lines in track_insert
-    while lines and lines[-1] == "":
-        lines.pop()
+    if not keep_trailing_empty:
+        while lines and lines[-1] == "":
+            lines.pop()
     return lines
 
 
@@ -160,7 +160,9 @@ def _apply_line_formatting(
 _WD_STYLE_NORMAL = -1
 
 
-def _apply_paragraph_style(doc: Any, position: int, heading_level: Optional[int]) -> None:
+def _apply_paragraph_style(
+    doc: Any, position: int, heading_level: Optional[int]
+) -> None:
     """
     Applies a paragraph style to the paragraph containing `position`.
 
@@ -182,7 +184,9 @@ def _apply_paragraph_style(doc: Any, position: int, heading_level: Optional[int]
         p = doc.Range(position, position).Paragraphs(1)
         p.Style = style_id
     except Exception as e:
-        logger.warning(f"Failed to apply paragraph style (level={heading_level}) at {position}: {e}")
+        logger.warning(
+            f"Failed to apply paragraph style (level={heading_level}) at {position}: {e}"
+        )
 
 
 class ParsedLineInfo(TypedDict):
@@ -224,15 +228,24 @@ def _apply_structured_com_replacement(
             if c.Scope.Start >= target_rng.Start and c.Scope.End <= target_rng.End:
                 rescued_comments.append({"author": c.Author, "text": c.Range.Text})
         if rescued_comments:
-            logger.debug(f"Rescued {len(rescued_comments)} comments before payload execution.")
+            logger.debug(
+                f"Rescued {len(rescued_comments)} comments before payload execution."
+            )
     except Exception as e:
         logger.warning(f"Failed to rescue comments: {e}")
 
     # 2. Pre-parse new_text into structured lines
-    lines = _split_new_text_into_lines(new_text)
+    # Check if there are suffix runs in the current paragraph
+    p_end_marker = doc.Range(base_start, base_start).Paragraphs(1).Range.End - 1
+    has_suffix = (base_start + original_len) < p_end_marker
+
+    lines = _split_new_text_into_lines(new_text, keep_trailing_empty=has_suffix)
     if not lines:
-        logger.debug("No lines found in new_text, falling back to empty string replacement.")
-        target_rng.Delete()
+        logger.debug(
+            "No lines found in new_text, falling back to empty string replacement."
+        )
+        if target_rng.Start < target_rng.End:
+            target_rng.Delete()
         return
 
     parsed_lines: List[ParsedLineInfo] = []
@@ -264,36 +277,31 @@ def _apply_structured_com_replacement(
     doc.TrackRevisions = was_tracking
     # === SACRIFICIAL X END ===
 
-    # 3. Insert Line 1 BEFORE the original text (inline)
+    # 3. Insert Line 1 BEFORE the original text
     logger.debug(f"Inserting Line 1 before deletion at index {actual_base}")
-    doc.Range(actual_base, actual_base).Text = line_1
+    if original_len == 0:
+        doc.Range(actual_base, actual_base).Text = line_1 + "\r"
+        after_orig = actual_base + len(line_1) + 1
+    else:
+        doc.Range(actual_base, actual_base).Text = line_1
+        after_orig = actual_base + len(line_1) + original_len
 
-    # 4. Insert remaining lines AFTER the current paragraph
-    # BUG-03 fix: Multi-paragraph inserts inside a sentence should split the new
-    # paragraphs *after* the entire current paragraph, matching the disk engine.
-    after_orig = actual_base + len(line_1) + original_len
-
+    # 4. Insert remaining lines AFTER the target text to split cleanly
     rest_text_start = None
+    rest_text = ""
     if len(full_plain_parts) > 1:
-        # Find the end of the current paragraph
-        p_end = doc.Range(actual_base, actual_base).Paragraphs(1).Range.End
+        p_end = after_orig
+        if original_len == 0:
+            rest_text = "".join(part + "\r" for part in full_plain_parts[1:])
+        else:
+            rest_text = "".join("\r" + part for part in full_plain_parts[1:])
 
-        # Word's Range.End includes the \r. We want to insert after the paragraph break,
-        # so we just insert at p_end. We append the new lines, each terminated by \r.
-        # But wait, inserting text at p_end pushes the next paragraph down.
-        rest_text = "".join(part + "\r" for part in full_plain_parts[1:])
-
-        logger.debug(f"Inserting remaining lines after paragraph at index {p_end}")
+        logger.debug(f"Inserting remaining lines after target at index {p_end}")
         rest_text_start = p_end
         doc.Range(p_end, p_end).Text = rest_text
 
-    # 5. Attach comments to a combined range (Insertion + Target).
-    # If we anchor only to the inserted Line 1, Word natively snaps the comment anchor
-    # leftwards into the preceding un-tracked text. By anchoring across the insertion
-    # AND the target text, we force Word to grip the normal text. When we delete the
-    # target text in Step 6, the anchor perfectly collapses onto the insertion.
-    # NOTE: It still snaps leftwards, but it will safely absorb our Sacrificial 'X'.
-    combined_rng = doc.Range(actual_base, after_orig)
+    # 5. Attach comments to a combined range (Insertion + Target + Suffix)
+    combined_rng = doc.Range(actual_base, after_orig + len(rest_text))
     logger.info(
         "Attaching comments to combined range.",
         range_start=combined_rng.Start,
@@ -334,7 +342,8 @@ def _apply_structured_com_replacement(
     # 6. Execute the explicit Deletion LAST
     logger.debug("Executing deletion of original text to finalize Sandwich.")
     orig_rng_to_delete = doc.Range(actual_base + len(line_1), after_orig)
-    orig_rng_to_delete.Delete()
+    if orig_rng_to_delete.Start < orig_rng_to_delete.End:
+        orig_rng_to_delete.Delete()
 
     # === SACRIFICIAL X CLEANUP ===
     doc.TrackRevisions = False
@@ -372,17 +381,23 @@ def _apply_structured_com_replacement(
                 p_info = parsed_lines[i]
                 plain_len = len(p_info["plain"])
 
-                _apply_paragraph_style(doc, current_abs_offset, p_info["level"])
+                # If we prepended \r, target is +1. If we appended \r, target is at offset.
+                target_offset = (
+                    current_abs_offset + 1 if original_len > 0 else current_abs_offset
+                )
+
+                _apply_paragraph_style(doc, target_offset, p_info["level"])
                 _apply_line_formatting(
                     doc,
-                    current_abs_offset,
+                    target_offset,
                     p_info["plain"],
                     p_info["b_ranges"],
                     p_info["i_ranges"],
                     was_tracking=False,
                 )
 
-                current_abs_offset += plain_len + 1  # +1 for the \r we added
+                # Advance to the next \r marker
+                current_abs_offset += 1 + plain_len
 
     except Exception as e:
         logger.error(f"Error during styling/formatting phase: {e}")
@@ -393,7 +408,9 @@ def _apply_structured_com_replacement(
     logger.info("Reverse Sandwich Structured Replacement finished successfully.")
 
 
-def apply_com_replacement(doc: Any, app: Any, target_rng: Any, new_text: str, comment_text: Optional[str]) -> None:
+def apply_com_replacement(
+    doc: Any, app: Any, target_rng: Any, new_text: str, comment_text: Optional[str]
+) -> None:
     """
     Routes to simple or structured replacement based on new_text content.
     """
@@ -412,7 +429,9 @@ def apply_com_replacement(doc: Any, app: Any, target_rng: Any, new_text: str, co
     except Exception as e:
         logger.warning(f"Failed to rescue comments: {e}")
 
-    plain_text, b_ranges, i_ranges = parse_markdown_for_com(new_text.replace("\n", "\r"))
+    plain_text, b_ranges, i_ranges = parse_markdown_for_com(
+        new_text.replace("\n", "\r")
+    )
 
     was_tracking = doc.TrackRevisions
     original_len = target_rng.End - target_rng.Start

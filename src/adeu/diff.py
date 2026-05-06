@@ -190,14 +190,19 @@ def trim_common_context(target: str, new_val: str) -> tuple[int, int]:
             prefix_len += mlen
             suffix_len += mlen
 
-    # If the replacement introduces newlines that would separate the prefix and suffix,
-    # we must explicitly prevent suffix trimming to guarantee the suffix is physically
-    # transplanted into the new paragraph rather than left stranded in the original.
-    new_rem = new_val[
-        prefix_len : len(new_val) - suffix_len if suffix_len else len(new_val)
-    ]
-    if "\n" in new_rem or "\r" in new_rem:
-        suffix_len = 0
+    # NOTE: An earlier version of this function suppressed suffix trimming when
+    # the trimmed new_text contained newlines, on the theory that the engine
+    # needed the full suffix kept in target_text so it could "transplant" it
+    # into the new paragraph structure. That theory was wrong: the engine never
+    # implemented such a transplant, and the suppression made multi-paragraph
+    # structured replacements (where target_text spans a paragraph break)
+    # produce orphan fragments and standalone reinsertions of the surviving
+    # suffix. See debug_bug1.py and the Bug 1 investigation.
+    #
+    # With suffix trimming enabled, the engine sees a clean
+    # (target='', new=insertion) pure-insertion edit at the paragraph boundary,
+    # which it handles correctly via the existing INSERTION path
+    # (get_insertion_anchor + track_insert).
 
     return prefix_len, suffix_len
 

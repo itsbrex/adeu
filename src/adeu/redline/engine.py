@@ -410,6 +410,7 @@ class RedlineEngine:
         anchor_paragraph: Optional[Paragraph] = None,
         comment: Optional[str] = None,
         suppress_inherited: bool = False,
+        insert_before: bool = False,
     ) -> Tuple[Optional[Any], Optional[Any]]:
         """
         Inserts text. If text contains newlines, splits into multiple paragraphs.
@@ -492,8 +493,13 @@ class RedlineEngine:
                     new_ins.append(new_run)
 
                 new_p.append(new_ins)
-                # RESTORED +1: Insert AFTER the anchor paragraph, matching existing test expectations
-                body.insert(p_index + 1 + i, new_p)
+                # Bug 1 fix: if the caller explicitly requested insert_before
+                # (because the anchor is at the start of the paragraph), the
+                # new heading-styled paragraphs go BEFORE the anchor.
+                if insert_before:
+                    body.insert(p_index + i, new_p)
+                else:
+                    body.insert(p_index + 1 + i, new_p)
                 created_nodes.append((new_p, new_ins))
 
             if comment and created_nodes:
@@ -515,8 +521,45 @@ class RedlineEngine:
         )
 
         remaining_lines = lines[1:]
+
+        # Bug 1B: We need to know whether there are stranded suffix runs in
+        # current_p (runs after our anchor) BEFORE deciding the trailing-pop
+        # policy. If there are, and new_text ends with a paragraph break,
+        # we keep the trailing empty line so the loop creates a fresh
+        # destination paragraph for the suffix to land in.
+        positional_anchor = None
+        suffix_nodes: list = []
+        if current_p is not None:
+            positional_anchor = (
+                ins_elem
+                if ins_elem is not None
+                else (anchor_run._element if anchor_run is not None else None)
+            )
+            while (
+                positional_anchor is not None
+                and positional_anchor.getparent() is not current_p
+            ):
+                positional_anchor = positional_anchor.getparent()
+                if positional_anchor is current_p:
+                    positional_anchor = None
+                    break
+
+            if positional_anchor is not None:
+                relocatable_tags = {qn("w:r"), qn("w:ins"), qn("w:del")}
+                nxt = positional_anchor.getnext()
+                while nxt is not None:
+                    if nxt.tag in relocatable_tags:
+                        suffix_nodes.append(nxt)
+                    nxt = nxt.getnext()
+
+        # Decide whether to keep the trailing empty in remaining_lines.
+        # Keep it when both conditions hold: the new_text ends with a
+        # paragraph break (signalled by the trailing empty) AND we have
+        # suffix runs to relocate. Otherwise the trailing empty is just
+        # noise from a "...\n\n" terminator with no continuation.
         if remaining_lines and remaining_lines[-1] == "":
-            remaining_lines.pop()
+            if not suffix_nodes:
+                remaining_lines.pop()
 
         last_p = None
         if remaining_lines:
@@ -600,6 +643,16 @@ class RedlineEngine:
                 new_p.append(new_ins)
                 parent_body.insert(p_index + 1 + i, new_p)
                 last_p = new_p
+
+            # Now relocate the suffix nodes (already gathered above) into
+            # last_p. The destination is correct whether last_p is a
+            # content-bearing line ("...New\n\n" + suffix → suffix joins
+            # the empty trailing paragraph) or a normal line ("...New" +
+            # suffix → suffix appends to the last content line).
+            if last_p is not None and suffix_nodes:
+                for node in suffix_nodes:
+                    current_p.remove(node)
+                    last_p.append(node)
 
         return ins_elem, last_p
 
@@ -1517,6 +1570,12 @@ class RedlineEngine:
             if not anchor_run and not anchor_paragraph:
                 return False
 
+            insert_before = False
+            if anchor_run is None and anchor_paragraph is not None:
+                preceding = [s for s in active_mapper.spans if s.end == start_idx and s.paragraph == anchor_paragraph]
+                if preceding and preceding[-1].text != "\n\n":
+                    insert_before = True
+
             parent = None
             index = 0
             if anchor_run:
@@ -1541,6 +1600,7 @@ class RedlineEngine:
                     anchor_run=anchor_run,
                     anchor_paragraph=anchor_paragraph,
                     comment=edit.comment,
+                    insert_before=True,
                 )
                 if ins_elem is not None:
                     if parent.tag == qn("w:ins"):
@@ -1574,6 +1634,7 @@ class RedlineEngine:
                     anchor_run=style_run,
                     anchor_paragraph=anchor_paragraph,
                     comment=edit.comment,
+                    insert_before=insert_before,
                 )
                 if ins_elem is not None:
                     if parent.tag == qn("w:ins"):
