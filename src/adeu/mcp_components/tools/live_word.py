@@ -79,12 +79,18 @@ def _build_mock_docx_stream(word_open_xml: str) -> io.BytesIO:
 
         zip_name = raw_name.lstrip("/")
 
-        xml_match = re.search(r"<pkg:xmlData>(.*?)</pkg:xmlData>", content_block, re.DOTALL)
-        bin_match = re.search(r"<pkg:binaryData>(.*?)</pkg:binaryData>", content_block, re.DOTALL)
+        xml_match = re.search(
+            r"<pkg:xmlData>(.*?)</pkg:xmlData>", content_block, re.DOTALL
+        )
+        bin_match = re.search(
+            r"<pkg:binaryData>(.*?)</pkg:binaryData>", content_block, re.DOTALL
+        )
 
         if xml_match:
             inner_xml = xml_match.group(1).strip()
-            payload = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n{inner_xml}').encode("utf-8")
+            payload = (
+                f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n{inner_xml}'
+            ).encode("utf-8")
             parts_data[zip_name] = payload
             parts_meta.append((raw_name, content_type))
         elif bin_match:
@@ -114,15 +120,21 @@ def _build_mock_docx_stream(word_open_xml: str) -> io.BytesIO:
                         d1 = posixpath.dirname(zip_name)
                         d2 = posixpath.dirname(d1)
                         base_dir = "/" + d2
-                        resolved = posixpath.normpath(posixpath.join(base_dir, target)).lstrip("/")
+                        resolved = posixpath.normpath(
+                            posixpath.join(base_dir, target)
+                        ).lstrip("/")
 
                         if resolved not in valid_zip_names:
-                            logger.debug(f"Pruning broken relationship to {resolved} from {zip_name}")
+                            logger.debug(
+                                f"Pruning broken relationship to {resolved} from {zip_name}"
+                            )
                             tree.remove(rel)
                             modified = True
 
                 if modified:
-                    parts_data[zip_name] = ET.tostring(tree, encoding="utf-8", xml_declaration=True)
+                    parts_data[zip_name] = ET.tostring(
+                        tree, encoding="utf-8", xml_declaration=True
+                    )
             except Exception as e:
                 logger.warning(f"Failed to prune relations in {zip_name}: {e}")
 
@@ -139,12 +151,16 @@ def _build_mock_docx_stream(word_open_xml: str) -> io.BytesIO:
                 continue
             safe_name = raw_name.replace("&", "&amp;").replace('"', "&quot;")
             safe_ct = ctype.replace("&", "&amp;").replace('"', "&quot;")
-            overrides.append(f'  <Override PartName="{safe_name}" ContentType="{safe_ct}"/>')
+            overrides.append(
+                f'  <Override PartName="{safe_name}" ContentType="{safe_ct}"/>'
+            )
 
         ct_xml = (
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
             '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">\r\n'
-            f'  <Default Extension="rels" ContentType="{rels_ct}"/>\r\n' + "\r\n".join(overrides) + "\r\n</Types>\r\n"
+            f'  <Default Extension="rels" ContentType="{rels_ct}"/>\r\n'
+            + "\r\n".join(overrides)
+            + "\r\n</Types>\r\n"
         )
         zf.writestr("[Content_Types].xml", ct_xml.encode("utf-8"))
 
@@ -205,7 +221,10 @@ if sys.platform == "win32":
         target_path = str(Path(file_path).resolve()).lower()
         for i in range(1, app.Documents.Count + 1):
             doc = app.Documents(i)
-            if doc.FullName and str(Path(doc.FullName).resolve()).lower() == target_path:
+            if (
+                doc.FullName
+                and str(Path(doc.FullName).resolve()).lower() == target_path
+            ):
                 return doc
 
         raise LiveDocumentNotOpenError(f"Document {file_path} is not open in Word.")
@@ -264,8 +283,12 @@ if sys.platform == "win32":
             # exception types so the disk-fallback dispatcher in document.py can
             # distinguish "Word doesn't have this doc open, try disk" from
             # "Live Word read it fine but the request was invalid (e.g. page OOR)".
-            final_text, actual_path, py_doc = _read_active_word_document_core(clean_view, file_path)
-            await ctx.info(f"Live Word extraction successful: {len(final_text)} characters.")
+            final_text, actual_path, py_doc = _read_active_word_document_core(
+                clean_view, file_path
+            )
+            await ctx.info(
+                f"Live Word extraction successful: {len(final_text)} characters."
+            )
 
             try:
                 if mode == "outline":
@@ -283,7 +306,9 @@ if sys.platform == "win32":
         except ToolError:
             raise
 
-    def _resolve_com_revision(doc: Any, xml_id: str, mapper: Any, mapping: List[int]) -> Any:
+    def _resolve_com_revision(
+        doc: Any, xml_id: str, mapper: Any, mapping: List[int]
+    ) -> Any:
         """Finds the COM Revision by combining Semantic Text Matching with Physical Proximity."""
         spans = [s for s in mapper.spans if s.ins_id == xml_id or s.del_id == xml_id]
         if not spans:
@@ -294,7 +319,9 @@ if sys.platform == "win32":
         clean_target = "".join(c.lower() for c in target_text if c.isalnum())
 
         # Guess the COM coordinate using the map
-        approx_com_start = mapping[virt_start] if virt_start < len(mapping) else mapping[-1]
+        approx_com_start = (
+            mapping[virt_start] if virt_start < len(mapping) else mapping[-1]
+        )
 
         best_match = None
         best_score = float("inf")
@@ -308,7 +335,11 @@ if sys.platform == "win32":
                 is_match = False
                 if not clean_target and not clean_com:
                     is_match = True
-                elif clean_target and clean_com and (clean_target in clean_com or clean_com in clean_target):
+                elif (
+                    clean_target
+                    and clean_com
+                    and (clean_target in clean_com or clean_com in clean_target)
+                ):
                     is_match = True
 
                 if is_match:
@@ -331,7 +362,11 @@ if sys.platform == "win32":
             c = doc.Comments(i)
             try:
                 clean_com = "".join(ch.lower() for ch in c.Range.Text if ch.isalnum())
-                if clean_target == clean_com or clean_target in clean_com or clean_com in clean_target:
+                if (
+                    clean_target == clean_com
+                    or clean_target in clean_com
+                    or clean_com in clean_target
+                ):
                     return c
             except Exception:
                 pass
@@ -403,8 +438,16 @@ if sys.platform == "win32":
             cached_mapping = None
 
         try:
-            actions = [c for c in changes if isinstance(c, (AcceptChange, RejectChange, ReplyComment))]
-            edits = [c for c in changes if isinstance(c, (ModifyText, InsertTableRow, DeleteTableRow))]
+            actions = [
+                c
+                for c in changes
+                if isinstance(c, (AcceptChange, RejectChange, ReplyComment))
+            ]
+            edits = [
+                c
+                for c in changes
+                if isinstance(c, (ModifyText, InsertTableRow, DeleteTableRow))
+            ]
 
             # --- FIX 1: PROCESS ACTIONS FIRST & SURVIVE DRIFT ---
             if actions:
@@ -445,10 +488,14 @@ if sys.platform == "win32":
                                 stats["applied"] += 1
                             else:
                                 stats["failed"] += 1
-                                stats["skipped_details"].append(f"- Comment {act.target_id} not found.")
+                                stats["skipped_details"].append(
+                                    f"- Comment {act.target_id} not found."
+                                )
                     except Exception as e:
                         stats["failed"] += 1
-                        stats["skipped_details"].append(f"- Failed to apply action {act.type}: {e}")
+                        stats["skipped_details"].append(
+                            f"- Failed to apply action {act.type}: {e}"
+                        )
 
                 if stats["applied"] > 0:
                     _invalidate_haystack()
@@ -465,18 +512,50 @@ if sys.platform == "win32":
                         continue
 
                     if isinstance(change, ModifyText):
-                        clean_target = strip_markdown_formatting(strip_critic_markup(change.target_text))
+                        clean_target = strip_markdown_formatting(
+                            strip_critic_markup(change.target_text)
+                        )
                         raw_text, current_text, mapping = _get_haystack()
-                        start_idx, end_idx = _find_match_in_text(current_text, clean_target)
+                        start_idx, end_idx = _find_match_in_text(
+                            current_text, clean_target
+                        )
 
                         if start_idx != -1:
-                            # --- FIX 2: AMBIGUITY CHECK ---
-                            next_start, _ = _find_match_in_text(current_text[end_idx:], clean_target)
-                            if next_start != -1:
+                            # --- AMBIGUITY CHECK (uses shared formatter for parity with disk path) ---
+                            from adeu.markup import format_ambiguity_error
+
+                            # Enumerate ALL matches, not just the second one,
+                            # so we can produce the same multi-example message
+                            # the disk path produces.
+                            all_positions: list[tuple[int, int]] = [
+                                (start_idx, end_idx)
+                            ]
+                            search_offset = end_idx
+                            while True:
+                                rel_start, rel_end = _find_match_in_text(
+                                    current_text[search_offset:], clean_target
+                                )
+                                if rel_start == -1:
+                                    break
+                                abs_start = search_offset + rel_start
+                                abs_end = search_offset + rel_end
+                                all_positions.append((abs_start, abs_end))
+                                search_offset = abs_end
+
+                            if len(all_positions) > 1:
                                 stats["failed"] += 1
+                                # The Live Word edit loop tracks the index of
+                                # the current change in `change`. We mirror the
+                                # disk path's 1-based numbering using the
+                                # position of `change` in the edits list.
+                                edit_index = edits.index(change) + 1
                                 stats["skipped_details"].append(
-                                    f"- Ambiguous target: '{change.target_text[:40]}...' appears multiple times. "
-                                    "Add surrounding context to uniquely identify the location."
+                                    format_ambiguity_error(
+                                        edit_index=edit_index,
+                                        target_text=change.target_text,
+                                        haystack=current_text,
+                                        match_positions=all_positions,
+                                    )
                                 )
                                 continue
 
@@ -484,8 +563,13 @@ if sys.platform == "win32":
                             table_edit_success = False
 
                             if is_table_edit:
-                                t_cells = [c.strip() for c in change.target_text.split("|")]
-                                n_cells = [c.strip() for c in (change.new_text or "").split("|")]
+                                t_cells = [
+                                    c.strip() for c in change.target_text.split("|")
+                                ]
+                                n_cells = [
+                                    c.strip()
+                                    for c in (change.new_text or "").split("|")
+                                ]
 
                                 if len(t_cells) == len(n_cells):
                                     anchor_idx = -1
@@ -497,22 +581,38 @@ if sys.platform == "win32":
                                             break
 
                                     if anchor_idx != -1:
-                                        clean_anchor = strip_markdown_formatting(strip_critic_markup(anchor_text))
-                                        local_anchor_start = clean_target.find(clean_anchor)
+                                        clean_anchor = strip_markdown_formatting(
+                                            strip_critic_markup(anchor_text)
+                                        )
+                                        local_anchor_start = clean_target.find(
+                                            clean_anchor
+                                        )
                                         if local_anchor_start == -1:
                                             local_anchor_start = 0
 
-                                        anchor_start_idx = start_idx + local_anchor_start
-                                        anchor_end_idx = anchor_start_idx + len(clean_anchor)
+                                        anchor_start_idx = (
+                                            start_idx + local_anchor_start
+                                        )
+                                        anchor_end_idx = anchor_start_idx + len(
+                                            clean_anchor
+                                        )
 
                                         actual_anchor_start = mapping[anchor_start_idx]
                                         actual_anchor_end = mapping[anchor_end_idx]
 
-                                        exact_anchor_substring = raw_text[actual_anchor_start:actual_anchor_end]
+                                        exact_anchor_substring = raw_text[
+                                            actual_anchor_start:actual_anchor_end
+                                        ]
 
-                                        search_start = max(0, actual_anchor_start - 5000)
-                                        search_end = min(doc.Content.End, actual_anchor_end + 5000)
-                                        rng = doc.Range(Start=search_start, End=search_end)
+                                        search_start = max(
+                                            0, actual_anchor_start - 5000
+                                        )
+                                        search_end = min(
+                                            doc.Content.End, actual_anchor_end + 5000
+                                        )
+                                        rng = doc.Range(
+                                            Start=search_start, End=search_end
+                                        )
 
                                         search_text = (
                                             exact_anchor_substring[:250]
@@ -529,7 +629,9 @@ if sys.platform == "win32":
                                             anchor_cell = rng.Cells(1)
 
                                             target_comment_idx = 0
-                                            for i, (t, n) in enumerate(zip(t_cells, n_cells, strict=True)):
+                                            for i, (t, n) in enumerate(
+                                                zip(t_cells, n_cells, strict=True)
+                                            ):
                                                 if t != n:
                                                     target_comment_idx = i
                                                     break
@@ -539,9 +641,9 @@ if sys.platform == "win32":
                                                 t_c = t_cells[i]
                                                 n_c = n_cells[i]
 
-                                                should_comment = (change.comment is not None) and (
-                                                    i == target_comment_idx
-                                                )
+                                                should_comment = (
+                                                    change.comment is not None
+                                                ) and (i == target_comment_idx)
 
                                                 if t_c != n_c or should_comment:
                                                     target_cell = anchor_cell
@@ -549,11 +651,15 @@ if sys.platform == "win32":
                                                     if diff > 0:
                                                         for _ in range(diff):
                                                             if target_cell:
-                                                                target_cell = target_cell.Next
+                                                                target_cell = (
+                                                                    target_cell.Next
+                                                                )
                                                     elif diff < 0:
                                                         for _ in range(-diff):
                                                             if target_cell:
-                                                                target_cell = target_cell.Previous
+                                                                target_cell = (
+                                                                    target_cell.Previous
+                                                                )
 
                                                     if not target_cell:
                                                         continue
@@ -577,7 +683,9 @@ if sys.platform == "win32":
                                                                     change.comment,
                                                                 )
                                                             except Exception as e:
-                                                                logger.warning(f"Failed to attach comment to cell: {e}")
+                                                                logger.warning(
+                                                                    f"Failed to attach comment to cell: {e}"
+                                                                )
                                                         cells_updated += 1
                                                         continue
 
@@ -593,13 +701,19 @@ if sys.platform == "win32":
                                                         t_c,
                                                     )
 
-                                                    replace_rng = doc.Range(Start=final_start, End=final_end)
+                                                    replace_rng = doc.Range(
+                                                        Start=final_start, End=final_end
+                                                    )
                                                     apply_com_replacement(
                                                         doc,
                                                         app,
                                                         replace_rng,
                                                         final_new_text,
-                                                        (change.comment if should_comment else None),
+                                                        (
+                                                            change.comment
+                                                            if should_comment
+                                                            else None
+                                                        ),
                                                     )
                                                     cells_updated += 1
 
@@ -616,7 +730,11 @@ if sys.platform == "win32":
                                 search_end = min(doc.Content.End, actual_end + 5000)
                                 rng = doc.Range(Start=search_start, End=search_end)
 
-                                search_text = exact_substring[:250] if len(exact_substring) > 250 else exact_substring
+                                search_text = (
+                                    exact_substring[:250]
+                                    if len(exact_substring) > 250
+                                    else exact_substring
+                                )
 
                                 rng.Find.ClearFormatting()
                                 rng.Find.Text = search_text
@@ -631,24 +749,34 @@ if sys.platform == "win32":
 
                                     if change.target_text == effective_new:
                                         if change.comment:
-                                            replace_rng = doc.Range(Start=actual_start, End=actual_end)
+                                            replace_rng = doc.Range(
+                                                Start=actual_start, End=actual_end
+                                            )
                                             try:
-                                                doc.Comments.Add(replace_rng, change.comment)
+                                                doc.Comments.Add(
+                                                    replace_rng, change.comment
+                                                )
                                             except Exception as e:
-                                                logger.warning(f"Failed to attach comment for same->same edit: {e}")
+                                                logger.warning(
+                                                    f"Failed to attach comment for same->same edit: {e}"
+                                                )
                                         stats["applied"] += 1
                                         _invalidate_haystack()
                                         continue
 
-                                    actual_start, actual_end, final_new_text = _shrink_replacement_range(
-                                        exact_substring,
-                                        effective_new,
-                                        actual_start,
-                                        actual_end,
-                                        change.target_text,
+                                    actual_start, actual_end, final_new_text = (
+                                        _shrink_replacement_range(
+                                            exact_substring,
+                                            effective_new,
+                                            actual_start,
+                                            actual_end,
+                                            change.target_text,
+                                        )
                                     )
 
-                                    replace_rng = doc.Range(Start=actual_start, End=actual_end)
+                                    replace_rng = doc.Range(
+                                        Start=actual_start, End=actual_end
+                                    )
                                     apply_com_replacement(
                                         doc,
                                         app,
@@ -672,7 +800,9 @@ if sys.platform == "win32":
                                         if change.target_text == effective_new:
                                             if change.comment:
                                                 try:
-                                                    doc.Comments.Add(replace_rng, change.comment)
+                                                    doc.Comments.Add(
+                                                        replace_rng, change.comment
+                                                    )
                                                 except Exception as e:
                                                     logger.warning(
                                                         f"Failed to attach comment for same->same fallback edit: {e}"
@@ -681,15 +811,19 @@ if sys.platform == "win32":
                                             _invalidate_haystack()
                                             continue
 
-                                        actual_start, actual_end, final_new_text = _shrink_replacement_range(
-                                            exact_substring,
-                                            effective_new,
-                                            doc_rng.Start,
-                                            doc_rng.Start + len(exact_substring),
-                                            change.target_text,
+                                        actual_start, actual_end, final_new_text = (
+                                            _shrink_replacement_range(
+                                                exact_substring,
+                                                effective_new,
+                                                doc_rng.Start,
+                                                doc_rng.Start + len(exact_substring),
+                                                change.target_text,
+                                            )
                                         )
 
-                                        replace_rng = doc.Range(Start=actual_start, End=actual_end)
+                                        replace_rng = doc.Range(
+                                            Start=actual_start, End=actual_end
+                                        )
                                         apply_com_replacement(
                                             doc,
                                             app,
@@ -709,14 +843,18 @@ if sys.platform == "win32":
                             stats["skipped_details"].append(
                                 f"- Failed to find target text: '{change.target_text[:40]}...'"
                             )
-                            logger.warning(f"Could not find target text: '{change.target_text[:30]}...'")
+                            logger.warning(
+                                f"Could not find target text: '{change.target_text[:30]}...'"
+                            )
 
                 except Exception as e:
                     stats["failed"] += 1
                     stats["skipped_details"].append(
                         f"- Failed to apply change {getattr(change, 'type', 'Unknown')}: {e}"
                     )
-                    logger.error(f"Failed to apply change {getattr(change, 'type', 'Unknown')}: {e}")
+                    logger.error(
+                        f"Failed to apply change {getattr(change, 'type', 'Unknown')}: {e}"
+                    )
 
         finally:
             app.UserName = original_user
@@ -748,9 +886,15 @@ if sys.platform == "win32":
 
         # Isolate the exact markdown hunks
         t_hunk = target_text_markdown[
-            p_len_md : (len(target_text_markdown) - s_len_md if s_len_md else len(target_text_markdown))
+            p_len_md : (
+                len(target_text_markdown) - s_len_md
+                if s_len_md
+                else len(target_text_markdown)
+            )
         ]
-        n_hunk = effective_new[p_len_md : len(effective_new) - s_len_md if s_len_md else len(effective_new)]
+        n_hunk = effective_new[
+            p_len_md : len(effective_new) - s_len_md if s_len_md else len(effective_new)
+        ]
 
         # Build offset map for exact_substring -> normalized current_text format
         norm_exact = ""
@@ -796,9 +940,13 @@ if sys.platform == "win32":
 
         # Map back to exact_substring bounds safely
         original_actual_start = actual_start
-        if p_len_norm < len(map_norm_to_exact) and (p_len_norm + match_len_norm) < len(map_norm_to_exact):
+        if p_len_norm < len(map_norm_to_exact) and (p_len_norm + match_len_norm) < len(
+            map_norm_to_exact
+        ):
             actual_start = original_actual_start + map_norm_to_exact[p_len_norm]
-            actual_end = original_actual_start + map_norm_to_exact[p_len_norm + match_len_norm]
+            actual_end = (
+                original_actual_start + map_norm_to_exact[p_len_norm + match_len_norm]
+            )
             return actual_start, actual_end, n_hunk
 
         return actual_start, actual_end, effective_new
@@ -837,7 +985,9 @@ if sys.platform == "win32":
             stats["applied"] += 1
         else:
             stats["failed"] += 1
-            stats["skipped_details"].append(f"- Revision {change.target_id} not found or lost to drift.")
+            stats["skipped_details"].append(
+                f"- Revision {change.target_id} not found or lost to drift."
+            )
             logger.warning(f"Revision {change.target_id} not found or lost to drift.")
 
     def _process_reject_change(stats, revisions_map, change):
@@ -846,7 +996,9 @@ if sys.platform == "win32":
             stats["applied"] += 1
         else:
             stats["failed"] += 1
-            stats["skipped_details"].append(f"- Revision {change.target_id} not found or lost to drift.")
+            stats["skipped_details"].append(
+                f"- Revision {change.target_id} not found or lost to drift."
+            )
             logger.warning(f"Revision {change.target_id} not found or lost to drift.")
 
     def _process_reply_comment(stats, doc, change):
@@ -878,7 +1030,9 @@ if sys.platform == "win32":
         await ctx.info(f"Applying {len(changes)} changes to live Word document...")
         try:
             stats = _process_active_word_batch_core(changes, author_name, file_path)
-            await ctx.info(f"Live Word batch complete. Applied: {stats['applied']}, Failed: {stats['failed']}.")
+            await ctx.info(
+                f"Live Word batch complete. Applied: {stats['applied']}, Failed: {stats['failed']}."
+            )
             res = f"[Live Word Mode] Batch complete. Applied: {stats['applied']}, Failed: {stats['failed']}."
             if "author_overridden_by_word" in stats:
                 res += (
@@ -892,7 +1046,9 @@ if sys.platform == "win32":
         except Exception as e:
             raise ToolError(str(e)) from e
 
-    async def open_word_document_impl(ctx: Context, file_path: str, visible: bool = True) -> str:
+    async def open_word_document_impl(
+        ctx: Context, file_path: str, visible: bool = True
+    ) -> str:
         await ctx.info(f"Opening {file_path} in Word...")
         pythoncom.CoInitialize()
         try:
@@ -970,7 +1126,9 @@ else:
     ) -> str:
         raise NotImplementedError("Live Word is only supported on Windows.")
 
-    async def open_word_document_impl(ctx: Context, file_path: str, visible: bool = True) -> str:
+    async def open_word_document_impl(
+        ctx: Context, file_path: str, visible: bool = True
+    ) -> str:
         raise NotImplementedError("Live Word is only supported on Windows.")
 
     async def save_active_word_document_impl(
