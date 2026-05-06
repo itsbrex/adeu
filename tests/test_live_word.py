@@ -587,3 +587,82 @@ def test_live_word_structured_insertion_at_boundary(active_word_app):
         assert "Editorial NoteAlthough" not in content  # Ensure they didn't fuse
 
     run_async(run_test())
+
+
+# FILE: tests/test_live_word.py
+def test_live_word_bug_02_structured_insertion_formatting_offsets(active_word_app):
+    """
+    Verifies Bug 2a, 2b, 2c fixes:
+    1. Heading styles are properly applied without dropping markers.
+    2. Paragraph breaks in pure-insertions (original_len=0) are not incorrectly deleted.
+    3. Bold/Italic formatting applies to exact character offsets without off-by-one shifts.
+    """
+    from adeu.models import ModifyText
+
+    app, doc = active_word_app
+    ctx = get_mock_ctx()
+
+    # 1. Setup Document State
+    doc.Range(0, doc.Content.End).Text = "OUR MISSION\nAlthough we have made outstanding progress over the past year.\n"
+    try:
+        doc.Paragraphs(1).Range.Style = -2  # wdStyleHeading1
+    except Exception:
+        pass
+
+    async def run_test():
+        edit = ModifyText(
+            type="modify",
+            target_text="# OUR MISSION\n\nAlthough we have made outstanding progress",
+            new_text=(
+                "# OUR MISSION\n\n## Editorial Note\n\n"
+                "This section was reviewed and **expanded** by the editorial team in _October 2024_.\n\n"
+                "Although we have made outstanding progress"
+            ),
+            comment=None,
+        )
+
+        res = await process_active_word_batch(ctx=ctx, changes=[edit], author_name="QA")
+        assert "Applied: 1" in res
+
+        # 2. Verify via MCP Extraction (CriticMarkup check)
+        content = extract_content(await read_active_word_document(ctx, clean_view=False))
+
+        # Verify that the Markdown features were tracked cleanly without mangling
+        assert "## {++Editorial Note++}" in content, "Heading 2 style marker mangled or dropped"
+        assert "{++This section was reviewed and **expanded** by the editorial team in _October 2024_.++}" in content, (
+            "Bold/Italic formatting boundaries shifted"
+        )
+
+        # 3. Verify via Direct COM Inspection (No invisible off-by-one corruption)
+        full_text = doc.Content.Text
+
+        # Verify Heading 2 Style application (Bug 2a & 2b)
+        para_2_text = doc.Paragraphs(2).Range.Text
+        assert "Editorial Note" in para_2_text
+        assert "This section" not in para_2_text, "Paragraphs fused together! (Bug 2b)"
+
+        # Verify Exact Bold Offsets (Bug 2c)
+        exp_idx = full_text.find("expanded")
+        assert exp_idx != -1, "Text 'expanded' not found in COM document"
+
+        is_space_bold = doc.Range(exp_idx - 1, exp_idx).Font.Bold
+        is_e_bold = doc.Range(exp_idx, exp_idx + 1).Font.Bold
+        is_d_bold = doc.Range(exp_idx + 7, exp_idx + 8).Font.Bold
+        is_after_bold = doc.Range(exp_idx + 8, exp_idx + 9).Font.Bold
+
+        assert not is_space_bold, "Space before 'expanded' incorrectly bolded (Shifted right)"
+        assert is_e_bold, "'e' in 'expanded' not bolded"
+        assert is_d_bold, "'d' in 'expanded' not bolded"
+        assert not is_after_bold, "Space after 'expanded' incorrectly bolded (Shifted right)"
+
+        # Verify Exact Italic Offsets (Bug 2c)
+        oct_idx = full_text.find("October 2024")
+        assert oct_idx != -1
+
+        is_o_italic = doc.Range(oct_idx, oct_idx + 1).Font.Italic
+        is_period_italic = doc.Range(oct_idx + 12, oct_idx + 13).Font.Italic
+
+        assert is_o_italic, "'O' in 'October' not italicized"
+        assert not is_period_italic, "Period after '2024' incorrectly italicized (Shifted right)"
+
+    run_async(run_test())

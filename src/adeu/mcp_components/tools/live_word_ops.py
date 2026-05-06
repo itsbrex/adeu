@@ -331,10 +331,10 @@ def _apply_structured_com_replacement(
 
     # 6. Execute the explicit Deletion LAST
     logger.debug("Executing deletion of original text to finalize Sandwich.")
-    orig_rng_to_delete = doc.Range(actual_base + len(line_1), after_orig)
-    if orig_rng_to_delete.Start < orig_rng_to_delete.End:
-        orig_rng_to_delete.Delete()
-
+    if original_len > 0:
+        orig_rng_to_delete = doc.Range(actual_base + len(line_1), after_orig)
+        if orig_rng_to_delete.Start < orig_rng_to_delete.End:
+            orig_rng_to_delete.Delete()
     # === SACRIFICIAL X CLEANUP ===
     doc.TrackRevisions = False
     doc.Range(base_start, base_start + 1).Delete()
