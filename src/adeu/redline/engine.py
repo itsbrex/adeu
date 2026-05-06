@@ -43,6 +43,152 @@ class BatchValidationError(Exception):
         self.errors = errors
 
 
+def validate_edit_strings(
+    edits: List[Union["ModifyText", "InsertTableRow", "DeleteTableRow"]],
+) -> List[str]:
+    """
+    Performs document-context-free validation on a batch of edits.
+
+    Checks the shape of `target_text` and `new_text` strings for forbidden
+    constructs:
+      - Manual CriticMarkup tags ({++, {--, {>>, {==) in new_text
+      - Heading levels greater than 6 (####### Title)
+      - Footnote/endnote marker insertion or deletion via text replace
+      - Hyperlink structural manipulation via text replace
+      - Cross-reference marker manipulation
+      - Internal anchor `{#name}` modification
+
+    These checks need no document context. Both the disk pipeline (via
+    `RedlineEngine.validate_edits`) and the Live Word pipeline call this
+    function to ensure consistent rejection of malformed edit shapes.
+
+    The remaining document-aware checks (target text not found, ambiguous
+    match, modification targeting Structural Appendix, edits overlapping
+    foreign-author insertions) live inside `RedlineEngine.validate_edits`
+    because they require a loaded Document and DocumentMapper.
+
+    Args:
+        edits: list of edit operations to validate.
+
+    Returns:
+        List of error message strings. Empty if all edits pass these checks.
+    """
+    errors: List[str] = []
+
+    for i, edit in enumerate(edits):
+        t_text = edit.target_text or ""
+        n_text = getattr(edit, "new_text", "") or ""
+
+        # VAL-CRIT-6: CriticMarkup Hallucination Prevention
+        if "{++" in n_text or "{--" in n_text or "{>>" in n_text or "{==" in n_text:
+            errors.append(
+                f"- Edit {i + 1} Failed: Do not manually write CriticMarkup tags "
+                "({++, {--, {>>, {==) in `new_text`. The engine handles redlining "
+                "automatically. To add a comment, use the `comment` parameter."
+            )
+
+        # VAL-CRIT-3 & VAL-CRIT-4: Footnotes/Endnotes Structural Integrity
+        if "[^" in t_text or "[^" in n_text:
+            t_fns = re.findall(r"\[\^(?:fn|en)-[^\]]+\]", t_text)
+            n_fns = re.findall(r"\[\^(?:fn|en)-[^\]]+\]", n_text)
+            if sorted(t_fns) != sorted(n_fns):
+                if len(n_fns) > len(t_fns) or any(n_fns.count(f) > t_fns.count(f) for f in n_fns):
+                    errors.append(
+                        f"- Edit {i + 1} Failed: Cannot insert footnote/endnote markers via text replace. "
+                        "Markers like `[^fn-N]` are read-only projections. Use Word's References menu."
+                    )
+                else:
+                    errors.append(
+                        f"- Edit {i + 1} Failed: Cannot delete footnote/endnote references via text replace. "
+                        "The marker corresponds to a structural XML element."
+                    )
+
+        # VAL-CRIT-5: Hyperlink Structural Integrity
+        if "](" in t_text or "](" in n_text:
+            # Exclude cross-references using a negative lookahead for `~` immediately after `[`
+            t_links = re.findall(r"\[(?!~)[^\]]+\]\([^)]+\)", t_text)
+            n_links = re.findall(r"\[(?!~)[^\]]+\]\([^)]+\)", n_text)
+            if len(t_links) != len(n_links):
+                if len(n_links) > len(t_links):
+                    errors.append(
+                        f"- Edit {i + 1} Failed: Cannot insert hyperlinks via text replace. "
+                        "Use a dedicated structural operation."
+                    )
+                else:
+                    errors.append(
+                        f"- Edit {i + 1} Failed: Cannot delete hyperlinks via text replace. "
+                        "The marker corresponds to a structural XML element."
+                    )
+            elif len(t_links) > 1 and sorted(t_links) != sorted(n_links):
+                errors.append(
+                    f"- Edit {i + 1} Failed: Can only edit or retarget one hyperlink per text replacement. "
+                    "Please split into multiple edits."
+                )
+
+        # VAL-CRIT-5: Cross-reference Structural Integrity
+        if "[~" in t_text or "[~" in n_text:
+            t_xrefs_list = re.findall(r"\[~[^~]+~\]\(#[^\)]+\)", t_text)
+            n_xrefs_list = re.findall(r"\[~[^~]+~\]\(#[^\)]+\)", n_text)
+
+            if len(t_xrefs_list) != len(n_xrefs_list):
+                if len(n_xrefs_list) > len(t_xrefs_list):
+                    errors.append(
+                        f"- Edit {i + 1} Failed: Cannot insert cross-references via text replace. "
+                        "Markers are read-only projections."
+                    )
+                else:
+                    errors.append(
+                        f"- Edit {i + 1} Failed: Cannot delete cross-references via text replace. "
+                        "The marker corresponds to a structural XML element."
+                    )
+            else:
+                target_xrefs = dict(re.findall(r"\[~([^~]+)~\]\(#([^\)]+)\)", t_text))
+                new_xrefs = dict(re.findall(r"\[~([^~]+)~\]\(#([^\)]+)\)", n_text))
+                for t_ref_text, t_hash in target_xrefs.items():
+                    if t_hash in new_xrefs.values():
+                        for n_ref_text, n_hash in new_xrefs.items():
+                            if n_hash == t_hash and n_ref_text != t_ref_text:
+                                errors.append(
+                                    f"- Edit {i + 1} Failed: Cross-reference display text is computed. "
+                                    "To change it, edit the heading or paragraph at the target instead."
+                                )
+                    elif t_ref_text in new_xrefs:
+                        if new_xrefs[t_ref_text] != t_hash:
+                            errors.append(
+                                f"- Edit {i + 1} Failed: Directly retargeting cross-references via text "
+                                "replacement is disallowed to prevent dependency corruption."
+                            )
+                    else:
+                        errors.append(
+                            f"- Edit {i + 1} Failed: Modifying cross-reference markers is disallowed "
+                            "to prevent dependency corruption."
+                        )
+
+        # VAL-OBS-9: Internal Anchor Structural Integrity
+        if "{#" in t_text or "{#" in n_text:
+            t_anchors = re.findall(r"\{#[^\}]+\}", t_text)
+            n_anchors = re.findall(r"\{#[^\}]+\}", n_text)
+            for anchor in n_anchors:
+                if n_anchors.count(anchor) > t_anchors.count(anchor):
+                    errors.append(
+                        f"- Edit {i + 1} Failed: Cannot modify or insert internal anchor markers (`{{#...}}`). "
+                        "These represent structural XML bookmarks."
+                    )
+                    break
+
+        # Heading level > 6 (only meaningful for ModifyText with new_text)
+        if isinstance(edit, ModifyText) and edit.new_text:
+            for line in edit.new_text.splitlines():
+                stripped = line.lstrip()
+                if stripped.startswith("#######"):
+                    level = len(stripped) - len(stripped.lstrip("#"))
+                    if stripped[level:].startswith(" ") or not stripped[level:]:
+                        errors.append(f"- Edit {i + 1} Failed: Heading level {level} is not supported (maximum is 6).")
+                        break
+
+    return errors
+
+
 class RedlineEngine:
     def __init__(self, doc_stream: BytesIO, author: str = "Adeu AI"):
         self.doc = Document(doc_stream)
@@ -252,6 +398,7 @@ class RedlineEngine:
         anchor_paragraph: Optional[Paragraph] = None,
         comment: Optional[str] = None,
         suppress_inherited: bool = False,
+        insert_before: bool = False,
     ) -> Tuple[Optional[Any], Optional[Any]]:
         """
         Inserts text. If text contains newlines, splits into multiple paragraphs.
@@ -332,8 +479,13 @@ class RedlineEngine:
                     new_ins.append(new_run)
 
                 new_p.append(new_ins)
-                # RESTORED +1: Insert AFTER the anchor paragraph, matching existing test expectations
-                body.insert(p_index + 1 + i, new_p)
+                # Bug 1 fix: if the caller explicitly requested insert_before
+                # (because the anchor is at the start of the paragraph), the
+                # new heading-styled paragraphs go BEFORE the anchor.
+                if insert_before:
+                    body.insert(p_index + i, new_p)
+                else:
+                    body.insert(p_index + 1 + i, new_p)
                 created_nodes.append((new_p, new_ins))
 
             if comment and created_nodes:
@@ -351,8 +503,40 @@ class RedlineEngine:
         ins_elem = self._track_insert_inline(first_line, anchor_run, suppress_inherited=suppress_inherited)
 
         remaining_lines = lines[1:]
+
+        # Bug 1B: We need to know whether there are stranded suffix runs in
+        # current_p (runs after our anchor) BEFORE deciding the trailing-pop
+        # policy. If there are, and new_text ends with a paragraph break,
+        # we keep the trailing empty line so the loop creates a fresh
+        # destination paragraph for the suffix to land in.
+        positional_anchor = None
+        suffix_nodes: list = []
+        if current_p is not None:
+            positional_anchor = (
+                ins_elem if ins_elem is not None else (anchor_run._element if anchor_run is not None else None)
+            )
+            while positional_anchor is not None and positional_anchor.getparent() is not current_p:
+                positional_anchor = positional_anchor.getparent()
+                if positional_anchor is current_p:
+                    positional_anchor = None
+                    break
+
+            if positional_anchor is not None:
+                relocatable_tags = {qn("w:r"), qn("w:ins"), qn("w:del")}
+                nxt = positional_anchor.getnext()
+                while nxt is not None:
+                    if nxt.tag in relocatable_tags:
+                        suffix_nodes.append(nxt)
+                    nxt = nxt.getnext()
+
+        # Decide whether to keep the trailing empty in remaining_lines.
+        # Keep it when both conditions hold: the new_text ends with a
+        # paragraph break (signalled by the trailing empty) AND we have
+        # suffix runs to relocate. Otherwise the trailing empty is just
+        # noise from a "...\n\n" terminator with no continuation.
         if remaining_lines and remaining_lines[-1] == "":
-            remaining_lines.pop()
+            if not suffix_nodes:
+                remaining_lines.pop()
 
         last_p = None
         if remaining_lines:
@@ -431,6 +615,16 @@ class RedlineEngine:
                 new_p.append(new_ins)
                 parent_body.insert(p_index + 1 + i, new_p)
                 last_p = new_p
+
+            # Now relocate the suffix nodes (already gathered above) into
+            # last_p. The destination is correct whether last_p is a
+            # content-bearing line ("...New\n\n" + suffix → suffix joins
+            # the empty trailing paragraph) or a normal line ("...New" +
+            # suffix → suffix appends to the last content line).
+            if last_p is not None and suffix_nodes:
+                for node in suffix_nodes:
+                    current_p.remove(node)
+                    last_p.append(node)
 
         return ins_elem, last_p
 
@@ -695,119 +889,11 @@ class RedlineEngine:
 
         # Ensure base mapper is ready
         self.mapper._build_map()
-
+        # Category A: document-context-free string-shape validation.
+        # Delegated to module-level helper so the Live Word path can call the
+        # same checks. See validate_edit_strings docstring for what is checked.
+        errors.extend(validate_edit_strings(edits))
         for i, edit in enumerate(edits):
-            t_text = edit.target_text or ""
-            n_text = getattr(edit, "new_text", "") or ""
-
-            # VAL-CRIT-6: CriticMarkup Hallucination Prevention
-            if "{++" in n_text or "{--" in n_text or "{>>" in n_text or "{==" in n_text:
-                errors.append(
-                    f"- Edit {i + 1} Failed: Do not manually write CriticMarkup tags ({{++, {{--, {{>>, {{==) "
-                    "in `new_text`. The engine handles redlining automatically. "
-                    "To add a comment, use the `comment` parameter."
-                )
-
-            # VAL-CRIT-3 & VAL-CRIT-4: Footnotes/Endnotes Structural Integrity
-            if "[^" in t_text or "[^" in n_text:
-                t_fns = re.findall(r"\[\^(?:fn|en)-[^\]]+\]", t_text)
-                n_fns = re.findall(r"\[\^(?:fn|en)-[^\]]+\]", n_text)
-                if sorted(t_fns) != sorted(n_fns):
-                    if len(n_fns) > len(t_fns) or any(n_fns.count(f) > t_fns.count(f) for f in n_fns):
-                        errors.append(
-                            f"- Edit {i + 1} Failed: Cannot insert footnote/endnote markers via text replace. "
-                            "Markers like `[^fn-N]` are read-only projections. Use Word's References menu."
-                        )
-                    else:
-                        errors.append(
-                            f"- Edit {i + 1} Failed: Cannot delete footnote/endnote references via text replace. "
-                            "The marker corresponds to a structural XML element."
-                        )
-
-            # VAL-CRIT-5: Hyperlink Structural Integrity
-            if "](" in t_text or "](" in n_text:
-                # Exclude cross-references using a negative lookahead for `~` immediately after `[`
-                t_links = re.findall(r"\[(?!~)[^\]]+\]\([^)]+\)", t_text)
-                n_links = re.findall(r"\[(?!~)[^\]]+\]\([^)]+\)", n_text)
-                if len(t_links) != len(n_links):
-                    if len(n_links) > len(t_links):
-                        errors.append(
-                            f"- Edit {i + 1} Failed: Cannot insert hyperlinks via text replace. "
-                            "Use a dedicated structural operation."
-                        )
-                    else:
-                        errors.append(
-                            f"- Edit {i + 1} Failed: Cannot delete hyperlinks via text replace. "
-                            "The marker corresponds to a structural XML element."
-                        )
-                elif len(t_links) > 1 and sorted(t_links) != sorted(n_links):
-                    errors.append(
-                        f"- Edit {i + 1} Failed: Can only edit or retarget one hyperlink per text replacement. "
-                        "Please split into multiple edits."
-                    )
-
-            # VAL-CRIT-5: Cross-reference Structural Integrity
-            if "[~" in t_text or "[~" in n_text:
-                t_xrefs_list = re.findall(r"\[~[^~]+~\]\(#[^\)]+\)", t_text)
-                n_xrefs_list = re.findall(r"\[~[^~]+~\]\(#[^\)]+\)", n_text)
-
-                if len(t_xrefs_list) != len(n_xrefs_list):
-                    if len(n_xrefs_list) > len(t_xrefs_list):
-                        errors.append(
-                            f"- Edit {i + 1} Failed: Cannot insert cross-references via text replace. "
-                            "Markers are read-only projections."
-                        )
-                    else:
-                        errors.append(
-                            f"- Edit {i + 1} Failed: Cannot delete cross-references via text replace. "
-                            "The marker corresponds to a structural XML element."
-                        )
-                else:
-                    target_xrefs = dict(re.findall(r"\[~([^~]+)~\]\(#([^\)]+)\)", t_text))
-                    new_xrefs = dict(re.findall(r"\[~([^~]+)~\]\(#([^\)]+)\)", n_text))
-                    for t_ref_text, t_hash in target_xrefs.items():
-                        if t_hash in new_xrefs.values():
-                            for n_ref_text, n_hash in new_xrefs.items():
-                                if n_hash == t_hash and n_ref_text != t_ref_text:
-                                    errors.append(
-                                        f"- Edit {i + 1} Failed: Cross-reference display text is computed. "
-                                        "To change it, edit the heading or paragraph at the target instead."
-                                    )
-                        elif t_ref_text in new_xrefs:
-                            if new_xrefs[t_ref_text] != t_hash:
-                                errors.append(
-                                    f"- Edit {i + 1} Failed: Directly retargeting cross-references via text "
-                                    "replacement is disallowed to prevent dependency corruption."
-                                )
-                        else:
-                            errors.append(
-                                f"- Edit {i + 1} Failed: Modifying cross-reference markers is disallowed "
-                                "to prevent dependency corruption."
-                            )
-
-            # VAL-OBS-9: Internal Anchor Structural Integrity
-            if "{#" in t_text or "{#" in n_text:
-                t_anchors = re.findall(r"\{#[^\}]+\}", t_text)
-                n_anchors = re.findall(r"\{#[^\}]+\}", n_text)
-                for anchor in n_anchors:
-                    if n_anchors.count(anchor) > t_anchors.count(anchor):
-                        errors.append(
-                            f"- Edit {i + 1} Failed: Cannot modify or insert internal anchor markers (`{{#...}}`). "
-                            "These represent structural XML bookmarks."
-                        )
-                        break
-
-            if isinstance(edit, ModifyText) and edit.new_text:
-                for line in edit.new_text.splitlines():
-                    stripped = line.lstrip()
-                    if stripped.startswith("#######"):
-                        level = len(stripped) - len(stripped.lstrip("#"))
-                        if stripped[level:].startswith(" ") or not stripped[level:]:
-                            errors.append(
-                                f"- Edit {i + 1} Failed: Heading level {level} is not supported (maximum is 6)."
-                            )
-                            break
-
             if not edit.target_text:
                 continue  # Skip validation for pure index-based insertions
 
@@ -853,28 +939,19 @@ class RedlineEngine:
             if len(valid_matches) == 0:
                 errors.append(f'- Edit {i + 1} Failed: Target text not found in document:\n  "{edit.target_text}"')
             elif len(valid_matches) > 1:
-                error_msg = [
-                    f"- Edit {i + 1} Failed: Ambiguous match. Target text appears "
-                    f"{len(valid_matches)} times. Occurrences found at:"
-                ]
+                from adeu.markup import format_ambiguity_error
 
-                for idx, (start, length) in enumerate(valid_matches):
-                    end = start + length
-                    # Extract context (~50 chars before and after to ensure full clause names are captured)
-                    pre_context = active_text[max(0, start - 50) : start].replace("\n", " ")
-                    post_context = active_text[end : min(len(active_text), end + 50)].replace("\n", " ")
-                    match_text = active_text[start:end].replace("\n", " ")
-
-                    # Truncate match_text if it's extremely long for the error report
-                    if len(match_text) > 50:
-                        match_text = match_text[:25] + "..." + match_text[-20:]
-
-                    error_msg.append(f'    {idx + 1}. "...{pre_context}[{match_text}]{post_context}..."')
-
-                error_msg.append(
-                    "  Please provide more surrounding context in your target_text to uniquely identify the location."
+                # valid_matches is a list of (start, length); the formatter
+                # expects (start, end).
+                positions = [(start, start + length) for start, length in valid_matches]
+                errors.append(
+                    format_ambiguity_error(
+                        edit_index=i + 1,
+                        target_text=edit.target_text,
+                        haystack=active_text,
+                        match_positions=positions,
+                    )
                 )
-                errors.append("\n".join(error_msg))
 
             for start, length in valid_matches:
                 spans = [s for s in self.mapper.spans if s.end > start and s.start < start + length]
@@ -1396,6 +1473,12 @@ class RedlineEngine:
             if not anchor_run and not anchor_paragraph:
                 return False
 
+            insert_before = False
+            if anchor_run is None and anchor_paragraph is not None:
+                preceding = [s for s in active_mapper.spans if s.end == start_idx and s.paragraph == anchor_paragraph]
+                if preceding and preceding[-1].text != "\n\n":
+                    insert_before = True
+
             parent = None
             index = 0
             if anchor_run:
@@ -1420,6 +1503,7 @@ class RedlineEngine:
                     anchor_run=anchor_run,
                     anchor_paragraph=anchor_paragraph,
                     comment=edit.comment,
+                    insert_before=True,
                 )
                 if ins_elem is not None:
                     if parent.tag == qn("w:ins"):
@@ -1447,6 +1531,7 @@ class RedlineEngine:
                     anchor_run=style_run,
                     anchor_paragraph=anchor_paragraph,
                     comment=edit.comment,
+                    insert_before=insert_before,
                 )
                 if ins_elem is not None:
                     if parent.tag == qn("w:ins"):

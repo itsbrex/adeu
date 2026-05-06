@@ -39,6 +39,126 @@ class TextSpan:
     hyperlink_id: Optional[str] = None
 
 
+# FILE: src/adeu/redline/mapper.py
+
+
+def renumber_snapshot_ids(doc) -> tuple[dict[str, str], dict[str, str]]:
+    """
+    Rewrites w:id attributes on a snapshot Document to mirror the disk path's
+    two-pool numbering scheme:
+      - w:ins / w:del elements form a sequential "Chg" pool starting at 1
+      - w:comment elements form a separate sequential "Com" pool starting at 1
+
+    Updates all cross-references so the document remains internally consistent:
+      - w:commentReference, w:commentRangeStart, w:commentRangeEnd in document.xml
+        get their w:id values remapped to the new Com pool
+      - w15:p (legacy comment threading parent attribute) gets remapped
+      - commentsExtended.xml's w15:paraIdParent linking is preserved verbatim
+        because it's keyed by paraId (a separate identifier) — no remap needed
+
+    Why: Live Word allocates IDs from a single shared counter for both revisions
+    and comments. Disk path uses two independent counters. An agent that reads
+    via the disk path and writes via Live Word (or vice versa) can target the
+    wrong element because Com:N from one path may not match Com:N from the
+    other. Renumbering the Live Word snapshot to match disk's two-pool scheme
+    eliminates this collision (Bug 5).
+
+    The remapping is fully deterministic: IDs are assigned in document order
+    of the elements, so two reads of the same unmodified snapshot produce
+    identical renumbered projections.
+
+    Args:
+        doc: a python-docx Document built from a Live Word snapshot.
+
+    Returns:
+        (chg_id_remap, com_id_remap): two dicts mapping original w:id strings
+        to new w:id strings. Useful for callers that need to translate IDs
+        across the renumber, though most consumers can ignore them — the
+        mapper reads the renumbered IDs directly from the mutated doc.
+    """
+
+    # --- Renumber w:ins / w:del (Chg pool) ---
+    chg_remap: dict[str, str] = {}
+    next_chg = 1
+    body_root = doc.element
+
+    # Find ins/del elements in document order. We walk in tree order to ensure
+    # determinism — XPath findall returns in document order for python-docx.
+    for tag in (qn("w:ins"), qn("w:del")):
+        for elem in body_root.iter(tag):
+            old_id = elem.get(qn("w:id"))
+            if old_id is None:
+                continue
+            if old_id in chg_remap:
+                # Same id might appear on multiple elements (rare but possible —
+                # e.g. paired ins/del from a single revision). Keep them paired.
+                elem.set(qn("w:id"), chg_remap[old_id])
+                continue
+            new_id = str(next_chg)
+            chg_remap[old_id] = new_id
+            elem.set(qn("w:id"), new_id)
+            next_chg += 1
+
+    # --- Renumber w:comment (Com pool) ---
+    # Comments live in a separate part — find it via the package.
+    com_remap: dict[str, str] = {}
+    next_com = 1
+    comments_part = None
+    for part in doc.part.package.parts:
+        if part.content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml":
+            comments_part = part
+            break
+
+    if comments_part is not None:
+        # The comments part may be a generic Part or an XmlPart depending on
+        # how python-docx loaded it. Use the same lazy-element pattern that
+        # CommentsManager uses elsewhere in the codebase.
+        if hasattr(comments_part, "element"):
+            comments_root = comments_part.element
+        else:
+            from docx.oxml import parse_xml
+
+            if not hasattr(comments_part, "_adeu_element"):
+                comments_part._adeu_element = parse_xml(comments_part.blob)
+            comments_root = comments_part._adeu_element
+
+        for c in comments_root.findall(qn("w:comment")):
+            old_id = c.get(qn("w:id"))
+            if old_id is None:
+                continue
+            if old_id in com_remap:
+                c.set(qn("w:id"), com_remap[old_id])
+                continue
+            new_id = str(next_com)
+            com_remap[old_id] = new_id
+            c.set(qn("w:id"), new_id)
+            next_com += 1
+
+    # --- Update cross-references in document.xml to use new Com IDs ---
+    # commentReference, commentRangeStart, commentRangeEnd all carry w:id
+    # pointing into the comments part.
+    for tag in (
+        qn("w:commentReference"),
+        qn("w:commentRangeStart"),
+        qn("w:commentRangeEnd"),
+    ):
+        for elem in body_root.iter(tag):
+            old_id = elem.get(qn("w:id"))
+            if old_id is not None and old_id in com_remap:
+                elem.set(qn("w:id"), com_remap[old_id])
+
+    # Legacy threading: w:comment elements may carry w15:p pointing at the
+    # parent comment id. Remap if present.
+    if comments_part is not None:
+        w15_p_attr = "{http://schemas.microsoft.com/office/word/2012/wordml}p"
+        for c in comments_root.findall(qn("w:comment")):
+            parent_id = c.get(w15_p_attr)
+            if parent_id is not None and parent_id in com_remap:
+                c.set(w15_p_attr, com_remap[parent_id])
+
+    return chg_remap, com_remap
+
+
 class DocumentMapper:
     def __init__(self, doc: DocumentObject, clean_view: bool = False):
         self.doc = doc

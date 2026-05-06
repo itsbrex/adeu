@@ -198,6 +198,8 @@ async def diff_docx_files(
 
 
 def _create_diff_output(original_path: str, modified_path: str, text_orig: str, edits: List[ModifyText]):
+    from adeu.diff import trim_common_context
+
     output = [
         f"--- {Path(original_path).name}",
         f"+++ {Path(modified_path).name}",
@@ -206,16 +208,33 @@ def _create_diff_output(original_path: str, modified_path: str, text_orig: str, 
     CONTEXT_SIZE = 40
 
     for edit in edits:
-        start_idx = getattr(edit, "_match_start_index", 0) or 0
-        pre_start = max(0, start_idx - CONTEXT_SIZE)
-        pre_context = text_orig[pre_start:start_idx]
+        raw_start = getattr(edit, "_match_start_index", 0) or 0
+        raw_target = edit.target_text or ""
+        raw_new = edit.new_text or ""
+
+        # Compute the SEMANTIC change region by stripping common context that
+        # `generate_edits_from_text` baked into target_text/new_text (anchor for
+        # synthetic insertions, common prefix/suffix from coalesced edits).
+        prefix_len, suffix_len = trim_common_context(raw_target, raw_new)
+
+        target_end_in_target = len(raw_target) - suffix_len
+        new_end_in_new = len(raw_new) - suffix_len
+
+        display_target = raw_target[prefix_len:target_end_in_target]
+        display_new = raw_new[prefix_len:new_end_in_new]
+
+        # Shift the anchor point in the original text by the stripped prefix.
+        change_start = raw_start + prefix_len
+        change_end = change_start + len(display_target)
+
+        # Compute context windows around the SEMANTIC change region.
+        pre_start = max(0, change_start - CONTEXT_SIZE)
+        pre_context = text_orig[pre_start:change_start]
         if pre_start > 0:
             pre_context = "..." + pre_context
 
-        target_len = len(edit.target_text) if edit.target_text else 0
-        post_start = start_idx + target_len
-        post_end = min(len(text_orig), post_start + CONTEXT_SIZE)
-        post_context = text_orig[post_start:post_end]
+        post_end = min(len(text_orig), change_end + CONTEXT_SIZE)
+        post_context = text_orig[change_end:post_end]
         if post_end < len(text_orig):
             post_context = post_context + "..."
 
@@ -224,14 +243,14 @@ def _create_diff_output(original_path: str, modified_path: str, text_orig: str, 
 
         output.append("@@ Word Patch @@")
         output.append(f" {pre_context}")
-        if edit.target_text:
-            output.append(f"- {edit.target_text}")
-        if edit.new_text:
-            output.append(f"+ {edit.new_text}")
+        if display_target:
+            output.append(f"- {display_target}")
+        if display_new:
+            output.append(f"+ {display_new}")
         output.append(f" {post_context}")
         output.append("")
-    result = "\n".join(output)
-    return result
+
+    return "\n".join(output)
 
 
 @tool(
@@ -357,12 +376,15 @@ PROCESS_BATCH_OPERATIONS_DESC = (
     "3. 'reject': Revert a tracked change. Requires `target_id` (e.g., 'Chg:12').\n"
     "4. 'reply': Reply to a comment. Requires `target_id` (e.g., 'Com:5') and `text`.\n"
     "5. 'insert_row': Insert table row. Requires `target_text` (anchor), `position` "
-    "('above'/'below'), and `cells` (Markdown strings).\n"
-    "6. 'delete_row': Delete table row. Requires `target_text` inside the row to be deleted.\n\n"
-    "CRITICAL ID VOLATILITY: Tracked Change and Comment IDs (e.g. 'Chg:12', 'Com:5') are strictly session-bound "
-    "and MAY BE RENUMBERED by Microsoft Word dynamically (e.g., during background AutoSaves). "
-    "You MUST call `read_docx` immediately before executing any `accept`, `reject`, or `reply` operations "
-    "to guarantee you have the freshest IDs. Do not cache IDs across tool calls.\n\n"
+    "('above'/'below'), and `cells` (Markdown strings). NOTE: Not supported in Live Word canvas.\n"
+    "6. 'delete_row': Delete table row. Requires `target_text` inside the row to be deleted. "
+    "NOTE: Not supported in Live Word canvas.\n\n"
+    "CRITICAL ID VOLATILITY: Tracked Change and Comment IDs (e.g. 'Chg:12', 'Com:5') are derived "
+    "from the document state at the moment of the most recent `read_docx` call. They are stable across "
+    "the disk path and the Live Word path for the same document state, but Microsoft Word may renumber "
+    "internal IDs dynamically (e.g., during background AutoSaves), and any user edits between reads can "
+    "shift the projection. You MUST call `read_docx` immediately before executing any `accept`, `reject`, "
+    "or `reply` operations to guarantee you have the freshest IDs. Do not cache IDs across tool calls.\n\n"
     "Always provide a realistic `author_name` for Tracked Changes. This name will be used for "
     "attribution in the document's tracked changes and comments."
 )

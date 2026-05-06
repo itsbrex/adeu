@@ -6,15 +6,19 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 import structlog
+from docx import Document as load_document
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from fastmcp.tools.tool import ToolResult
 
+from adeu import RedlineEngine
 from adeu.mcp_components._response_builders import (
     build_outline_response,
     build_paginated_response,
 )
 from adeu.models import DeleteTableRow, InsertTableRow
+from adeu.redline.engine import validate_edit_strings
+from adeu.redline.mapper import DocumentMapper, renumber_snapshot_ids
 
 logger = structlog.get_logger(__name__)
 
@@ -244,6 +248,14 @@ if sys.platform == "win32":
         actual_path = word_doc.FullName
 
         py_doc = load_document(stream)
+
+        # Bug 5: renumber snapshot IDs to the disk path's two-pool scheme so
+        # an agent that reads via Live Word sees the same shape of Chg:N /
+        # Com:N IDs that the disk path emits, eliminating cross-path
+        # collision when the agent later targets a tracked change or comment.
+
+        renumber_snapshot_ids(py_doc)
+
         text = _extract_text_from_doc(py_doc, clean_view=clean_view)
         return text, actual_path, py_doc
 
@@ -282,6 +294,60 @@ if sys.platform == "win32":
             return res
         except ToolError:
             raise
+
+    def _resolve_com_revision(doc: Any, xml_id: str, mapper: Any, mapping: List[int]) -> Any:
+        """Finds the COM Revision by combining Semantic Text Matching with Physical Proximity."""
+        spans = [s for s in mapper.spans if s.ins_id == xml_id or s.del_id == xml_id]
+        if not spans:
+            return None
+
+        virt_start = spans[0].start
+        target_text = "".join(s.text for s in spans)
+        clean_target = "".join(c.lower() for c in target_text if c.isalnum())
+
+        # Guess the COM coordinate using the map
+        approx_com_start = mapping[virt_start] if virt_start < len(mapping) else mapping[-1]
+
+        best_match = None
+        best_score = float("inf")
+
+        for i in range(1, doc.Revisions.Count + 1):
+            rev = doc.Revisions(i)
+            try:
+                com_text = rev.Range.Text
+                clean_com = "".join(c.lower() for c in com_text if c.isalnum())
+
+                is_match = False
+                if not clean_target and not clean_com:
+                    is_match = True
+                elif clean_target and clean_com and (clean_target in clean_com or clean_com in clean_target):
+                    is_match = True
+
+                if is_match:
+                    dist = abs(rev.Range.Start - approx_com_start)
+                    if dist < best_score:
+                        best_score = dist
+                        best_match = rev
+            except Exception:
+                pass
+        return best_match
+
+    def _resolve_com_comment(doc: Any, xml_id: str, mapper: Any) -> Any:
+        """Finds the COM Comment by matching its semantic text."""
+        if xml_id not in mapper.comments_map:
+            return None
+        target_text = mapper.comments_map[xml_id]["text"]
+        clean_target = "".join(c.lower() for c in target_text if c.isalnum())
+
+        for i in range(1, doc.Comments.Count + 1):
+            c = doc.Comments(i)
+            try:
+                clean_com = "".join(ch.lower() for ch in c.Range.Text if ch.isalnum())
+                if clean_target == clean_com or clean_target in clean_com or clean_com in clean_target:
+                    return c
+            except Exception:
+                pass
+        return None
 
     def _process_active_word_batch_core(
         changes: List[DocumentChange], author_name: str, file_path: Optional[str] = None
@@ -328,17 +394,6 @@ if sys.platform == "win32":
         if not has_local_user_info:
             stats["author_overridden_by_word"] = original_user
 
-        # Pre-resolve Revision objects to prevent index drift.
-        revisions_map = {}
-        try:
-            for i in range(1, doc.Revisions.Count + 1):
-                revisions_map[f"Chg:{i}"] = doc.Revisions(i)
-        except Exception as e:
-            logger.warning(f"Failed to pre-resolve revisions: {e}")
-
-        # Haystack cache: avoids re-fetching doc.Content.Text and recomputing
-        # _clean_chars (an O(N) Python loop) on every iteration. Invalidated
-        # after every mutating change.
         cached_raw_text: Optional[str] = None
         cached_current_text: Optional[str] = None
         cached_mapping: Optional[List[int]] = None
@@ -359,15 +414,98 @@ if sys.platform == "win32":
             cached_current_text = None
             cached_mapping = None
 
+        actions = [c for c in changes if isinstance(c, (AcceptChange, RejectChange, ReplyComment))]
+        edits = [c for c in changes if isinstance(c, (ModifyText, InsertTableRow, DeleteTableRow))]
+
+        # Category A: document-context-free string-shape validation.
+        category_a_errors = validate_edit_strings(edits)
+        if category_a_errors:
+            stats["failed"] = len(category_a_errors)
+            stats["skipped_details"].extend(category_a_errors)
+            return stats
+
+        # Category B: document-aware validation (target found, unambiguous,
+        # not in Structural Appendix). Build a snapshot of the live document
+        # via the same Flat OPC -> python-docx pipeline used by the read path,
+        # then run RedlineEngine.validate_edits against it.
+        if edits:
+            try:
+                xml_str = doc.WordOpenXML
+                snapshot_stream = _build_mock_docx_stream(xml_str)
+                snapshot_engine = RedlineEngine(snapshot_stream, author=author_name)
+                # Bug 5: renumber the snapshot's IDs so that any error messages
+                # mention the same Chg:N / Com:N values the agent saw when it
+                # last read the document via Live Word.
+                renumber_snapshot_ids(snapshot_engine.doc)
+                # Force the mapper to rebuild against the renumbered doc.
+                snapshot_engine.mapper = type(snapshot_engine.mapper)(snapshot_engine.doc)
+                category_b_errors = snapshot_engine.validate_edits(edits)
+            except Exception as e:
+                logger.warning(f"Could not run Category B validation: {e}")
+                category_b_errors = []
+
+            if category_b_errors:
+                stats["failed"] = len(category_b_errors)
+                stats["skipped_details"].extend(category_b_errors)
+                return stats
+
+        # --- Validation passed; proceed with COM-based application ---
         try:
-            for change in changes:
+            # --- FIX 1: PROCESS ACTIONS FIRST & SURVIVE DRIFT ---
+            if actions:
+                # Build virtual map to translate the LLM's Chg:N IDs
+                xml_str = doc.WordOpenXML
+                stream = _build_mock_docx_stream(xml_str)
+                py_doc = load_document(stream)
+                # Bug 5: renumber to the disk-style two-pool scheme so the
+                # agent's Chg:N / Com:N target_id values resolve to the same
+                # XML elements the agent saw when reading via Live Word.
+                renumber_snapshot_ids(py_doc)
+                mapper = DocumentMapper(py_doc)
+                _, _, mapping = _get_haystack()
+
+                for act in actions:
+                    try:
+                        xml_id = act.target_id.split(":")[-1]
+                        if isinstance(act, (AcceptChange, RejectChange)):
+                            rev = _resolve_com_revision(doc, xml_id, mapper, mapping)
+                            if rev:
+                                if isinstance(act, AcceptChange):
+                                    rev.Accept()
+                                else:
+                                    rev.Reject()
+                                stats["applied"] += 1
+                            else:
+                                stats["failed"] += 1
+                                stats["skipped_details"].append(
+                                    f"- Revision {act.target_id} not found or lost to drift."
+                                )
+                        elif isinstance(act, ReplyComment):
+                            com = _resolve_com_comment(doc, xml_id, mapper)
+                            if com:
+                                try:
+                                    com.Replies.Add(com.Range, act.text)
+                                except Exception:
+                                    doc.Comments.Add(com.Range, act.text)
+                                stats["applied"] += 1
+                            else:
+                                stats["failed"] += 1
+                                stats["skipped_details"].append(f"- Comment {act.target_id} not found.")
+                    except Exception as e:
+                        stats["failed"] += 1
+                        stats["skipped_details"].append(f"- Failed to apply action {act.type}: {e}")
+
+                if stats["applied"] > 0:
+                    _invalidate_haystack()
+
+            # --- PROCESS EDITS ---
+            for change in edits:
                 try:
                     if isinstance(change, (InsertTableRow, DeleteTableRow)):
                         stats["failed"] += 1
                         stats["skipped_details"].append(
                             f"- Structural table edits ({change.type}) are currently only "
-                            "supported for disk-based DOCX files. "
-                            "Please provide an 'original_docx_path' to use this feature."
+                            "supported for disk-based DOCX files."
                         )
                         continue
 
@@ -377,30 +515,48 @@ if sys.platform == "win32":
                         start_idx, end_idx = _find_match_in_text(current_text, clean_target)
 
                         if start_idx != -1:
-                            # =====================================================================
-                            # 🛑 CRITICAL SAFETY WARNING: COM vs CONTENT.TEXT COORDINATE DRIFT 🛑
-                            # =====================================================================
-                            # Do NOT pass `mapping`-derived indices directly to `doc.Range()` to
-                            # mutate text! `mapping` translates Virtual String -> `doc.Content.Text`
-                            # indices. However, `doc.Range` coordinates include hidden structural
-                            # elements (like \r\x07) that are excluded from `Content.Text`.
-                            #
-                            # The two coordinate systems DRIFT APART progressively.
-                            # You MUST use these mapped indices purely to extract the `exact_substring`
-                            # and provide a narrow search window for `rng.Find.Execute()`. Word's
-                            # internal engine will resolve the true COM Range.
-                            # =====================================================================
+                            # --- AMBIGUITY CHECK (uses shared formatter for parity with disk path) ---
+                            from adeu.markup import format_ambiguity_error
+
+                            # Enumerate ALL matches, not just the second one,
+                            # so we can produce the same multi-example message
+                            # the disk path produces.
+                            all_positions: list[tuple[int, int]] = [(start_idx, end_idx)]
+                            search_offset = end_idx
+                            while True:
+                                rel_start, rel_end = _find_match_in_text(current_text[search_offset:], clean_target)
+                                if rel_start == -1:
+                                    break
+                                abs_start = search_offset + rel_start
+                                abs_end = search_offset + rel_end
+                                all_positions.append((abs_start, abs_end))
+                                search_offset = abs_end
+
+                            if len(all_positions) > 1:
+                                stats["failed"] += 1
+                                # The Live Word edit loop tracks the index of
+                                # the current change in `change`. We mirror the
+                                # disk path's 1-based numbering using the
+                                # position of `change` in the edits list.
+                                edit_index = edits.index(change) + 1
+                                stats["skipped_details"].append(
+                                    format_ambiguity_error(
+                                        edit_index=edit_index,
+                                        target_text=change.target_text,
+                                        haystack=current_text,
+                                        match_positions=all_positions,
+                                    )
+                                )
+                                continue
 
                             is_table_edit = "|" in clean_target
                             table_edit_success = False
 
                             if is_table_edit:
-                                # OPTION A: Cell-Splitting Structural Execution (LW-1 Fix)
                                 t_cells = [c.strip() for c in change.target_text.split("|")]
                                 n_cells = [c.strip() for c in (change.new_text or "").split("|")]
 
                                 if len(t_cells) == len(n_cells):
-                                    # 1. Find a non-empty cell to act as our structural Anchor
                                     anchor_idx = -1
                                     anchor_text = ""
                                     for i, c in enumerate(t_cells):
@@ -410,7 +566,6 @@ if sys.platform == "win32":
                                             break
 
                                     if anchor_idx != -1:
-                                        # 2. Map the anchor text offset within the matched virtual block
                                         clean_anchor = strip_markdown_formatting(strip_critic_markup(anchor_text))
                                         local_anchor_start = clean_target.find(clean_anchor)
                                         if local_anchor_start == -1:
@@ -424,7 +579,6 @@ if sys.platform == "win32":
 
                                         exact_anchor_substring = raw_text[actual_anchor_start:actual_anchor_end]
 
-                                        # 3. Execute COM Search for the Anchor
                                         search_start = max(0, actual_anchor_start - 5000)
                                         search_end = min(doc.Content.End, actual_anchor_end + 5000)
                                         rng = doc.Range(Start=search_start, End=search_end)
@@ -437,13 +591,12 @@ if sys.platform == "win32":
                                         rng.Find.ClearFormatting()
                                         rng.Find.Text = search_text
                                         rng.Find.Forward = True
-                                        rng.Find.Wrap = 0  # wdFindStop
+                                        rng.Find.Wrap = 0
 
-                                        if rng.Find.Execute() and rng.Information(12):  # 12 = wdWithInTable
+                                        if rng.Find.Execute() and rng.Information(12):
                                             table_edit_success = True
                                             anchor_cell = rng.Cells(1)
 
-                                            # Determine which cell gets the comment
                                             target_comment_idx = 0
                                             for i, (t, n) in enumerate(zip(t_cells, n_cells, strict=True)):
                                                 if t != n:
@@ -475,18 +628,17 @@ if sys.platform == "win32":
                                                         continue
 
                                                     cell_rng = target_cell.Range
-                                                    cell_rng.End -= 1  # Crucial: Exclude the hidden \x07 cell marker!
+                                                    cell_rng.End -= 1
 
                                                     actual_start = cell_rng.Start
                                                     actual_end = cell_rng.End
                                                     exact_substring = cell_rng.Text
 
                                                     if not t_c:
-                                                        # If target is fully empty, it's a pure insertion.
                                                         actual_end = actual_start
                                                         exact_substring = ""
 
-                                                    if t_c == n_c:  # Comment only
+                                                    if t_c == n_c:
                                                         if should_comment:
                                                             try:
                                                                 doc.Comments.Add(
@@ -498,7 +650,6 @@ if sys.platform == "win32":
                                                         cells_updated += 1
                                                         continue
 
-                                                    # Execute the localized replacement inside the cell
                                                     (
                                                         final_start,
                                                         final_end,
@@ -525,9 +676,7 @@ if sys.platform == "win32":
                                                 stats["applied"] += 1
                                                 _invalidate_haystack()
 
-                            # Fallback if it wasn't a table edit OR the anchor wasn't found in a table
                             if not table_edit_success:
-                                # NORMAL TEXT REPLACEMENT
                                 actual_start = mapping[start_idx]
                                 actual_end = mapping[end_idx]
                                 exact_substring = raw_text[actual_start:actual_end]
@@ -541,7 +690,7 @@ if sys.platform == "win32":
                                 rng.Find.ClearFormatting()
                                 rng.Find.Text = search_text
                                 rng.Find.Forward = True
-                                rng.Find.Wrap = 0  # wdFindStop
+                                rng.Find.Wrap = 0
 
                                 if rng.Find.Execute():
                                     actual_start = rng.Start
@@ -579,7 +728,6 @@ if sys.platform == "win32":
                                     stats["applied"] += 1
                                     _invalidate_haystack()
                                 else:
-                                    # Fallback: search entire document.
                                     doc_rng = doc.Content
                                     doc_rng.Find.ClearFormatting()
                                     doc_rng.Find.Text = search_text
@@ -602,7 +750,6 @@ if sys.platform == "win32":
                                             _invalidate_haystack()
                                             continue
 
-                                        # Recalculate shrinkage for fallback
                                         actual_start, actual_end, final_new_text = _shrink_replacement_range(
                                             exact_substring,
                                             effective_new,
@@ -632,24 +779,6 @@ if sys.platform == "win32":
                                 f"- Failed to find target text: '{change.target_text[:40]}...'"
                             )
                             logger.warning(f"Could not find target text: '{change.target_text[:30]}...'")
-
-                    elif isinstance(change, AcceptChange):
-                        applied_before = stats["applied"]
-                        _process_accept_change(stats, revisions_map, change)
-                        if stats["applied"] > applied_before:
-                            _invalidate_haystack()
-
-                    elif isinstance(change, RejectChange):
-                        applied_before = stats["applied"]
-                        _process_reject_change(stats, revisions_map, change)
-                        if stats["applied"] > applied_before:
-                            _invalidate_haystack()
-
-                    elif isinstance(change, ReplyComment):
-                        applied_before = stats["applied"]
-                        _process_reply_comment(stats, doc, change)
-                        if stats["applied"] > applied_before:
-                            _invalidate_haystack()
 
                 except Exception as e:
                     stats["failed"] += 1

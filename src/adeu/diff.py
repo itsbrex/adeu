@@ -169,12 +169,19 @@ def trim_common_context(target: str, new_val: str) -> tuple[int, int]:
             prefix_len += mlen
             suffix_len += mlen
 
-    # If the replacement introduces newlines that would separate the prefix and suffix,
-    # we must explicitly prevent suffix trimming to guarantee the suffix is physically
-    # transplanted into the new paragraph rather than left stranded in the original.
-    new_rem = new_val[prefix_len : len(new_val) - suffix_len if suffix_len else len(new_val)]
-    if "\n" in new_rem or "\r" in new_rem:
-        suffix_len = 0
+    # NOTE: An earlier version of this function suppressed suffix trimming when
+    # the trimmed new_text contained newlines, on the theory that the engine
+    # needed the full suffix kept in target_text so it could "transplant" it
+    # into the new paragraph structure. That theory was wrong: the engine never
+    # implemented such a transplant, and the suppression made multi-paragraph
+    # structured replacements (where target_text spans a paragraph break)
+    # produce orphan fragments and standalone reinsertions of the surviving
+    # suffix. See debug_bug1.py and the Bug 1 investigation.
+    #
+    # With suffix trimming enabled, the engine sees a clean
+    # (target='', new=insertion) pure-insertion edit at the paragraph boundary,
+    # which it handles correctly via the existing INSERTION path
+    # (get_insertion_anchor + track_insert).
 
     return prefix_len, suffix_len
 
@@ -203,12 +210,17 @@ def generate_edits_from_text(original_text: str, modified_text: str) -> List[Mod
     current_original_index = 0
     pending_delete = None  # Tuple(index, text)
 
-    for i, (op, text) in enumerate(diffs):
+    for _, (op, text) in enumerate(diffs):
         if op == 0:  # Equal
             # Flush pending delete if any
             if pending_delete:
                 idx, del_txt = pending_delete
-                edit = ModifyText(type="modify", target_text=del_txt, new_text="", comment="Diff: Text deleted")
+                edit = ModifyText(
+                    type="modify",
+                    target_text=del_txt,
+                    new_text="",
+                    comment="Diff: Text deleted",
+                )
                 edit._match_start_index = idx
                 edits.append(edit)
                 pending_delete = None
@@ -224,53 +236,37 @@ def generate_edits_from_text(original_text: str, modified_text: str) -> List[Mod
             if pending_delete:
                 # Merge into Modification (Replace)
                 idx, del_txt = pending_delete
-                edit = ModifyText(type="modify", target_text=del_txt, new_text=text, comment="Diff: Replacement")
+                edit = ModifyText(
+                    type="modify",
+                    target_text=del_txt,
+                    new_text=text,
+                    comment="Diff: Replacement",
+                )
                 edit._match_start_index = idx
                 edits.append(edit)
                 pending_delete = None
             else:
-                # Pure Insertion
-                # Find Anchor context
-                anchor_start = max(0, current_original_index - 50)
-                anchor = original_text[anchor_start:current_original_index]
-
-                # Special Case: Start-of-Document with no anchor
-                if not anchor and current_original_index == 0:
-                    # Check next equal for context (Forward Anchor)
-                    if i + 1 < len(diffs) and diffs[i + 1][0] == 0:
-                        next_text = diffs[i + 1][1]
-                        # Grab first word or chunk
-                        anchor_target = next_text.split(" ")[0] if " " in next_text else next_text[:20]
-                        if anchor_target:
-                            # Convert to Modification of the following text
-                            # Target: "Contract" -> New: "Big Contract"
-                            logger.info(f"Converting start-of-doc insert to modification of '{anchor_target}'")
-
-                            edit = ModifyText(
-                                type="modify",
-                                target_text=anchor_target,
-                                new_text=text + anchor_target,
-                                comment="Diff: Start-of-doc insertion",
-                            )
-                            edit._match_start_index = current_original_index
-                            edits.append(edit)
-
-                            # We consumed the start of the next text conceptually?
-                            # Actually, DMP will process the next Equal text normally.
-                            # But we claim we modified it. This is slightly overlapping logic.
-                            # However, since we track indices, we just want to ensure we target correctly.
-                            # BUT, current_original_index matches the start of anchor_target.
-                            # So we assume the next Op=0 will advance past it.
-                            # This is a bit hacky. For now, let's stick to standard Anchor logic if possible,
-                            # or just use empty anchor if allowed.
-
-                            continue
-
-                # Standard Insertion: Target=Anchor, New=Anchor+Text
+                # Pure Insertion: target_text="" so the engine treats this as a
+                # true insertion (op=INSERTION, anchored via get_insertion_anchor).
+                # _match_start_index points at the insertion point in the original
+                # text. This matches the contract used by every other producer of
+                # _match_start_index in the codebase.
+                #
+                # We no longer use the "anchor baked into target_text" convention,
+                # because it produced contradictory edit objects: target_text would
+                # claim to live at [anchor_start : current_original_index] while
+                # _match_start_index pointed at current_original_index. The engine's
+                # apply_edits trusts _match_start_index when set, leading to silent
+                # document corruption (see debug_bug6_engine_baseline.py Case 1).
+                #
+                # The start-of-document special case is no longer needed: the engine
+                # handles _match_start_index=0 with target_text="" via
+                # get_insertion_anchor, which correctly anchors to the first run of
+                # the first paragraph.
                 edit = ModifyText(
                     type="modify",
-                    target_text=anchor,
-                    new_text=anchor + text,
+                    target_text="",
+                    new_text=text,
                     comment="Diff: Text inserted",
                 )
                 edit._match_start_index = current_original_index
@@ -279,35 +275,27 @@ def generate_edits_from_text(original_text: str, modified_text: str) -> List[Mod
     # Flush trailing delete
     if pending_delete:
         idx, del_txt = pending_delete
-        edit = ModifyText(type="modify", target_text=del_txt, new_text="", comment="Diff: Text deleted")
+        edit = ModifyText(
+            type="modify",
+            target_text=del_txt,
+            new_text="",
+            comment="Diff: Text deleted",
+        )
         edit._match_start_index = idx
         edits.append(edit)
 
-    # Post-processing pass: coalesce adjacent edits separated only by formatting/spaces
-    merged_edits: List[ModifyText] = []
-    for edit in edits:
-        if not merged_edits:
-            merged_edits.append(edit)
-            continue
-
-        last_edit = merged_edits[-1]
-
-        # Calculate the gap between the end of last_edit and start of current edit
-        last_end = (last_edit._match_start_index or 0) + len(last_edit.target_text)
-        curr_start = edit._match_start_index or 0
-
-        gap = original_text[last_end:curr_start]
-
-        # If the gap is on the same paragraph and contains <= 4 words, coalesce them
-        # This merges fragmented word edits within the same sentence/clause
-        word_count = len(re.findall(r"\w+", gap))
-        if "\n" not in gap and word_count <= 4:
-            last_edit.target_text += gap + edit.target_text
-            last_edit.new_text += gap + edit.new_text
-        else:
-            merged_edits.append(edit)
-
-    return merged_edits
+    # Post-coalescing pass removed (was Pathology C in Bug 6 investigation).
+    # The pass mutated target_text/new_text by appending "gap + edit.target_text",
+    # which produced semantically meaningless edit objects when one or both of the
+    # adjacent edits was a pure insertion (whose target_text used to contain an
+    # anchor that overlapped with the gap). The result was duplicated text in
+    # both the rendered diff (Bug 6 visible symptom) and in the engine's output
+    # (silent document corruption — see debug_bug6_engine_baseline.py Case 6).
+    #
+    # If grouped/merged-hunk rendering is desired in the future, do it in
+    # _create_diff_output by visually grouping adjacent edits in the output,
+    # without mutating the underlying ModifyText objects.
+    return edits
 
 
 def _words_to_chars(text1: str, text2: str) -> Tuple[str, str, List[str]]:

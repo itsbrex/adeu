@@ -1,3 +1,4 @@
+# FILE: tests/test_live_word.py
 import sys
 
 import pytest
@@ -26,7 +27,12 @@ def test_live_word_read_and_modify(active_word_app):
         assert "Hello world!" in content
 
         # Step 2: Apply a Modification
-        changes = [ModifyText(target_text="live testing document", new_text="fully verified dynamic canvas")]
+        changes = [
+            ModifyText(
+                target_text="live testing document",
+                new_text="fully verified dynamic canvas",
+            )
+        ]
         result = await process_active_word_batch(ctx, changes=changes, author_name="Testing Agent")
         assert "Applied: 1, Failed: 0" in result
 
@@ -47,7 +53,13 @@ def test_live_word_modify_with_comment(active_word_app):
     doc.Range(0, doc.Content.End).Text = "The quick brown fox.\n"
 
     async def run_test():
-        changes = [ModifyText(target_text="quick", new_text="sleepy", comment="Foxes are very tired today.")]
+        changes = [
+            ModifyText(
+                target_text="quick",
+                new_text="sleepy",
+                comment="Foxes are very tired today.",
+            )
+        ]
         res = await process_active_word_batch(ctx, changes=changes, author_name="Testing Agent")
         assert "Applied: 1, Failed: 0" in res
 
@@ -72,7 +84,10 @@ def test_live_word_vs_redline_engine_parity(active_word_app, tmp_path):
     doc.Range(0, doc.Content.End).Text = "Base text for parity test.\n"
     doc.TrackRevisions = True
     doc.Range(0, 9).Text = "Modified text"
-    doc.Comments.Add(doc.Range(doc.Content.Text.find("parity"), doc.Content.Text.find("parity") + 6), "Parity comment")
+    doc.Comments.Add(
+        doc.Range(doc.Content.Text.find("parity"), doc.Content.Text.find("parity") + 6),
+        "Parity comment",
+    )
 
     async def run_test():
         live_text = extract_content(await read_active_word_document(ctx))
@@ -142,7 +157,7 @@ def test_live_word_multiple_comments_overwrite(active_word_app):
     async def run_test():
         content = extract_content(await read_active_word_document(ctx))
         assert "Comment One" in content and "Comment Two" in content
-        assert "Com:0" in content and "Com:1" in content
+        assert "Com:1" in content and "Com:2" in content
 
     run_async(run_test())
 
@@ -203,7 +218,7 @@ def test_live_word_accept_reject_reply(active_word_app):
         changes = [
             AcceptChange(target_id="Chg:1"),
             AcceptChange(target_id="Chg:2"),
-            ReplyComment(target_id="Com:0", text="Yes, absolutely."),
+            ReplyComment(target_id="Com:1", text="Yes, absolutely."),
         ]
         await process_active_word_batch(ctx, changes=changes, author_name="QA Agent")
 
@@ -416,6 +431,37 @@ def test_live_word_bug_04_garbled_text(active_word_app):
     run_async(run_test())
 
 
+def test_live_word_obs_01_author_name_respected(active_word_app):
+    """
+    Test for OBS-01: Word originally enforced the signed-in user's identity.
+    We now use app.Options.UseLocalUserInfo to force it to respect the
+    provided author_name, aligning it with the disk engine.
+    """
+    app, doc = active_word_app
+    ctx = get_mock_ctx()
+
+    doc.TrackRevisions = False
+    doc.Range(0, doc.Content.End).Text = "Test document.\n"
+
+    async def run_test():
+        changes = [
+            ModifyText(
+                target_text="Test document.",
+                new_text="Modified document.",
+                comment="Spoof test.",
+            )
+        ]
+
+        res = await process_active_word_batch(ctx, changes=changes, author_name="Sherlock Holmes")
+
+        assert "Warning: Live Word natively enforces M365 identities" not in res
+
+        content = extract_content(await read_active_word_document(ctx, clean_view=False))
+        assert "Sherlock Holmes" in content
+
+    run_async(run_test())
+
+
 def test_live_word_obs_02_deletion_insertion_order(active_word_app):
     """Ensures Live COM automation forces the insertion AFTER the original text before deleting."""
     app, doc = active_word_app
@@ -430,5 +476,193 @@ def test_live_word_obs_02_deletion_insertion_order(active_word_app):
         content = extract_content(await read_active_word_document(ctx))
 
         assert "{--brown--}{++red++}" in content
+
+    run_async(run_test())
+
+
+def test_live_word_batch_fixes_ambiguity_and_comment_duplication(active_word_app):
+    """
+    End-to-end test verifying three major Live Word fixes:
+    1. Ambiguous targets are safely rejected (Issue 2).
+    2. Sub-edits inside existing comments do not duplicate the comment (Issue 4).
+    3. AcceptChange uses Semantic/Proximity mapping to survive ID drift (Issue 1 & 5).
+    """
+    from docx import Document
+
+    from adeu.mcp_components.tools.live_word import (
+        _build_mock_docx_stream,
+        process_active_word_batch,
+    )
+    from adeu.models import AcceptChange, ModifyText
+    from adeu.redline.mapper import DocumentMapper
+
+    app, doc = active_word_app
+    ctx = get_mock_ctx()
+
+    # 1. Setup specific edge-case state
+    doc.TrackRevisions = False
+    doc.Range(0, doc.Content.End).Text = "Banana. Banana.\rThis is a CommentRegion.\rWe have DeletedText here.\n"
+
+    doc.TrackRevisions = True
+    app.UserName = "Test Reviewer"
+
+    # Create Deletion
+    rng_del = doc.Content
+    if rng_del.Find.Execute("DeletedText"):
+        rng_del.Delete()
+
+    # Create Comment
+    rng_com = doc.Content
+    if rng_com.Find.Execute("CommentRegion"):
+        doc.Comments.Add(rng_com, "This is a test comment")
+
+    async def run_test():
+        # 2. Extract Virtual Map to find dynamic XML ID
+        xml_str = doc.WordOpenXML
+        stream = _build_mock_docx_stream(xml_str)
+        mapper = DocumentMapper(Document(stream))
+
+        target_chg_id = next(
+            (s.del_id for s in mapper.spans if "DeletedText" in s.text and s.del_id),
+            None,
+        )
+        assert target_chg_id is not None, "Failed to setup: Could not find XML ID for DeletedText."
+
+        # 3. Build Batch Payloads
+        ambiguous_batch = [
+            ModifyText(type="modify", target_text="Banana", new_text="Apple", comment=None),
+        ]
+        valid_batch = [
+            ModifyText(type="modify", target_text="Region", new_text="Zone", comment=None),
+            AcceptChange(type="accept", target_id=f"Chg:{target_chg_id}", comment=None),
+        ]
+
+        # 4. Execute Batches
+        ambig_res = await process_active_word_batch(ctx=ctx, changes=ambiguous_batch, author_name="Adeu AI")
+        assert "Failed: 1" in ambig_res
+        assert "Ambiguous match" in ambig_res
+
+        result = await process_active_word_batch(ctx=ctx, changes=valid_batch, author_name="Adeu AI")
+
+        # 5. Assertions
+        assert "Applied: 2" in result, f"Expected 2 applied edits. Result: {result}"
+        assert "Failed: 0" in result, f"Expected 0 failed edits. Result: {result}"
+
+        # The original deletion should be accepted (gone).
+        assert doc.Revisions.Count == 2, f"Expected 2 revisions remaining, found {doc.Revisions.Count}."
+        assert "Zone" in doc.Revisions(2).Range.Text, "New revision text mismatch."
+
+        # The comment must not be duplicated.
+        assert doc.Comments.Count == 1, f"Expected exactly 1 comment, found {doc.Comments.Count} (Duplication bug!)."
+
+    run_async(run_test())
+
+
+def test_live_word_structured_insertion_at_boundary(active_word_app):
+    """
+    Verifies Bug 2: When a structured insertion occurs with 0-length overlap (pure insertion),
+    the Live Word Reverse Sandwich algorithm appends a carriage return so the heading
+    does not fuse into the body paragraph and hijack its styling.
+    """
+    app, doc = active_word_app
+    ctx = get_mock_ctx()
+
+    doc.Range(0, doc.Content.End).Text = "OUR MISSION\nAlthough we have made outstanding progress over the past year.\n"
+    doc.Paragraphs(1).Range.Style = doc.Styles("Heading 1")
+
+    async def run_test():
+        edit = ModifyText(
+            type="modify",
+            target_text="# OUR MISSION\n\nAlthough we have made outstanding progress",
+            new_text="# OUR MISSION\n\n## Editorial Note\n\nAlthough we have made outstanding progress",
+            comment=None,
+        )
+
+        res = await process_active_word_batch(ctx=ctx, changes=[edit], author_name="QA")
+        assert "Applied: 1" in res
+
+        content = extract_content(await read_active_word_document(ctx, clean_view=True))
+
+        assert "OUR MISSION\n\n## Editorial Note\n\nAlthough we have" in content
+        assert "Editorial NoteAlthough" not in content  # Ensure they didn't fuse
+
+    run_async(run_test())
+
+
+# FILE: tests/test_live_word.py
+def test_live_word_bug_02_structured_insertion_formatting_offsets(active_word_app):
+    """
+    Verifies Bug 2a, 2b, 2c fixes:
+    1. Heading styles are properly applied without dropping markers.
+    2. Paragraph breaks in pure-insertions (original_len=0) are not incorrectly deleted.
+    3. Bold/Italic formatting applies to exact character offsets without off-by-one shifts.
+    """
+    from adeu.models import ModifyText
+
+    app, doc = active_word_app
+    ctx = get_mock_ctx()
+
+    # 1. Setup Document State
+    doc.Range(0, doc.Content.End).Text = "OUR MISSION\nAlthough we have made outstanding progress over the past year.\n"
+    try:
+        doc.Paragraphs(1).Range.Style = -2  # wdStyleHeading1
+    except Exception:
+        pass
+
+    async def run_test():
+        edit = ModifyText(
+            type="modify",
+            target_text="# OUR MISSION\n\nAlthough we have made outstanding progress",
+            new_text=(
+                "# OUR MISSION\n\n## Editorial Note\n\n"
+                "This section was reviewed and **expanded** by the editorial team in _October 2024_.\n\n"
+                "Although we have made outstanding progress"
+            ),
+            comment=None,
+        )
+
+        res = await process_active_word_batch(ctx=ctx, changes=[edit], author_name="QA")
+        assert "Applied: 1" in res
+
+        # 2. Verify via MCP Extraction (CriticMarkup check)
+        content = extract_content(await read_active_word_document(ctx, clean_view=False))
+
+        # Verify that the Markdown features were tracked cleanly without mangling
+        assert "## {++Editorial Note++}" in content, "Heading 2 style marker mangled or dropped"
+        assert "{++This section was reviewed and **expanded** by the editorial team in _October 2024_.++}" in content, (
+            "Bold/Italic formatting boundaries shifted"
+        )
+
+        # 3. Verify via Direct COM Inspection (No invisible off-by-one corruption)
+        full_text = doc.Content.Text
+
+        # Verify Heading 2 Style application (Bug 2a & 2b)
+        para_2_text = doc.Paragraphs(2).Range.Text
+        assert "Editorial Note" in para_2_text
+        assert "This section" not in para_2_text, "Paragraphs fused together! (Bug 2b)"
+
+        # Verify Exact Bold Offsets (Bug 2c)
+        exp_idx = full_text.find("expanded")
+        assert exp_idx != -1, "Text 'expanded' not found in COM document"
+
+        is_space_bold = doc.Range(exp_idx - 1, exp_idx).Font.Bold
+        is_e_bold = doc.Range(exp_idx, exp_idx + 1).Font.Bold
+        is_d_bold = doc.Range(exp_idx + 7, exp_idx + 8).Font.Bold
+        is_after_bold = doc.Range(exp_idx + 8, exp_idx + 9).Font.Bold
+
+        assert not is_space_bold, "Space before 'expanded' incorrectly bolded (Shifted right)"
+        assert is_e_bold, "'e' in 'expanded' not bolded"
+        assert is_d_bold, "'d' in 'expanded' not bolded"
+        assert not is_after_bold, "Space after 'expanded' incorrectly bolded (Shifted right)"
+
+        # Verify Exact Italic Offsets (Bug 2c)
+        oct_idx = full_text.find("October 2024")
+        assert oct_idx != -1
+
+        is_o_italic = doc.Range(oct_idx, oct_idx + 1).Font.Italic
+        is_period_italic = doc.Range(oct_idx + 12, oct_idx + 13).Font.Italic
+
+        assert is_o_italic, "'O' in 'October' not italicized"
+        assert not is_period_italic, "Period after '2024' incorrectly italicized (Shifted right)"
 
     run_async(run_test())

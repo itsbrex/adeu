@@ -308,6 +308,79 @@ def _find_match_in_text(text: str, target: str) -> Tuple[int, int]:
     return -1, -1
 
 
+# Maximum number of match examples to include in an ambiguity error message.
+# Capped to keep error payloads bounded — high-frequency tokens (like a brand
+# name appearing 100+ times) would otherwise produce tens of KB of context
+# snippets that consume LLM context budget without adding signal.
+AMBIGUITY_EXAMPLES_CAP = 5
+
+# Length of the surrounding-text window shown for each match example.
+AMBIGUITY_CONTEXT_CHARS = 50
+
+
+def format_ambiguity_error(
+    edit_index: int,
+    target_text: str,
+    haystack: str,
+    match_positions: list[tuple[int, int]],
+) -> str:
+    """
+    Builds a uniformly-formatted ambiguity error message used by both the disk
+    and Live Word edit pipelines.
+
+    Args:
+        edit_index: 1-based index of the failing edit, used in the message prefix.
+        target_text: the search string the agent provided.
+        haystack: the text the search was performed against.
+        match_positions: list of (start, end) tuples for ALL matches found.
+            The function shows up to AMBIGUITY_EXAMPLES_CAP examples and
+            indicates how many additional matches are not shown.
+
+    Returns:
+        A multi-line error string suitable for inclusion in the
+        BatchValidationError list (disk path) or skipped_details (Live Word path).
+
+    Raises:
+        ValueError: if match_positions has fewer than 2 entries (this helper is
+            only meaningful for genuine ambiguity).
+    """
+    total = len(match_positions)
+    if total < 2:
+        raise ValueError(f"format_ambiguity_error requires at least 2 matches, got {total}")
+
+    shown = match_positions[:AMBIGUITY_EXAMPLES_CAP]
+    remaining = total - len(shown)
+
+    lines = [
+        f"- Edit {edit_index} Failed: Ambiguous match. Target text appears "
+        f"{total} times. First {len(shown)} occurrences:"
+    ]
+
+    for i, (start, end) in enumerate(shown, start=1):
+        pre_start = max(0, start - AMBIGUITY_CONTEXT_CHARS)
+        post_end = min(len(haystack), end + AMBIGUITY_CONTEXT_CHARS)
+
+        pre_context = haystack[pre_start:start].replace("\n", " ")
+        post_context = haystack[end:post_end].replace("\n", " ")
+        match_text = haystack[start:end].replace("\n", " ")
+
+        # Truncate displayed match itself if pathologically long.
+        if len(match_text) > 50:
+            match_text = match_text[:25] + "..." + match_text[-20:]
+
+        prefix_marker = "..." if pre_start > 0 else ""
+        suffix_marker = "..." if post_end < len(haystack) else ""
+
+        lines.append(f'    {i}. "{prefix_marker}{pre_context}[{match_text}]{post_context}{suffix_marker}"')
+
+    if remaining > 0:
+        lines.append(f"    ... and {remaining} more occurrence(s) not shown.")
+
+    lines.append("  Please provide more surrounding context in your target_text to uniquely identify the location.")
+
+    return "\n".join(lines)
+
+
 def _build_critic_markup(
     target_text: str,
     new_text: str,
