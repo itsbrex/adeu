@@ -28,14 +28,8 @@ def trim_common_context(target: str, new_val: str) -> tuple[int, int]:
     # Backtrack to nearest whitespace if we split a word
     if prefix_len < len(target) and prefix_len < len(new_val):
         while prefix_len > 0:
-            target_split = (
-                not target[prefix_len - 1].isspace()
-                and not target[prefix_len].isspace()
-            )
-            new_split = (
-                not new_val[prefix_len - 1].isspace()
-                and not new_val[prefix_len].isspace()
-            )
+            target_split = not target[prefix_len - 1].isspace() and not target[prefix_len].isspace()
+            new_split = not new_val[prefix_len - 1].isspace() and not new_val[prefix_len].isspace()
             if target_split or new_split:
                 prefix_len -= 1
             else:
@@ -100,10 +94,7 @@ def trim_common_context(target: str, new_val: str) -> tuple[int, int]:
     new_rem_len = len(new_val) - prefix_len
 
     limit_suffix = min(target_rem_len, new_rem_len)
-    while (
-        suffix_len < limit_suffix
-        and target[-(suffix_len + 1)] == new_val[-(suffix_len + 1)]
-    ):
+    while suffix_len < limit_suffix and target[-(suffix_len + 1)] == new_val[-(suffix_len + 1)]:
         suffix_len += 1
 
     # Backtrack suffix if we split a word (Bi-directional check)
@@ -111,17 +102,11 @@ def trim_common_context(target: str, new_val: str) -> tuple[int, int]:
         while suffix_len > 0:
             target_split = False
             if suffix_len < len(target):
-                target_split = (
-                    not target[-(suffix_len + 1)].isspace()
-                    and not target[-suffix_len].isspace()
-                )
+                target_split = not target[-(suffix_len + 1)].isspace() and not target[-suffix_len].isspace()
 
             new_split = False
             if suffix_len < len(new_val):
-                new_split = (
-                    not new_val[-(suffix_len + 1)].isspace()
-                    and not new_val[-suffix_len].isspace()
-                )
+                new_split = not new_val[-(suffix_len + 1)].isspace() and not new_val[-suffix_len].isspace()
 
             if target_split or new_split:
                 suffix_len -= 1
@@ -155,9 +140,7 @@ def trim_common_context(target: str, new_val: str) -> tuple[int, int]:
                 if (
                     right[idx_in_right] == "_"
                     and (idx_in_right == 0 or right[idx_in_right - 1] != "_")
-                    and (
-                        idx_in_right == len(right) - 1 or right[idx_in_right + 1] != "_"
-                    )
+                    and (idx_in_right == len(right) - 1 or right[idx_in_right + 1] != "_")
                 ):
                     suffix_len -= idx_in_right + 1
                     break
@@ -172,12 +155,8 @@ def trim_common_context(target: str, new_val: str) -> tuple[int, int]:
     # This prevents marker leaks and allows exact matches on formatting blocks (like __init__).
     for marker in ["**", "__", "_"]:
         mlen = len(marker)
-        tgt_rem = target[
-            prefix_len : len(target) - suffix_len if suffix_len else len(target)
-        ]
-        new_rem = new_val[
-            prefix_len : len(new_val) - suffix_len if suffix_len else len(new_val)
-        ]
+        tgt_rem = target[prefix_len : len(target) - suffix_len if suffix_len else len(target)]
+        new_rem = new_val[prefix_len : len(new_val) - suffix_len if suffix_len else len(new_val)]
 
         if (
             tgt_rem.startswith(marker)
@@ -207,9 +186,7 @@ def trim_common_context(target: str, new_val: str) -> tuple[int, int]:
     return prefix_len, suffix_len
 
 
-def generate_edits_from_text(
-    original_text: str, modified_text: str
-) -> List[ModifyText]:
+def generate_edits_from_text(original_text: str, modified_text: str) -> List[ModifyText]:
     """
     Compares original and modified text to generate structured ModifyText objects.
     Uses Word-Level diffing to ensure natural, readable redlines.
@@ -233,7 +210,7 @@ def generate_edits_from_text(
     current_original_index = 0
     pending_delete = None  # Tuple(index, text)
 
-    for i, (op, text) in enumerate(diffs):
+    for _, (op, text) in enumerate(diffs):
         if op == 0:  # Equal
             # Flush pending delete if any
             if pending_delete:

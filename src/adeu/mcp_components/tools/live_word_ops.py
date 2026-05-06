@@ -114,9 +114,7 @@ def _is_structured_new_text(new_text: str) -> bool:
     return False
 
 
-def _split_new_text_into_lines(
-    new_text: str, keep_trailing_empty: bool = False
-) -> List[str]:
+def _split_new_text_into_lines(new_text: str, keep_trailing_empty: bool = False) -> List[str]:
     """
     Splits new_text into lines for paragraph-wise insertion. Matches
     the disk engine's behaviour of splitting on any run of newline chars.
@@ -160,9 +158,7 @@ def _apply_line_formatting(
 _WD_STYLE_NORMAL = -1
 
 
-def _apply_paragraph_style(
-    doc: Any, position: int, heading_level: Optional[int]
-) -> None:
+def _apply_paragraph_style(doc: Any, position: int, heading_level: Optional[int]) -> None:
     """
     Applies a paragraph style to the paragraph containing `position`.
 
@@ -184,9 +180,7 @@ def _apply_paragraph_style(
         p = doc.Range(position, position).Paragraphs(1)
         p.Style = style_id
     except Exception as e:
-        logger.warning(
-            f"Failed to apply paragraph style (level={heading_level}) at {position}: {e}"
-        )
+        logger.warning(f"Failed to apply paragraph style (level={heading_level}) at {position}: {e}")
 
 
 class ParsedLineInfo(TypedDict):
@@ -228,9 +222,7 @@ def _apply_structured_com_replacement(
             if c.Scope.Start >= target_rng.Start and c.Scope.End <= target_rng.End:
                 rescued_comments.append({"author": c.Author, "text": c.Range.Text})
         if rescued_comments:
-            logger.debug(
-                f"Rescued {len(rescued_comments)} comments before payload execution."
-            )
+            logger.debug(f"Rescued {len(rescued_comments)} comments before payload execution.")
     except Exception as e:
         logger.warning(f"Failed to rescue comments: {e}")
 
@@ -241,9 +233,7 @@ def _apply_structured_com_replacement(
 
     lines = _split_new_text_into_lines(new_text, keep_trailing_empty=has_suffix)
     if not lines:
-        logger.debug(
-            "No lines found in new_text, falling back to empty string replacement."
-        )
+        logger.debug("No lines found in new_text, falling back to empty string replacement.")
         if target_rng.Start < target_rng.End:
             target_rng.Delete()
         return
@@ -382,9 +372,7 @@ def _apply_structured_com_replacement(
                 plain_len = len(p_info["plain"])
 
                 # If we prepended \r, target is +1. If we appended \r, target is at offset.
-                target_offset = (
-                    current_abs_offset + 1 if original_len > 0 else current_abs_offset
-                )
+                target_offset = current_abs_offset + 1 if original_len > 0 else current_abs_offset
 
                 _apply_paragraph_style(doc, target_offset, p_info["level"])
                 _apply_line_formatting(
@@ -408,9 +396,7 @@ def _apply_structured_com_replacement(
     logger.info("Reverse Sandwich Structured Replacement finished successfully.")
 
 
-def apply_com_replacement(
-    doc: Any, app: Any, target_rng: Any, new_text: str, comment_text: Optional[str]
-) -> None:
+def apply_com_replacement(doc: Any, app: Any, target_rng: Any, new_text: str, comment_text: Optional[str]) -> None:
     """
     Routes to simple or structured replacement based on new_text content.
     """
@@ -429,9 +415,7 @@ def apply_com_replacement(
     except Exception as e:
         logger.warning(f"Failed to rescue comments: {e}")
 
-    plain_text, b_ranges, i_ranges = parse_markdown_for_com(
-        new_text.replace("\n", "\r")
-    )
+    plain_text, b_ranges, i_ranges = parse_markdown_for_com(new_text.replace("\n", "\r"))
 
     was_tracking = doc.TrackRevisions
     original_len = target_rng.End - target_rng.Start

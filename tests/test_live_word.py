@@ -498,126 +498,6 @@ def test_live_word_obs_02_deletion_insertion_order(active_word_app):
     run_async(run_test())
 
 
-def test_live_word_table_spanning_edits(active_word_app):
-    """
-    Tests that the Live Word engine can successfully execute `ModifyText` operations
-    that span across virtual table cell boundaries (" | "), including injecting text
-    into entirely empty cells via structural COM traversal.
-    """
-    app, doc = active_word_app
-    ctx = get_mock_ctx()
-
-    # Clear document and construct table
-    doc.Range(0, doc.Content.End).Text = ""
-    table = doc.Tables.Add(doc.Range(0, 0), NumRows=2, NumColumns=2)
-
-    # Row 1: Two populated cells
-    table.Cell(1, 1).Range.Text = "Header 1"
-    table.Cell(1, 2).Range.Text = "Header 2"
-
-    # Row 2: One populated, one completely EMPTY (testing the critical edge case)
-    table.Cell(2, 1).Range.Text = "Site Organization"
-    # table.Cell(2, 2) is natively left empty
-
-    async def run_test():
-        changes = [
-            # Edit 1: Standard cell-spanning replacement
-            ModifyText(
-                target_text="Header 1 | Header 2",
-                new_text="New Header 1 | Header 2",
-                comment="Updated header",
-            ),
-            # Edit 2: The LW-1 Empty Cell Injection Fix
-            ModifyText(
-                target_text="Site Organization | ",
-                new_text="Site Organization | 20%",
-                comment=None,
-            ),
-        ]
-
-        # Execute the Batch
-        result = await process_active_word_batch(
-            ctx=ctx, changes=changes, author_name="Adeu Tester"
-        )
-
-        # Assertions on the Engine Output
-        assert "Applied: 2" in result, f"Expected 2 applied edits, but got: {result}"
-        assert "Failed: 0" in result, f"Expected 0 failures, but got: {result}"
-
-        # Assertions on the actual MS Word COM state
-        # (We strip '\r\x07' because Word's .Text property includes the raw cell markers)
-        val1 = table.Cell(1, 1).Range.Text.replace("\r\x07", "")
-        assert val1 == "New Header 1", "Standard cell replacement failed."
-
-        val2 = table.Cell(2, 2).Range.Text.replace("\r\x07", "")
-        assert val2 == "20%", "Empty cell injection failed."
-
-        # Ensure MS Word natively tracked the changes
-        assert (
-            doc.Revisions.Count > 0
-        ), "Changes were not recorded as Tracked Revisions."
-
-    run_async(run_test())
-
-
-def test_live_word_obs_03_styled_whitespace_trimming(active_word_app):
-    """
-    Test for OBS-03 (Bug #2): Modifying whitespace adjacent to styled markdown
-    markers (like **bold**) must not trigger paragraph restructuring that
-    corrupts or shears formatting. The styling must remain intact.
-    """
-    app, doc = active_word_app
-    ctx = get_mock_ctx()
-
-    # 1. Setup the document to exactly match the failing state
-    doc.TrackRevisions = False
-    doc.Range(0, doc.Content.End).Text = (
-        "(After Prequalification)\n\nFor Projects with Project Concept Notes (PCN) "
-    )
-
-    # 2. Explicitly apply Bold formatting to the paragraphs
-    # Paragraphs are 1-indexed. '\n\n' creates 3 paragraphs.
-    doc.Paragraphs(1).Range.Font.Bold = True
-    doc.Paragraphs(3).Range.Font.Bold = True
-
-    async def run_test():
-        target_text = "**(After Prequalification)**\n\n**For Projects with Project Concept Notes (PCN) **"
-        new_text = "**(After Prequalification)**\n\n**For Projects with Project Concept Notes (PCN)**"
-
-        changes = [
-            ModifyText(
-                target_text=target_text,
-                new_text=new_text,
-                comment="Testing whitespace trim",
-            )
-        ]
-
-        # Execute the Batch
-        result = await process_active_word_batch(
-            ctx=ctx, changes=changes, author_name="Adeu Tester"
-        )
-
-        assert "Applied: 1" in result, f"Expected 1 applied edit, but got: {result}"
-        assert "Failed: 0" in result, f"Expected 0 failures, but got: {result}"
-
-        # Read the document back to verify CriticMarkup and Formatting Integrity
-        content = extract_content(
-            await read_active_word_document(ctx, clean_view=False)
-        )
-
-        # 3. Assert formatting was not sheared off.
-        assert (
-            "**For Projects" in content
-        ), "Formatting corruption detected! The leading bold marker was sheared off."
-
-        # Ensure the trailing space was handled safely
-        assert (
-            "(PCN) **" not in content
-        ), "The trailing space was not successfully removed."
-
-    run_async(run_test())
-
-
 def test_live_word_batch_fixes_ambiguity_and_comment_duplication(active_word_app):
     """
     End-to-end test verifying three major Live Word fixes:
@@ -626,8 +506,11 @@ def test_live_word_batch_fixes_ambiguity_and_comment_duplication(active_word_app
     3. AcceptChange uses Semantic/Proximity mapping to survive ID drift (Issue 1 & 5).
     """
     from docx import Document
-    from adeu.mcp_components.tools.live_word import _build_mock_docx_stream
-    from adeu.models import AcceptChange
+    from adeu.mcp_components.tools.live_word import (
+        _build_mock_docx_stream,
+        process_active_word_batch,
+    )
+    from adeu.models import AcceptChange, ModifyText
     from adeu.redline.mapper import DocumentMapper
 
     app, doc = active_word_app

@@ -92,9 +92,7 @@ def validate_edit_strings(
             t_fns = re.findall(r"\[\^(?:fn|en)-[^\]]+\]", t_text)
             n_fns = re.findall(r"\[\^(?:fn|en)-[^\]]+\]", n_text)
             if sorted(t_fns) != sorted(n_fns):
-                if len(n_fns) > len(t_fns) or any(
-                    n_fns.count(f) > t_fns.count(f) for f in n_fns
-                ):
+                if len(n_fns) > len(t_fns) or any(n_fns.count(f) > t_fns.count(f) for f in n_fns):
                     errors.append(
                         f"- Edit {i + 1} Failed: Cannot insert footnote/endnote markers via text replace. "
                         "Markers like `[^fn-N]` are read-only projections. Use Word's References menu."
@@ -185,9 +183,7 @@ def validate_edit_strings(
                 if stripped.startswith("#######"):
                     level = len(stripped) - len(stripped.lstrip("#"))
                     if stripped[level:].startswith(" ") or not stripped[level:]:
-                        errors.append(
-                            f"- Edit {i + 1} Failed: Heading level {level} is not supported (maximum is 6)."
-                        )
+                        errors.append(f"- Edit {i + 1} Failed: Heading level {level} is not supported (maximum is 6).")
                         break
 
     return errors
@@ -206,11 +202,7 @@ class RedlineEngine:
 
         parts_to_inject = [self.doc.part]
         for part in self.doc.part.package.parts:
-            if (
-                part != self.doc.part
-                and "wordprocessingml" in part.content_type
-                and part.content_type.endswith("+xml")
-            ):
+            if part != self.doc.part and "wordprocessingml" in part.content_type and part.content_type.endswith("+xml"):
                 parts_to_inject.append(part)
 
         for part in parts_to_inject:
@@ -223,9 +215,7 @@ class RedlineEngine:
             xml_str = xml_bytes.decode("utf-8")
 
             if 'xmlns:w16du="' not in xml_str and "xmlns:w16du='" not in xml_str:
-                xml_str = re.sub(
-                    r"(<w:[a-zA-Z0-9_]+ )", r"\1" + w16du_ns_str + " ", xml_str, count=1
-                )
+                xml_str = re.sub(r"(<w:[a-zA-Z0-9_]+ )", r"\1" + w16du_ns_str + " ", xml_str, count=1)
                 part._adeu_element = parse_xml(xml_str.encode("utf-8"))  # type: ignore[attr-defined]
                 if hasattr(part, "_element"):
                     part._element = part._adeu_element  # type: ignore[attr-defined]
@@ -234,9 +224,7 @@ class RedlineEngine:
 
         self.author = author
         self.timestamp = (
-            datetime.datetime.now(datetime.timezone.utc)
-            .replace(microsecond=0)
-            .strftime("%Y-%m-%dT%H:%M:%SZ")
+            datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
         )
         self.current_id = self._scan_existing_ids()
         self.mapper = DocumentMapper(self.doc)
@@ -483,9 +471,7 @@ class RedlineEngine:
                     if anchor_run and anchor_run._element.rPr is not None:
                         new_run.append(deepcopy(anchor_run._element.rPr))
 
-                    self._apply_run_props(
-                        new_run, seg_props, suppress_inherited=suppress_inherited
-                    )
+                    self._apply_run_props(new_run, seg_props, suppress_inherited=suppress_inherited)
 
                     t = create_element("w:t")
                     self._set_text_content(t, seg_text)
@@ -508,17 +494,13 @@ class RedlineEngine:
                 if start_p == end_p:
                     self._attach_comment(start_p, start_ins, start_ins, comment)
                 else:
-                    self._attach_comment_spanning(
-                        start_p, start_ins, end_p, end_ins, comment
-                    )
+                    self._attach_comment_spanning(start_p, start_ins, end_p, end_ins, comment)
 
             return None, (created_nodes[-1][0] if created_nodes else None)
 
         # 1. Inline Logic
         first_line = lines[0]
-        ins_elem = self._track_insert_inline(
-            first_line, anchor_run, suppress_inherited=suppress_inherited
-        )
+        ins_elem = self._track_insert_inline(first_line, anchor_run, suppress_inherited=suppress_inherited)
 
         remaining_lines = lines[1:]
 
@@ -531,14 +513,9 @@ class RedlineEngine:
         suffix_nodes: list = []
         if current_p is not None:
             positional_anchor = (
-                ins_elem
-                if ins_elem is not None
-                else (anchor_run._element if anchor_run is not None else None)
+                ins_elem if ins_elem is not None else (anchor_run._element if anchor_run is not None else None)
             )
-            while (
-                positional_anchor is not None
-                and positional_anchor.getparent() is not current_p
-            ):
+            while positional_anchor is not None and positional_anchor.getparent() is not current_p:
                 positional_anchor = positional_anchor.getparent()
                 if positional_anchor is current_p:
                     positional_anchor = None
@@ -576,10 +553,7 @@ class RedlineEngine:
                 return ins_elem
 
             has_num_pr = False
-            if (
-                current_p.pPr is not None
-                and current_p.pPr.find(qn("w:numPr")) is not None
-            ):
+            if current_p.pPr is not None and current_p.pPr.find(qn("w:numPr")) is not None:
                 has_num_pr = True
 
             for i, line_text in enumerate(remaining_lines):
@@ -631,9 +605,7 @@ class RedlineEngine:
                     if anchor_run and anchor_run._element.rPr is not None:
                         new_run.append(deepcopy(anchor_run._element.rPr))
 
-                    self._apply_run_props(
-                        new_run, seg_props, suppress_inherited=suppress_inherited
-                    )
+                    self._apply_run_props(new_run, seg_props, suppress_inherited=suppress_inherited)
 
                     t = create_element("w:t")
                     self._set_text_content(t, seg_text)
@@ -656,9 +628,7 @@ class RedlineEngine:
 
         return ins_elem, last_p
 
-    def _apply_run_props(
-        self, run_element, props: Dict[str, Any], suppress_inherited: bool = False
-    ) -> None:
+    def _apply_run_props(self, run_element, props: Dict[str, Any], suppress_inherited: bool = False) -> None:
         """
         Applies Bold/Italic properties to a run.
         Uses python-docx native Run object to ensure XML schema ordering is correct.
@@ -910,9 +880,7 @@ class RedlineEngine:
         except ValueError:
             pass
 
-    def validate_edits(
-        self, edits: List[Union[ModifyText, InsertTableRow, DeleteTableRow]]
-    ) -> List[str]:
+    def validate_edits(self, edits: List[Union[ModifyText, InsertTableRow, DeleteTableRow]]) -> List[str]:
         """
         Performs an exhaustive dry-run validation of all text edits in the batch.
         Returns a list of error strings. If the list is empty, the batch is safe to apply.
@@ -950,15 +918,13 @@ class RedlineEngine:
                         valid_matches.append((match_start, match_length))
 
                 violates_boundary = False
-                if "READONLY_BOUNDARY_START" in (
-                    edit.target_text or ""
-                ) or "READONLY_BOUNDARY_START" in (getattr(edit, "new_text", "") or ""):
+                if "READONLY_BOUNDARY_START" in (edit.target_text or "") or "READONLY_BOUNDARY_START" in (
+                    getattr(edit, "new_text", "") or ""
+                ):
                     violates_boundary = True
                 if "# Document Structure (Read-Only)" in (
                     edit.target_text or ""
-                ) or "# Document Structure (Read-Only)" in (
-                    getattr(edit, "new_text", "") or ""
-                ):
+                ) or "# Document Structure (Read-Only)" in (getattr(edit, "new_text", "") or ""):
                     violates_boundary = True
 
                 if violates_boundary or (matches and not valid_matches):
@@ -971,9 +937,7 @@ class RedlineEngine:
                 valid_matches = matches
 
             if len(valid_matches) == 0:
-                errors.append(
-                    f'- Edit {i + 1} Failed: Target text not found in document:\n  "{edit.target_text}"'
-                )
+                errors.append(f'- Edit {i + 1} Failed: Target text not found in document:\n  "{edit.target_text}"')
             elif len(valid_matches) > 1:
                 from adeu.markup import format_ambiguity_error
 
@@ -990,17 +954,11 @@ class RedlineEngine:
                 )
 
             for start, length in valid_matches:
-                spans = [
-                    s
-                    for s in self.mapper.spans
-                    if s.end > start and s.start < start + length
-                ]
+                spans = [s for s in self.mapper.spans if s.end > start and s.start < start + length]
                 nested_authors = set()
                 for s in spans:
                     if s.ins_id:
-                        ins_nodes = self.doc.element.xpath(
-                            f"//w:ins[@w:id='{s.ins_id}']"
-                        )
+                        ins_nodes = self.doc.element.xpath(f"//w:ins[@w:id='{s.ins_id}']")
                         if ins_nodes:
                             auth = ins_nodes[0].get(qn("w:author"))
                             if auth and auth != self.author:
@@ -1019,16 +977,8 @@ class RedlineEngine:
         Actions are applied first, the Virtual DOM map is rebuilt, and then text edits are validated and applied.
         """
         self.skipped_details = []
-        actions = [
-            c
-            for c in changes
-            if isinstance(c, (AcceptChange, RejectChange, ReplyComment))
-        ]
-        edits = [
-            c
-            for c in changes
-            if isinstance(c, (ModifyText, InsertTableRow, DeleteTableRow))
-        ]
+        actions = [c for c in changes if isinstance(c, (AcceptChange, RejectChange, ReplyComment))]
+        edits = [c for c in changes if isinstance(c, (ModifyText, InsertTableRow, DeleteTableRow))]
 
         applied_actions, skipped_actions = 0, 0
         if actions:
@@ -1055,9 +1005,7 @@ class RedlineEngine:
             "skipped_details": self.skipped_details,
         }
 
-    def apply_edits(
-        self, edits: List[Union[ModifyText, InsertTableRow, DeleteTableRow]]
-    ) -> tuple[int, int]:
+    def apply_edits(self, edits: List[Union[ModifyText, InsertTableRow, DeleteTableRow]]) -> tuple[int, int]:
         applied = 0
         skipped = 0
 
@@ -1083,9 +1031,7 @@ class RedlineEngine:
                 else:
                     skipped += 1
                     target_snippet = edit.target_text.strip()[:40]
-                    self.skipped_details.append(
-                        f"- Failed to apply structural edit targeting: '{target_snippet}...'"
-                    )
+                    self.skipped_details.append(f"- Failed to apply structural edit targeting: '{target_snippet}...'")
             else:
                 resolved = self._pre_resolve_heuristic_edit(edit)
                 if resolved:
@@ -1099,9 +1045,7 @@ class RedlineEngine:
 
                     # N2 Fix: Safe display text fallback for heuristic failures
                     display_text = edit.target_text or "insertion"
-                    if not display_text.strip() and hasattr(
-                        edit, "_original_target_text"
-                    ):
+                    if not display_text.strip() and hasattr(edit, "_original_target_text"):
                         display_text = edit._original_target_text
 
                     target_snippet = display_text.strip()[:40]
@@ -1109,9 +1053,7 @@ class RedlineEngine:
                         target_snippet = "insertion"
 
                     msg = f"- Failed to apply edit targeting: '{target_snippet}...'"
-                    if getattr(edit, "_is_table_edit", False) or " | " in (
-                        edit.target_text or ""
-                    ):
+                    if getattr(edit, "_is_table_edit", False) or " | " in (edit.target_text or ""):
                         msg += (
                             ". (Note: Structural table changes like adding/removing rows or columns "
                             "are not supported via text replace)."
@@ -1126,10 +1068,7 @@ class RedlineEngine:
             start = edit._match_start_index or 0
             end = start + (len(edit.target_text) if edit.target_text else 0)
 
-            if any(
-                start < occ_end and end > occ_start
-                for occ_start, occ_end in occupied_ranges
-            ):
+            if any(start < occ_end and end > occ_start for occ_start, occ_end in occupied_ranges):
                 logger.warning(f"Skipping overlapping edit at index {start}")
                 skipped += 1
 
@@ -1150,9 +1089,7 @@ class RedlineEngine:
             elif isinstance(edit, DeleteTableRow):
                 success = self._apply_delete_row(edit)
             else:
-                success = self._apply_single_edit_indexed(
-                    edit, original_new_text=orig_new, rebuild_map=False
-                )
+                success = self._apply_single_edit_indexed(edit, original_new_text=orig_new, rebuild_map=False)
 
             if success:
                 applied += 1
@@ -1182,9 +1119,7 @@ class RedlineEngine:
         if start_idx is None:
             return False
 
-        target_runs = self.mapper.find_target_runs_by_index(
-            start_idx, len(edit.target_text)
-        )
+        target_runs = self.mapper.find_target_runs_by_index(start_idx, len(edit.target_text))
         if not target_runs:
             return False
 
@@ -1241,9 +1176,7 @@ class RedlineEngine:
         if start_idx is None:
             return False
 
-        target_runs = self.mapper.find_target_runs_by_index(
-            start_idx, len(edit.target_text)
-        )
+        target_runs = self.mapper.find_target_runs_by_index(start_idx, len(edit.target_text))
         if not target_runs:
             return False
 
@@ -1265,9 +1198,7 @@ class RedlineEngine:
 
         return True
 
-    def _pre_resolve_heuristic_edit(
-        self, edit: ModifyText
-    ) -> Union[ModifyText, List[ModifyText], None]:
+    def _pre_resolve_heuristic_edit(self, edit: ModifyText) -> Union[ModifyText, List[ModifyText], None]:
         if not edit.target_text:
             return None
 
@@ -1313,9 +1244,7 @@ class RedlineEngine:
 
                 if t_url != n_url:
                     t_idx = actual_doc_text.find(t_url)
-                    url_edit = ModifyText(
-                        type="modify", target_text=t_url, new_text=n_url, comment=None
-                    )
+                    url_edit = ModifyText(type="modify", target_text=t_url, new_text=n_url, comment=None)
                     url_edit._match_start_index = start_idx + t_idx
                     url_edit._internal_op = "URL_RETARGET"
                     url_edit._active_mapper_ref = active_mapper
@@ -1329,10 +1258,7 @@ class RedlineEngine:
         overlaps_virtual_pipe = False
         if active_mapper:
             overlaps_virtual_pipe = any(
-                s.text == " | "
-                and s.run is None
-                and s.start < start_idx + match_len
-                and s.end > start_idx
+                s.text == " | " and s.run is None and s.start < start_idx + match_len and s.end > start_idx
                 for s in active_mapper.spans
             )
 
@@ -1354,27 +1280,19 @@ class RedlineEngine:
                         target_comment_idx = idx
                         break
 
-                for cell_idx, (a_cell, n_cell) in enumerate(
-                    zip(actual_cells, new_cells, strict=True)
-                ):
+                for cell_idx, (a_cell, n_cell) in enumerate(zip(actual_cells, new_cells, strict=True)):
                     a_clean = a_cell.strip()
                     n_clean = n_cell.strip()
 
                     if a_clean:
                         # Align exactly to where this cell's text begins in the real document
-                        actual_start = self.mapper.full_text.find(
-                            a_clean, search_offset
-                        )
+                        actual_start = self.mapper.full_text.find(a_clean, search_offset)
                         if actual_start == -1 or actual_start > search_offset + 10:
-                            actual_start = (
-                                search_offset  # fallback if not found cleanly
-                            )
+                            actual_start = search_offset  # fallback if not found cleanly
                     else:
                         actual_start = search_offset
 
-                    should_attach_comment = (edit.comment is not None) and (
-                        cell_idx == target_comment_idx
-                    )
+                    should_attach_comment = (edit.comment is not None) and (cell_idx == target_comment_idx)
 
                     if a_clean != n_clean or should_attach_comment:
                         sub_edit = ModifyText(
@@ -1391,9 +1309,7 @@ class RedlineEngine:
                             sub_edit._match_start_index = actual_start
                             sub_edit._internal_op = "COMMENT_ONLY"
                         else:
-                            prefix_len, suffix_len = trim_common_context(
-                                a_clean, n_clean
-                            )
+                            prefix_len, suffix_len = trim_common_context(a_clean, n_clean)
                             t_end = len(a_clean) - suffix_len
                             n_end = len(n_clean) - suffix_len
 
@@ -1438,10 +1354,7 @@ class RedlineEngine:
                     ]
                 )
 
-        if (
-            actual_doc_text == effective_new_text
-            or edit.target_text == effective_new_text
-        ):
+        if actual_doc_text == effective_new_text or edit.target_text == effective_new_text:
             proxy_edit = ModifyText(
                 type="modify",
                 target_text=actual_doc_text,
@@ -1465,9 +1378,7 @@ class RedlineEngine:
             final_new = effective_new_text[len(actual_doc_text.rstrip()) :]
             effective_start_idx = start_idx + len(actual_doc_text.rstrip())
         else:
-            prefix_len, suffix_len = trim_common_context(
-                actual_doc_text, effective_new_text
-            )
+            prefix_len, suffix_len = trim_common_context(actual_doc_text, effective_new_text)
 
             t_end = len(actual_doc_text) - suffix_len
             n_end = len(effective_new_text) - suffix_len
@@ -1529,9 +1440,7 @@ class RedlineEngine:
         logger.debug(f"Applying Edit at [{start_idx}:{start_idx + length}] Op={op}")
 
         if op == "URL_RETARGET":
-            target_spans = [
-                s for s in active_mapper.spans if s.start <= start_idx < s.end
-            ]
+            target_spans = [s for s in active_mapper.spans if s.start <= start_idx < s.end]
             if target_spans and target_spans[0].hyperlink_id:
                 rel = self.doc.part.rels[target_spans[0].hyperlink_id]
                 rel._target = edit.new_text
@@ -1539,9 +1448,7 @@ class RedlineEngine:
             return False
 
         if op == "COMMENT_ONLY":
-            target_runs = active_mapper.find_target_runs_by_index(
-                start_idx, length, rebuild_map=rebuild_map
-            )
+            target_runs = active_mapper.find_target_runs_by_index(start_idx, length, rebuild_map=rebuild_map)
             if not target_runs:
                 return False
             if edit.comment:
@@ -1558,15 +1465,11 @@ class RedlineEngine:
                     if start_p == end_p:
                         self._attach_comment(start_p, first_el, last_el, edit.comment)
                     else:
-                        self._attach_comment_spanning(
-                            start_p, first_el, end_p, last_el, edit.comment
-                        )
+                        self._attach_comment_spanning(start_p, first_el, end_p, last_el, edit.comment)
             return True
 
         if op == EditOperationType.INSERTION:
-            anchor_run, anchor_paragraph = active_mapper.get_insertion_anchor(
-                start_idx, rebuild_map=rebuild_map
-            )
+            anchor_run, anchor_paragraph = active_mapper.get_insertion_anchor(start_idx, rebuild_map=rebuild_map)
             if not anchor_run and not anchor_paragraph:
                 return False
 
@@ -1613,19 +1516,13 @@ class RedlineEngine:
                     if edit.comment:
                         if last_p is not None:
                             last_ins = last_p.findall(f".//{qn('w:ins')}")[-1]
-                            self._attach_comment_spanning(
-                                actual_parent, ins_elem, last_p, last_ins, edit.comment
-                            )
+                            self._attach_comment_spanning(actual_parent, ins_elem, last_p, last_ins, edit.comment)
                         else:
-                            self._attach_comment(
-                                actual_parent, ins_elem, ins_elem, edit.comment
-                            )
+                            self._attach_comment(actual_parent, ins_elem, ins_elem, edit.comment)
             else:
                 if anchor_run:
                     next_run = self._get_next_run(anchor_run)
-                    style_run = self._determine_style_source(
-                        anchor_run, next_run, final_new_text
-                    )
+                    style_run = self._determine_style_source(anchor_run, next_run, final_new_text)
                 else:
                     style_run = None
 
@@ -1648,18 +1545,12 @@ class RedlineEngine:
                     if edit.comment:
                         if last_p is not None:
                             last_ins = last_p.findall(f".//{qn('w:ins')}")[-1]
-                            self._attach_comment_spanning(
-                                actual_parent, ins_elem, last_p, last_ins, edit.comment
-                            )
+                            self._attach_comment_spanning(actual_parent, ins_elem, last_p, last_ins, edit.comment)
                         else:
-                            self._attach_comment(
-                                actual_parent, ins_elem, ins_elem, edit.comment
-                            )
+                            self._attach_comment(actual_parent, ins_elem, ins_elem, edit.comment)
             return True
 
-        target_runs = active_mapper.find_target_runs_by_index(
-            start_idx, length, rebuild_map=rebuild_map
-        )
+        target_runs = active_mapper.find_target_runs_by_index(start_idx, length, rebuild_map=rebuild_map)
         virtual_spans = []
         if op in (EditOperationType.DELETION, EditOperationType.MODIFICATION):
             virtual_spans = active_mapper.get_virtual_spans_in_range(start_idx, length)
@@ -1669,11 +1560,7 @@ class RedlineEngine:
 
         affected_ps = set()
         for run in target_runs:
-            if (
-                run._parent
-                and hasattr(run._parent, "_element")
-                and run._parent._element.tag == qn("w:p")
-            ):
+            if run._parent and hasattr(run._parent, "_element") and run._parent._element.tag == qn("w:p"):
                 affected_ps.add(run._parent._element)
 
         if op == EditOperationType.DELETION:
@@ -1685,17 +1572,11 @@ class RedlineEngine:
                     first_del_element = del_elem
                 last_del_element = del_elem
 
-            if (
-                edit.comment
-                and first_del_element is not None
-                and last_del_element is not None
-            ):
+            if edit.comment and first_del_element is not None and last_del_element is not None:
                 start_p = first_del_element.getparent()
                 end_p = last_del_element.getparent()
                 if start_p == end_p:
-                    self._attach_comment(
-                        start_p, first_del_element, last_del_element, edit.comment
-                    )
+                    self._attach_comment(start_p, first_del_element, last_del_element, edit.comment)
                 else:
                     self._attach_comment_spanning(
                         start_p,
@@ -1714,11 +1595,7 @@ class RedlineEngine:
                     first_del_element = del_elem
                 last_del_element = del_elem
 
-            if (
-                first_del_element is not None
-                and last_del_element is not None
-                and edit.new_text
-            ):
+            if first_del_element is not None and last_del_element is not None and edit.new_text:
                 parent = last_del_element.getparent()
                 if parent is not None:
                     del_index = parent.index(last_del_element)
@@ -1731,10 +1608,7 @@ class RedlineEngine:
                             current_style = getattr(anchor_para, "style", None)
                         except AttributeError:
                             current_style = None
-                        if (
-                            current_style
-                            and getattr(current_style, "name", "") == style_name
-                        ):
+                        if current_style and getattr(current_style, "name", "") == style_name:
                             text_to_insert = clean_text
 
                     del_r = last_del_element.find(qn("w:r"))
@@ -1765,9 +1639,7 @@ class RedlineEngine:
                         elif ins_elem is not None:
                             end_p = ins_elem.getparent()
                             if start_p == end_p:
-                                self._attach_comment(
-                                    parent, first_del_element, ins_elem, edit.comment
-                                )
+                                self._attach_comment(parent, first_del_element, ins_elem, edit.comment)
                             else:
                                 self._attach_comment_spanning(
                                     start_p,
@@ -1786,23 +1658,14 @@ class RedlineEngine:
 
         # PHASE 2: OOXML Paragraph Merge Protocol
         if op in (EditOperationType.DELETION, EditOperationType.MODIFICATION):
-            if (
-                op == EditOperationType.MODIFICATION
-                and not target_runs
-                and virtual_spans
-                and edit.new_text
-            ):
+            if op == EditOperationType.MODIFICATION and not target_runs and virtual_spans and edit.new_text:
                 first_span = virtual_spans[0]
                 if first_span.paragraph:
                     p1_el = first_span.paragraph._element
                     last_runs = p1_el.findall(f".//{qn('w:r')}")
-                    anchor = (
-                        Run(last_runs[-1], first_span.paragraph) if last_runs else None
-                    )
+                    anchor = Run(last_runs[-1], first_span.paragraph) if last_runs else None
 
-                    ins_elem, _ = self.track_insert(
-                        edit.new_text, anchor_run=anchor, comment=edit.comment
-                    )
+                    ins_elem, _ = self.track_insert(edit.new_text, anchor_run=anchor, comment=edit.comment)
                     if ins_elem is not None:
                         p1_el.append(ins_elem)
 
@@ -1878,9 +1741,7 @@ class RedlineEngine:
             if curr.tag == qn("w:r"):
                 return Run(curr, run._parent)
 
-    def _determine_style_source(
-        self, prev_run: Run, next_run: Optional[Run], insert_text: str
-    ) -> Run:
+    def _determine_style_source(self, prev_run: Run, next_run: Optional[Run], insert_text: str) -> Run:
         if not next_run:
             return prev_run
         if insert_text and insert_text.endswith(" "):
@@ -1903,9 +1764,7 @@ class RedlineEngine:
         output.seek(0)
         return output
 
-    def apply_review_actions(
-        self, actions: List[Union[AcceptChange, RejectChange, ReplyComment]]
-    ) -> tuple[int, int]:
+    def apply_review_actions(self, actions: List[Union[AcceptChange, RejectChange, ReplyComment]]) -> tuple[int, int]:
         applied = 0
         skipped = 0
         resolved_history = set()
@@ -1944,18 +1803,14 @@ class RedlineEngine:
                     success = bool(resolved_now)
             elif isinstance(act, ReplyComment):
                 if is_comment:
-                    success = self._reply_to_comment(
-                        target_id, getattr(act, "text", "")
-                    )
+                    success = self._reply_to_comment(target_id, getattr(act, "text", ""))
 
             if success:
                 if resolved_now:
                     resolved_history.update(resolved_now)
                 applied += 1
             else:
-                self.skipped_details.append(
-                    f"- Failed to apply action: {act.type} on {target_id}"
-                )
+                self.skipped_details.append(f"- Failed to apply action: {act.type} on {target_id}")
                 skipped += 1
 
         return applied, skipped
@@ -1998,10 +1853,7 @@ class RedlineEngine:
             if nxt.tag == qn("w:commentRangeEnd"):
                 ends_to_remove.append(nxt)
                 nxt = nxt.getnext()
-            elif (
-                nxt.tag == qn("w:r")
-                and nxt.find(f".//{qn('w:commentReference')}") is not None
-            ):
+            elif nxt.tag == qn("w:r") and nxt.find(f".//{qn('w:commentReference')}") is not None:
                 ends_to_remove.append(nxt)
                 nxt = nxt.getnext()
             elif nxt.tag == qn("w:commentReference"):
@@ -2052,23 +1904,12 @@ class RedlineEngine:
                 self.comments_manager.delete_comment(c_id)
                 for tag in ["w:commentRangeStart", "w:commentRangeEnd"]:
                     for node in self.doc.element.findall(f".//{qn(tag)}"):
-                        if (
-                            node.get(qn("w:id")) == c_id
-                            and node.getparent() is not None
-                        ):
+                        if node.get(qn("w:id")) == c_id and node.getparent() is not None:
                             node.getparent().remove(node)
 
     def _accept_change(self, target_id: str) -> set:
-        primary_ins = [
-            n
-            for n in self.doc.element.findall(f".//{qn('w:ins')}")
-            if n.get(qn("w:id")) == target_id
-        ]
-        primary_del = [
-            n
-            for n in self.doc.element.findall(f".//{qn('w:del')}")
-            if n.get(qn("w:id")) == target_id
-        ]
+        primary_ins = [n for n in self.doc.element.findall(f".//{qn('w:ins')}") if n.get(qn("w:id")) == target_id]
+        primary_del = [n for n in self.doc.element.findall(f".//{qn('w:del')}") if n.get(qn("w:id")) == target_id]
 
         all_ins = set(primary_ins)
         all_del = set(primary_del)
@@ -2115,16 +1956,8 @@ class RedlineEngine:
         return resolved_ids
 
     def _reject_change(self, target_id: str) -> set:
-        primary_ins = [
-            n
-            for n in self.doc.element.findall(f".//{qn('w:ins')}")
-            if n.get(qn("w:id")) == target_id
-        ]
-        primary_del = [
-            n
-            for n in self.doc.element.findall(f".//{qn('w:del')}")
-            if n.get(qn("w:id")) == target_id
-        ]
+        primary_ins = [n for n in self.doc.element.findall(f".//{qn('w:ins')}") if n.get(qn("w:id")) == target_id]
+        primary_del = [n for n in self.doc.element.findall(f".//{qn('w:del')}") if n.get(qn("w:id")) == target_id]
 
         all_ins = set(primary_ins)
         all_del = set(primary_del)
@@ -2182,9 +2015,7 @@ class RedlineEngine:
         if target_id not in existing_comments:
             return False
 
-        new_comment_id = self.comments_manager.add_comment(
-            self.author, text, parent_id=target_id
-        )
+        new_comment_id = self.comments_manager.add_comment(self.author, text, parent_id=target_id)
 
         self._anchor_reply_comment(target_id, new_comment_id)
         return True
@@ -2192,9 +2023,7 @@ class RedlineEngine:
     def _anchor_reply_comment(self, parent_id: str, new_id: str):
         starts = self.doc.element.xpath(f"//w:commentRangeStart[@w:id='{parent_id}']")
         if not starts:
-            logger.warning(
-                "Parent comment start not found during reply", parent_id=parent_id
-            )
+            logger.warning("Parent comment start not found during reply", parent_id=parent_id)
             return
 
         parent_start = starts[0]
@@ -2210,9 +2039,7 @@ class RedlineEngine:
         new_end = create_element("w:commentRangeEnd")
         create_attribute(new_end, "w:id", new_id)
 
-        parent_refs = self.doc.element.xpath(
-            f"//w:commentReference[@w:id='{parent_id}']"
-        )
+        parent_refs = self.doc.element.xpath(f"//w:commentReference[@w:id='{parent_id}']")
         insertion_point = parent_end
 
         if parent_refs:
@@ -2241,9 +2068,7 @@ class RedlineEngine:
         for part in self.doc.part.package.parts:
             if part == self.doc.part:
                 continue
-            if "wordprocessingml" in part.content_type and part.content_type.endswith(
-                "+xml"
-            ):
+            if "wordprocessingml" in part.content_type and part.content_type.endswith("+xml"):
                 element_to_process = None
                 if hasattr(part, "_element"):
                     element_to_process = part._element

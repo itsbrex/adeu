@@ -27,9 +27,7 @@ from adeu.redline.engine import RedlineEngine
 from adeu.redline.mapper import DocumentMapper, renumber_snapshot_ids
 
 APPENDIX_MARKER = "<!-- READONLY_BOUNDARY_START -->"
-COMMENTS_CONTENT_TYPE = (
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"
-)
+COMMENTS_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"
 
 
 def _strip_appendix(text: str) -> str:
@@ -168,12 +166,10 @@ def test_renumber_normalizes_simulated_word_pool(doc_bytes_with_changes_and_comm
 
     chg_after, com_after = _projection_ids(doc)
     assert chg_after == chg_baseline, (
-        "renumber should not change which Chg IDs exist, only normalize them "
-        "to the {1..N} pool"
+        "renumber should not change which Chg IDs exist, only normalize them to the {1..N} pool"
     )
     assert com_after == com_baseline, (
-        "renumber must restore Com IDs to the disk-style {1..M} pool, not "
-        "leave them in the simulated Word range"
+        "renumber must restore Com IDs to the disk-style {1..M} pool, not leave them in the simulated Word range"
     )
 
 
@@ -317,12 +313,8 @@ def test_renumber_returns_translation_dicts(doc_bytes_with_changes_and_comments)
 
     chg_remap, com_remap = renumber_snapshot_ids(doc)
 
-    assert (
-        set(chg_remap.keys()) == original_chg_ids
-    ), "chg_remap must cover every original Chg ID"
-    assert (
-        set(com_remap.keys()) == original_com_ids
-    ), "com_remap must cover every original Com ID"
+    assert set(chg_remap.keys()) == original_chg_ids, "chg_remap must cover every original Chg ID"
+    assert set(com_remap.keys()) == original_com_ids, "com_remap must cover every original Com ID"
 
     # Values must be unique within each pool — no two original IDs map to the same new ID.
     assert len(set(chg_remap.values())) == len(chg_remap)

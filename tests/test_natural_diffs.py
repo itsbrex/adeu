@@ -18,9 +18,7 @@ def test_legal_term_replacement_tenant_lessee():
     modified = "The Lessee shall pay."
 
     edits = generate_edits_from_text(original, modified)
-    target_edits = [
-        e for e in edits if "enant" in e.target_text or "essee" in (e.new_text or "")
-    ]
+    target_edits = [e for e in edits if "enant" in e.target_text or "essee" in (e.new_text or "")]
 
     assert len(target_edits) == 1
     assert target_edits[0].target_text == "Tenant"

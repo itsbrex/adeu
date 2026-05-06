@@ -300,9 +300,7 @@ def _find_match_in_text(text: str, target: str) -> Tuple[int, int]:
         match = re.search(pattern, text)
         if match:
             raw_start, raw_end = match.start(), match.end()
-            refined_start, refined_end = _refine_match_boundaries(
-                text, raw_start, raw_end
-            )
+            refined_start, refined_end = _refine_match_boundaries(text, raw_start, raw_end)
             return _find_safe_boundaries(text, refined_start, refined_end)
     except re.error:
         pass
@@ -348,9 +346,7 @@ def format_ambiguity_error(
     """
     total = len(match_positions)
     if total < 2:
-        raise ValueError(
-            f"format_ambiguity_error requires at least 2 matches, got {total}"
-        )
+        raise ValueError(f"format_ambiguity_error requires at least 2 matches, got {total}")
 
     shown = match_positions[:AMBIGUITY_EXAMPLES_CAP]
     remaining = total - len(shown)
@@ -375,17 +371,12 @@ def format_ambiguity_error(
         prefix_marker = "..." if pre_start > 0 else ""
         suffix_marker = "..." if post_end < len(haystack) else ""
 
-        lines.append(
-            f'    {i}. "{prefix_marker}{pre_context}[{match_text}]{post_context}{suffix_marker}"'
-        )
+        lines.append(f'    {i}. "{prefix_marker}{pre_context}[{match_text}]{post_context}{suffix_marker}"')
 
     if remaining > 0:
         lines.append(f"    ... and {remaining} more occurrence(s) not shown.")
 
-    lines.append(
-        "  Please provide more surrounding context in your target_text "
-        "to uniquely identify the location."
-    )
+    lines.append("  Please provide more surrounding context in your target_text to uniquely identify the location.")
 
     return "\n".join(lines)
 
@@ -412,11 +403,7 @@ def _build_critic_markup(
         # Check if new_text has the same outer markers
         if new_text.startswith(prefix_markup) and new_text.endswith(suffix_markup):
             inner_len = len(prefix_markup)
-            clean_new = (
-                new_text[inner_len:-inner_len]
-                if len(new_text) > inner_len * 2
-                else new_text
-            )
+            clean_new = new_text[inner_len:-inner_len] if len(new_text) > inner_len * 2 else new_text
 
     parts.append(prefix_markup)
 
@@ -469,22 +456,16 @@ def apply_edits_to_markdown(
 
         if not target:
             if highlight_only:
-                logger.debug(
-                    f"Skipping edit {idx}: no target_text in highlight_only mode"
-                )
+                logger.debug(f"Skipping edit {idx}: no target_text in highlight_only mode")
                 continue
             else:
-                logger.warning(
-                    f"Skipping edit {idx}: pure insertion without target_text not supported in text mode"
-                )
+                logger.warning(f"Skipping edit {idx}: pure insertion without target_text not supported in text mode")
                 continue
 
         start, end = _find_match_in_text(markdown_text, target)
 
         if start == -1:
-            logger.warning(
-                f"Skipping edit {idx}: target_text not found: '{target[:50]}...'"
-            )
+            logger.warning(f"Skipping edit {idx}: target_text not found: '{target[:50]}...'")
             continue
 
         actual_matched_text = markdown_text[start:end]
@@ -501,9 +482,7 @@ def apply_edits_to_markdown(
         for occ_start, occ_end in occupied_ranges:
             if start < occ_end and end > occ_start:
                 overlaps = True
-                logger.warning(
-                    f"Skipping edit {orig_idx}: overlaps with previously matched edit"
-                )
+                logger.warning(f"Skipping edit {orig_idx}: overlaps with previously matched edit")
                 break
 
         if not overlaps:
@@ -524,9 +503,7 @@ def apply_edits_to_markdown(
 
         # Extract the unmodified prefix and suffix
         unmodified_prefix = actual_text[:prefix_len] if prefix_len > 0 else ""
-        unmodified_suffix = (
-            actual_text[len(actual_text) - suffix_len :] if suffix_len > 0 else ""
-        )
+        unmodified_suffix = actual_text[len(actual_text) - suffix_len :] if suffix_len > 0 else ""
 
         # Isolate the actual target and new text to be marked up
         t_end = len(actual_text) - suffix_len
