@@ -20,6 +20,20 @@ logger = structlog.get_logger(__name__)
 _CUSTOM_HEADING_NAME_RE = re.compile(r"Heading[ ]?([1-6])(?![0-9])")
 
 
+def is_heading_paragraph(paragraph: Paragraph) -> bool:
+    """
+    Returns True iff `paragraph` projects with a Markdown heading prefix
+    ('# ' through '###### '). Used by ingest and the mapper to decide
+    whether to strip leading whitespace-only runs (which would otherwise
+    project as '## \\nText' instead of '## Text').
+    """
+    prefix = get_paragraph_prefix(paragraph)
+    if not prefix:
+        return False
+    stripped = prefix.rstrip()
+    return bool(stripped) and stripped == "#" * len(stripped)
+
+
 def _detect_heading_level_from_name(name: str) -> Optional[int]:
     """
     Last-resort fallback: returns 1..6 if the style name contains a

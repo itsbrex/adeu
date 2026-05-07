@@ -16,6 +16,7 @@ from adeu.utils.docx import (
     get_paragraph_prefix,
     get_run_style_markers,
     get_run_text,
+    is_heading_paragraph,
     iter_block_items,
     iter_document_parts,
     iter_paragraph_content,
@@ -182,6 +183,16 @@ def build_paragraph_text(paragraph, comments_map, clean_view: bool = False):
 
     items = list(iter_paragraph_content(paragraph))
 
+    # Heading-leading-whitespace strip: in heading paragraphs, leading runs
+    # whose text is whitespace-only (e.g. a lone <w:br/> or <w:tab/>) are
+    # visual noise that would otherwise project as "## \nText". We drop
+    # them until we hit either the first non-whitespace run or any non-Run
+    # event (e.g. a tracked-change boundary), at which point heading content
+    # has effectively begun and stripping must stop. Mid-content breaks
+    # (e.g. "Line 1\nLine 2" in a heading) are preserved.
+    is_heading = is_heading_paragraph(paragraph)
+    leading_strip_active = is_heading
+
     for i, item in enumerate(items):
         if isinstance(item, Run):
             prefix, suffix = get_run_style_markers(item)
@@ -189,6 +200,12 @@ def build_paragraph_text(paragraph, comments_map, clean_view: bool = False):
 
             if clean_view and active_del:
                 continue
+
+            if leading_strip_active:
+                if text == "" or text.isspace():
+                    # Skip this leading whitespace-only run entirely.
+                    continue
+                leading_strip_active = False
 
             seg = apply_formatting_to_segments(text, prefix, suffix)
             if seg:
@@ -283,6 +300,10 @@ def build_paragraph_text(paragraph, comments_map, clean_view: bool = False):
                         deferred_meta_states = []
 
         elif isinstance(item, DocxEvent):
+            # Once we see any event, real heading content has effectively begun
+            # (or a tracked-change boundary now spans the leading position) —
+            # stop the leading whitespace strip.
+            leading_strip_active = False
             # Only flush pending text for structural events (like comments, links, footnotes).
             # Pure state transitions (like adjacent w:ins/w:del tags splitting a run) must coalesce.
             if item.type not in (

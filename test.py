@@ -1,35 +1,34 @@
-# FILE: repro_bug1.py
+# FILE: repro_bug3.py
 """
-Reproduction script for Bug 1: accept_all_revisions() does not remove comments.
+Reproduction script for Bug 3: Heading paragraphs whose first run contains a
+leading <w:br/> project as "## \\nHeading Text" instead of "## Heading Text".
 
-The failing test (test_issue_10_accept_all_changes_removes_comments):
-  1. Creates a doc with one paragraph.
-  2. Adds a comment via process_batch with a same-text 'modify' that carries
-     a `comment` parameter (routes through COMMENT_ONLY).
-  3. Asserts comments_manager.extract_comments_data() returns 1 entry.
-  4. Calls accept_all_revisions().
-  5. Asserts the comment count drops to 0.
-
-Current behavior: accept_all_revisions only sweeps w:ins / w:del / paragraph
-del markers in document.xml. It never touches comments.xml or the
-commentRangeStart/End/Reference anchors in the body, so comment data survives.
+The failing test (test_issue_4_heading_2_with_leading_break):
+  1. Creates a Heading 2 paragraph.
+  2. First run contains only a <w:br/>.
+  3. Second run contains "Heading Text".
+  4. Asserts that the projected text does NOT contain "## \\n".
 
 This script:
-  - Reproduces the test scenario exactly.
-  - Dumps comment state BEFORE accept_all_revisions (count + raw comment IDs
-    in comments.xml + body-side anchor counts).
-  - Calls accept_all_revisions().
-  - Dumps comment state AFTER.
-  - Reports whether the comment data and anchors are gone.
+  1. Builds the same paragraph the test builds.
+  2. Dumps the OOXML for the paragraph so we can confirm the structure.
+  3. Walks iter_paragraph_content + get_run_text to show what each run
+     contributes character-by-character.
+  4. Calls _extract_text_from_doc and prints the projected output (repr +
+     rendered).
+  5. Reports the test assertion result.
+  6. Also runs a "control" case: the same heading WITHOUT the leading break,
+     so we can confirm that the issue is specifically the leading <w:br/>.
 """
 
 import io
 
+import lxml.etree as etree
 from docx import Document
-from docx.oxml.ns import qn
 
-from adeu.models import ModifyText
-from adeu.redline.engine import RedlineEngine
+from adeu.ingest import _extract_text_from_doc, build_paragraph_text
+from adeu.redline.comments import CommentsManager
+from adeu.utils.docx import get_paragraph_prefix, get_run_text, iter_paragraph_content
 
 
 def section(title: str) -> None:
@@ -39,94 +38,109 @@ def section(title: str) -> None:
     print("=" * 72)
 
 
-def dump_comment_state(engine: RedlineEngine, label: str) -> None:
-    section(label)
+def dump_paragraph_xml(paragraph) -> None:
+    print("--- paragraph OOXML ---")
+    print(etree.tostring(paragraph._element, pretty_print=True).decode("utf-8"))
 
-    # 1. Comments via the manager (the test's lens)
-    comments = engine.comments_manager.extract_comments_data()
-    print(f"comments_manager.extract_comments_data() -> {len(comments)} entries")
-    for cid, data in comments.items():
-        print(f"  Com:{cid}  author={data['author']!r}  text={data['text']!r}")
 
-    # 2. Raw <w:comment> entries in comments.xml
-    comments_part = engine.comments_manager._get_existing_part_by_type(
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"
-    )
-    if comments_part is None:
-        print("comments.xml part: <not present>")
-    else:
-        if hasattr(comments_part, "element"):
-            root = comments_part.element
+def dump_run_walk(paragraph) -> None:
+    print("--- iter_paragraph_content walk ---")
+    for i, item in enumerate(iter_paragraph_content(paragraph)):
+        type_name = type(item).__name__
+        if type_name == "Run":
+            text = get_run_text(item)
+            print(f"  {i:2d}  Run             text={text!r}")
         else:
-            from docx.oxml import parse_xml
-
-            root = parse_xml(comments_part.blob)
-        raw_comments = root.findall(qn("w:comment"))
-        print(f"comments.xml <w:comment> elements: {len(raw_comments)}")
-        for c in raw_comments:
-            cid = c.get(qn("w:id"))
-            author = c.get(qn("w:author"))
-            print(f"  raw w:id={cid}  author={author!r}")
-
-    # 3. Body-side anchors
-    body = engine.doc.element
-    starts = body.findall(f".//{qn('w:commentRangeStart')}")
-    ends = body.findall(f".//{qn('w:commentRangeEnd')}")
-    refs = body.findall(f".//{qn('w:commentReference')}")
-    print(
-        f"body anchors: {len(starts)} commentRangeStart, "
-        f"{len(ends)} commentRangeEnd, {len(refs)} commentReference"
-    )
-    for s in starts:
-        print(f"  commentRangeStart w:id={s.get(qn('w:id'))}")
-    for e in ends:
-        print(f"  commentRangeEnd   w:id={e.get(qn('w:id'))}")
-    for r in refs:
-        print(f"  commentReference  w:id={r.get(qn('w:id'))}")
+            # DocxEvent
+            print(f"  {i:2d}  Event(type={item.type!r}, id={item.id!r})")
 
 
-def main():
-    # --- Build the same doc the failing test builds ---
+def case_with_leading_break() -> None:
+    section("CASE A — Heading 2 with leading <w:br/>")
     doc = Document()
-    doc.add_paragraph("Text with comment.")
+    p = doc.add_paragraph(style="Heading 2")
+    r1 = p.add_run()
+    r1.add_break()
+    p.add_run("Heading Text")
+
+    dump_paragraph_xml(p)
+    print(f"get_paragraph_prefix(p) = {get_paragraph_prefix(p)!r}")
+    print()
+    dump_run_walk(p)
+
+    print()
+    print("--- build_paragraph_text(p) ---")
+    comments_map = CommentsManager(doc).extract_comments_data()
+    bp_text = build_paragraph_text(p, comments_map, clean_view=False)
+    print(f"  repr: {bp_text!r}")
+
+    print()
+    print("--- _extract_text_from_doc full output ---")
     stream = io.BytesIO()
     doc.save(stream)
     stream.seek(0)
+    text = _extract_text_from_doc(Document(stream))
+    print(f"  repr:     {text!r}")
+    print("  rendered:")
+    for line in text.split("\n"):
+        print(f"    {line!r}")
 
-    engine = RedlineEngine(stream)
+    print()
+    has_bug = "## \n" in text
+    marker = "FAIL" if has_bug else "PASS"
+    print(f"  [{marker}] expected '## \\n' NOT in text  (THE BUG)")
 
-    # --- Step 1: attach a comment via a same-text modify (COMMENT_ONLY path) ---
-    section("STEP 1 — attach comment via process_batch")
-    result = engine.process_batch(
-        [ModifyText(target_text="comment", new_text="comment", comment="QA Comment")]
-    )
-    print(f"process_batch stats: {result}")
 
-    # --- Step 2: state BEFORE accept_all_revisions ---
-    dump_comment_state(engine, "STATE BEFORE accept_all_revisions")
+def case_without_leading_break() -> None:
+    section("CASE B — Heading 2 without leading <w:br/> (control)")
+    doc = Document()
+    p = doc.add_paragraph(style="Heading 2")
+    p.add_run("Heading Text")
 
-    pre_count = len(engine.comments_manager.extract_comments_data())
+    dump_paragraph_xml(p)
+    print(f"get_paragraph_prefix(p) = {get_paragraph_prefix(p)!r}")
+    print()
+    dump_run_walk(p)
 
-    # --- Step 3: accept_all_revisions ---
-    section("STEP 3 — call accept_all_revisions()")
-    engine.accept_all_revisions()
-    print("accept_all_revisions() returned")
+    print()
+    print("--- _extract_text_from_doc full output ---")
+    stream = io.BytesIO()
+    doc.save(stream)
+    stream.seek(0)
+    text = _extract_text_from_doc(Document(stream))
+    print(f"  repr: {text!r}")
 
-    # --- Step 4: state AFTER ---
-    dump_comment_state(engine, "STATE AFTER accept_all_revisions")
 
-    post_count = len(engine.comments_manager.extract_comments_data())
+def case_with_break_inside_text() -> None:
+    section("CASE C — Heading 2 with <w:br/> in the MIDDLE (regression check)")
+    # We want to make sure any future fix for Bug 3 does NOT accidentally
+    # eat <w:br/> that appears mid-content. A break in the middle of a
+    # heading should still be preserved as a newline.
+    doc = Document()
+    p = doc.add_paragraph(style="Heading 2")
+    p.add_run("Line 1")
+    r2 = p.add_run()
+    r2.add_break()
+    p.add_run("Line 2")
 
-    # --- Step 5: test assertion preview ---
-    section("TEST ASSERTION PREVIEW")
-    print(f"comments before: {pre_count}")
-    print(f"comments after:  {post_count}")
-    pre_marker = "PASS" if pre_count == 1 else "FAIL"
-    post_marker = "PASS" if post_count == 0 else "FAIL"
-    print(f"  [{pre_marker}] expected 1 comment before accept_all_revisions")
-    print(
-        f"  [{post_marker}] expected 0 comments after accept_all_revisions  (THE BUG)"
-    )
+    print(f"get_paragraph_prefix(p) = {get_paragraph_prefix(p)!r}")
+    print()
+    dump_run_walk(p)
+
+    stream = io.BytesIO()
+    doc.save(stream)
+    stream.seek(0)
+    text = _extract_text_from_doc(Document(stream))
+    print("--- projected text ---")
+    print(f"  repr: {text!r}")
+    print()
+    print("Note: A correct fix for Bug 3 must not strip the inner '\\n' here.")
+
+
+def main() -> None:
+    case_with_leading_break()
+    case_without_leading_break()
+    case_with_break_inside_text()
 
 
 if __name__ == "__main__":

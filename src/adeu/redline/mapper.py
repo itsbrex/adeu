@@ -19,6 +19,7 @@ from adeu.utils.docx import (
     get_paragraph_prefix,
     get_run_style_markers,
     get_run_text,
+    is_heading_paragraph,
     iter_block_items,
     iter_document_parts,
     iter_paragraph_content,
@@ -371,12 +372,25 @@ class DocumentMapper:
 
         items = list(iter_paragraph_content(paragraph))
 
+        # Heading-leading-whitespace strip — must stay in lockstep with
+        # ingest.build_paragraph_text. See that function for rationale.
+        leading_strip_active = is_heading_paragraph(paragraph)
+
         for i, item in enumerate(items):
             if isinstance(item, Run):
                 prefix, suffix = get_run_style_markers(item)
                 run_parts: List[Tuple[str, str, Optional[Run]]] = []
 
                 text = get_run_text(item)
+
+                if leading_strip_active:
+                    if text == "" or text.isspace():
+                        # Skip this leading whitespace-only run entirely;
+                        # do not register a span for it. The mapper's
+                        # offsets stay in sync with ingest's projected text
+                        # because ingest applies the same skip.
+                        continue
+                    leading_strip_active = False
 
                 if "\n" in text and (prefix or suffix):
                     parts = text.split("\n")
@@ -494,6 +508,9 @@ class DocumentMapper:
                         deferred_meta_states = []
 
             elif isinstance(item, DocxEvent):
+                # Once we see any event, leading whitespace stripping must stop —
+                # mirrors ingest.build_paragraph_text.
+                leading_strip_active = False
                 flush_pending_runs()
                 current_wrappers = ("", "")
                 current_style = ("", "")
