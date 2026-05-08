@@ -59,9 +59,7 @@ def test_batch_engine_deletes_special_content():
     # Add a drawing element (use a dummy file or we can just inject XML directly to avoid file dependencies)
     from docx.oxml import parse_xml
 
-    drawing_xml = parse_xml(
-        '<w:drawing xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'
-    )
+    drawing_xml = parse_xml('<w:drawing xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>')
     r._r.append(drawing_xml)
 
     stream = io.BytesIO()
@@ -82,9 +80,7 @@ def test_batch_engine_deletes_special_content():
 
     # 2. Modify the text preceding the drawing.
     engine = RedlineEngine(stream, author="QA")
-    engine.apply_edits(
-        [ModifyText(target_text="Normal paragraph ", new_text="Modified ")]
-    )
+    engine.apply_edits([ModifyText(target_text="Normal paragraph ", new_text="Modified ")])
 
     # 3. Verify the drawing was destroyed.
     out_stream = engine.save_to_stream()
@@ -94,9 +90,7 @@ def test_batch_engine_deletes_special_content():
     drawings_after = d_after.paragraphs[0]._element.findall(
         ".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing"
     )
-    assert (
-        len(drawings_after) == 1
-    ), "BUG: The drawing element was destroyed by the text modification!"
+    assert len(drawings_after) == 1, "BUG: The drawing element was destroyed by the text modification!"
 
 
 def test_batch_engine_heading_depth_enforcement():
@@ -114,9 +108,7 @@ def test_batch_engine_heading_depth_enforcement():
     engine = RedlineEngine(stream, author="QA Bot")
 
     with pytest.raises(BatchValidationError):
-        engine.process_batch(
-            [ModifyText(target_text="Target Text", new_text="####### Heading 7")]
-        )
+        engine.process_batch([ModifyText(target_text="Target Text", new_text="####### Heading 7")])
 
 
 def test_batch_engine_reply_to_fake_comment():
@@ -153,9 +145,7 @@ def test_batch_engine_formatting_removal_fails():
     stream.seek(0)
 
     engine = RedlineEngine(stream, author="QA")
-    engine.apply_edits(
-        [ModifyText(target_text="Body **text** here.", new_text="Body text here.")]
-    )
+    engine.apply_edits([ModifyText(target_text="Body **text** here.", new_text="Body text here.")])
 
     out_stream = engine.save_to_stream()
     out_stream.seek(0)
@@ -163,9 +153,7 @@ def test_batch_engine_formatting_removal_fails():
 
     # We look for the inserted run (w:ins) in the XML.
     xml = d2.paragraphs[0]._element.xml
-    assert (
-        "<w:b/>" in xml.split("<w:ins")[1]
-    ), "Bug fixed? The bold tag was properly stripped from the insertion."
+    assert "<w:b/>" in xml.split("<w:ins")[1], "Bug fixed? The bold tag was properly stripped from the insertion."
 
 
 def test_batch_engine_corrupts_multipara_insertion():
@@ -182,9 +170,7 @@ def test_batch_engine_corrupts_multipara_insertion():
     stream.seek(0)
 
     engine = RedlineEngine(stream, author="QA")
-    engine.process_batch(
-        [ModifyText(target_text="Cell Text", new_text="Cell\n\nNew\n\nText")]
-    )
+    engine.process_batch([ModifyText(target_text="Cell Text", new_text="Cell\n\nNew\n\nText")])
 
     # We must accept all revisions here to properly inspect text structure
     # because docx.Paragraph.text natively ignores <w:ins> tag contents
@@ -215,9 +201,7 @@ def test_batch_engine_swallows_trailing_deletions():
 
     engine = RedlineEngine(stream, author="QA")
     # We remove `; and` and insert a new paragraph.
-    engine.apply_edits(
-        [ModifyText(target_text="Party A; and", new_text="Party A\n\nParty B")]
-    )
+    engine.apply_edits([ModifyText(target_text="Party A; and", new_text="Party A\n\nParty B")])
 
     out_stream = engine.save_to_stream()
     out_stream.seek(0)
@@ -225,9 +209,7 @@ def test_batch_engine_swallows_trailing_deletions():
 
     # The first paragraph should have '; and' deleted. Let's check the XML.
     xml = d2.paragraphs[0]._element.xml
-    assert (
-        "<w:del" in xml
-    ), "BUG: The trailing deletion of '; and' was swallowed entirely!"
+    assert "<w:del" in xml, "BUG: The trailing deletion of '; and' was swallowed entirely!"
 
 
 def test_diff_engine_ignores_formatting_changes(tmp_path):
@@ -254,13 +236,11 @@ def test_diff_engine_ignores_formatting_changes(tmp_path):
 
     import subprocess
 
-    diff_output = subprocess.check_output(
-        ["uv", "run", "adeu", "diff", str(d1_path), str(d2_path)]
-    ).decode("utf-8")
+    diff_output = subprocess.check_output(["uv", "run", "adeu", "diff", str(d1_path), str(d2_path)]).decode("utf-8")
 
-    assert (
-        "[~]" in diff_output or "Found 1 changes:" in diff_output
-    ), "Diff engine completely missed the bold -> italic formatting change."
+    assert "[~]" in diff_output or "Found 1 changes:" in diff_output, (
+        "Diff engine completely missed the bold -> italic formatting change."
+    )
 
 
 def test_diff_engine_splits_markdown_tokens(tmp_path):
@@ -280,14 +260,10 @@ def test_diff_engine_splits_markdown_tokens(tmp_path):
 
     import subprocess
 
-    diff_output = subprocess.check_output(
-        ["uv", "run", "adeu", "diff", str(d1_path), str(d2_path)]
-    ).decode("utf-8")
+    diff_output = subprocess.check_output(["uv", "run", "adeu", "diff", str(d1_path), str(d2_path)]).decode("utf-8")
 
     # The bug produces `- *(In millions)**` which is invalid markdown.
-    assert (
-        "- *(In millions)**" not in diff_output
-    ), "BUG: Diff engine split a markdown token!"
+    assert "- *(In millions)**" not in diff_output, "BUG: Diff engine split a markdown token!"
 
 
 def test_extract_handles_tabs_and_breaks():
@@ -379,12 +355,8 @@ def test_disk_engine_drops_comment_on_multipara_insertion():
     z = zipfile.ZipFile(out_stream)
 
     # Bug manifestation: word/comments.xml might not even exist!
-    has_comments_part = any(
-        "word/comments" in f and f.endswith(".xml") for f in z.namelist()
-    )
-    assert (
-        has_comments_part
-    ), "word/comments.xml was not created, comment was completely dropped."
+    has_comments_part = any("word/comments" in f and f.endswith(".xml") for f in z.namelist())
+    assert has_comments_part, "word/comments.xml was not created, comment was completely dropped."
 
     comments_xml = ""
     for f in z.namelist():
@@ -392,9 +364,7 @@ def test_disk_engine_drops_comment_on_multipara_insertion():
             comments_xml = z.read(f).decode("utf-8")
             break
 
-    assert (
-        "This comment will be dropped" in comments_xml
-    ), "Comment text not found in comments.xml"
+    assert "This comment will be dropped" in comments_xml, "Comment text not found in comments.xml"
 
 
 def test_extractor_ignores_tracked_formatting(tmp_path):
@@ -418,15 +388,13 @@ def test_extractor_ignores_tracked_formatting(tmp_path):
     )
     d.save(str(docx_path))
 
-    output = subprocess.check_output(
-        ["uv", "run", "adeu", "extract", str(docx_path)]
-    ).decode("utf-8")
+    output = subprocess.check_output(["uv", "run", "adeu", "extract", str(docx_path)]).decode("utf-8")
 
     # Expected: {==**Test**==}{>>[Chg:1] QA<<} or {++**Test**++}
     # Actual: **Test** (no tracking markup)
-    assert (
-        "{=" in output or "{+" in output or "{>" in output
-    ), "BUG: Tracked formatting change was completely ignored by the extractor."
+    assert "{=" in output or "{+" in output or "{>" in output, (
+        "BUG: Tracked formatting change was completely ignored by the extractor."
+    )
 
 
 def test_suppress_inherited_removes_complex_scripts():
@@ -458,12 +426,12 @@ def test_process_document_batch_docstring_mentions_attribution():
     """
     desc = PROCESS_BATCH_OPERATIONS_DESC
 
-    assert (
-        "spoofed" not in desc.lower()
-    ), "Docstring should no longer claim identities cannot be spoofed, as this was disproved."
-    assert (
-        "used for attribution" in desc.lower()
-    ), "Docstring must explicitly state that author_name is used for attribution."
+    assert "spoofed" not in desc.lower(), (
+        "Docstring should no longer claim identities cannot be spoofed, as this was disproved."
+    )
+    assert "used for attribution" in desc.lower(), (
+        "Docstring must explicitly state that author_name is used for attribution."
+    )
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Live Word is Windows only")
@@ -502,14 +470,10 @@ def test_live_word_trims_common_context():
         ]
         stats = lw._process_active_word_batch_core(changes, "Reviewer")
 
-        assert (
-            stats["failed"] == 0
-        ), f"Batch failed with: {stats.get('skipped_details', [])}"
+        assert stats["failed"] == 0, f"Batch failed with: {stats.get('skipped_details', [])}"
 
         # The real _apply_com_replacement will set target_rng.Text
-        assert (
-            rng_mock.Text == "fast"
-        ), f"Expected trimmed 'fast', got '{rng_mock.Text}'"
+        assert rng_mock.Text == "fast", f"Expected trimmed 'fast', got '{rng_mock.Text}'"
     finally:
         if original_get:
             win32com.client.GetActiveObject = original_get
@@ -567,9 +531,7 @@ def test_paragraph_merge_on_newline_deletion():
     doc.save(stream)
     stream.seek(0)
 
-    edit = ModifyText(
-        target_text="1 end.\n\nParagraph 2", new_text="1 end. Paragraph 2"
-    )
+    edit = ModifyText(target_text="1 end.\n\nParagraph 2", new_text="1 end. Paragraph 2")
 
     engine = RedlineEngine(stream)
     applied, skipped = engine.apply_edits([edit])
@@ -614,9 +576,7 @@ def test_run_coalescing_ooxml_compliance():
     assert len(runs) == 1, "Should be coalesced into 1 run"
 
     t_nodes = runs[0].findall(qn("w:t"))
-    assert (
-        len(t_nodes) == 1
-    ), f"Expected 1 <w:t> node, got {len(t_nodes)}! Invalid OOXML."
+    assert len(t_nodes) == 1, f"Expected 1 <w:t> node, got {len(t_nodes)}! Invalid OOXML."
     assert t_nodes[0].text == "Contract", "Text should be concatenated"
 
 
@@ -672,9 +632,7 @@ async def test_sanitize_docx_does_not_block_event_loop():
         await asyncio.gather(sanitize_docx("dummy.docx", ctx=ctx), tick())
 
         first_tick_delay = loop_ticks[0] - start
-        assert (
-            first_tick_delay < 0.2
-        ), f"Event loop was blocked! First tick took {first_tick_delay}s"
+        assert first_tick_delay < 0.2, f"Event loop was blocked! First tick took {first_tick_delay}s"
 
 
 def test_sanitize_purges_empty_comment_parts():
@@ -693,9 +651,7 @@ def test_sanitize_purges_empty_comment_parts():
     from adeu import ModifyText, RedlineEngine
 
     engine = RedlineEngine(stream, author="QA Bot")
-    engine.process_batch(
-        [ModifyText(target_text="Test", new_text="Test", comment="This is a comment.")]
-    )
+    engine.process_batch([ModifyText(target_text="Test", new_text="Test", comment="This is a comment.")])
 
     commented_stream = engine.save_to_stream()
     commented_stream.seek(0)
@@ -709,12 +665,10 @@ def test_sanitize_purges_empty_comment_parts():
 
     z = zipfile.ZipFile(out_stream)
 
-    has_comments_part = any(
-        "word/comments" in f and f.endswith(".xml") for f in z.namelist()
+    has_comments_part = any("word/comments" in f and f.endswith(".xml") for f in z.namelist())
+    assert has_comments_part, (
+        "Violation of Architectural Decision #8: Empty comment parts were violently ejected instead of left intact."
     )
-    assert (
-        has_comments_part
-    ), "Violation of Architectural Decision #8: Empty comment parts were violently ejected instead of left intact."
 
 
 def test_report_routes_comment_lines_to_structural():
@@ -737,12 +691,12 @@ def test_report_routes_comment_lines_to_structural():
     assert "Comments removed: 1 (0 resolved, 1 open)" in report.removed_comment_lines
 
     # The detail line should be in removed_comment_lines, not structural_lines
-    assert (
-        '  [Open] "Updated term." (Counterparty)' in report.removed_comment_lines
-    ), "BUG: The comment line was not routed to removed_comment_lines."
-    assert (
-        '  [Open] "Updated term." (Counterparty)' not in report.structural_lines
-    ), "BUG: The comment line incorrectly landed in structural_lines."
+    assert '  [Open] "Updated term." (Counterparty)' in report.removed_comment_lines, (
+        "BUG: The comment line was not routed to removed_comment_lines."
+    )
+    assert '  [Open] "Updated term." (Counterparty)' not in report.structural_lines, (
+        "BUG: The comment line incorrectly landed in structural_lines."
+    )
 
 
 def test_repro_split_insertion_coalescing():
@@ -822,9 +776,7 @@ def test_engine_init_does_not_strip_proof_err():
     engine = RedlineEngine(stream)
 
     surviving = engine.doc.element.xpath("//w:proofErr")
-    assert (
-        len(surviving) == 1
-    ), "proofErr was stripped! Engine init should not trigger global normalization."
+    assert len(surviving) == 1, "proofErr was stripped! Engine init should not trigger global normalization."
 
 
 def test_cross_table_cell_edit_validation_error():
@@ -849,9 +801,7 @@ def test_cross_table_cell_edit_validation_error():
     with pytest.raises(BatchValidationError) as exc_info:
         engine.apply_edits([edit])
 
-    assert "Target text spans 2 table cells, but replacement provides 1" in str(
-        exc_info.value
-    )
+    assert "Target text spans 2 table cells, but replacement provides 1" in str(exc_info.value)
 
 
 def test_repro_unbound_local_curr_ins_id_failure():
@@ -888,9 +838,7 @@ def test_repro_unbound_local_curr_ins_id_failure():
         # This triggers engine._apply_single_edit_heuristic -> mapper._build_map
         engine.apply_edits([edit])
     except UnboundLocalError as e:
-        pytest.fail(
-            f"Regression: UnboundLocalError raised! The fix is missing. Details: {e}"
-        )
+        pytest.fail(f"Regression: UnboundLocalError raised! The fix is missing. Details: {e}")
     except Exception as e:
         # If the fix works, we might get other errors (e.g. not found), but NOT UnboundLocal
         if "local variable 'curr_ins_id' referenced before assignment" in str(e):
@@ -932,9 +880,7 @@ def test_dk1_cell_split_empty_cell_placement():
     cell_0_xml = out_doc.tables[0].cell(0, 0)._tc.xml
     cell_1_xml = out_doc.tables[0].cell(0, 1)._tc.xml
 
-    assert (
-        "10%" not in cell_0_xml
-    ), "The text '10%' was wrongly inserted into the first cell!"
+    assert "10%" not in cell_0_xml, "The text '10%' was wrongly inserted into the first cell!"
     assert "<w:ins" in cell_1_xml, "The insertion tag is missing from the second cell!"
     assert "10%" in cell_1_xml, "The text '10%' is missing from the second cell!"
 
@@ -961,9 +907,7 @@ def test_markdown_numbered_list_leak():
     doc.save(stream)
     stream.seek(0)
 
-    edit = ModifyText(
-        target_text="Reference text.", new_text="Reference text.\n\n1. Numbered Item"
-    )
+    edit = ModifyText(target_text="Reference text.", new_text="Reference text.\n\n1. Numbered Item")
 
     engine = RedlineEngine(stream)
     applied, skipped = engine.apply_edits([edit])
@@ -978,9 +922,7 @@ def test_markdown_numbered_list_leak():
     visible_text = "".join(r.text for r in get_visible_runs(p_new))
 
     # 1. The literal '1. ' should NOT be in the text.
-    assert not visible_text.startswith(
-        "1. "
-    ), f"Numbered list Markdown leaked into text: '{visible_text}'"
+    assert not visible_text.startswith("1. "), f"Numbered list Markdown leaked into text: '{visible_text}'"
     assert "Numbered Item" in visible_text
 
     # 2. It should have list properties (either numPr or a List style).
@@ -1033,9 +975,7 @@ def test_markdown_bullet_leak():
     print(f"DEBUG: Inserted paragraph visible text: '{visible_text}'")
 
     # 1. The literal '* ' should NOT be in the text.
-    assert not visible_text.startswith(
-        "* "
-    ), f"Bullet Markdown leaked into text: '{visible_text}'"
+    assert not visible_text.startswith("* "), f"Bullet Markdown leaked into text: '{visible_text}'"
     assert "New Regression Test Bullet" in visible_text
 
     # 2. It should have list properties (either numPr or a List style).
@@ -1096,9 +1036,7 @@ def test_multiline_insert_does_not_create_nested_paragraphs():
     # Word strictly forbids a w:p element being a direct child of another w:p.
     # The new paragraph (11. Entire Agreement) must be a sibling to the original paragraph.
     nested_p_check = engine.doc.element.xpath("//w:p//w:p")
-    assert (
-        len(nested_p_check) == 0
-    ), "FATAL: Nested <w:p> tags detected. Word will merge these!"
+    assert len(nested_p_check) == 0, "FATAL: Nested <w:p> tags detected. Word will merge these!"
 
     # Ensure the new paragraph was successfully inserted
     assert "Entire Agreement" in doc_xml
@@ -1127,9 +1065,7 @@ def test_val_obs_new_7_paragraph_break_tracking():
     # Assert the break is tracked: <w:pPr><w:rPr><w:ins/></w:rPr></w:pPr>
     new_p = p_elements[1]
     ins_marker = new_p.xpath("./w:pPr/w:rPr/w:ins")
-    assert (
-        len(ins_marker) > 0
-    ), "Paragraph break must be tracked with an <w:ins> inside <w:pPr>"
+    assert len(ins_marker) > 0, "Paragraph break must be tracked with an <w:ins> inside <w:pPr>"
 
 
 def test_external_relationship_does_not_crash_comments_manager():
@@ -1150,17 +1086,13 @@ def test_external_relationship_does_not_crash_comments_manager():
     # 2. Add an edit with a comment to force the creation of a Comments XML part.
     # The bug only triggers when CommentsManager tries to upgrade an EXISTING part.
     engine = RedlineEngine(stream1)
-    engine.apply_edits(
-        [ModifyText(target_text="website", new_text="portal", comment="Update wording")]
-    )
+    engine.apply_edits([ModifyText(target_text="website", new_text="portal", comment="Update wording")])
     stream2 = engine.save_to_stream()
 
     # 3. Reload the document and inject an external relationship (e.g., a Hyperlink).
     # This perfectly mimics real-world documents with web links.
     doc_with_comments = Document(stream2)
-    doc_with_comments.part.relate_to(
-        "https://kempower.com", RT.HYPERLINK, is_external=True
-    )
+    doc_with_comments.part.relate_to("https://kempower.com", RT.HYPERLINK, is_external=True)
 
     stream3 = io.BytesIO()
     doc_with_comments.save(stream3)
@@ -1174,9 +1106,7 @@ def test_external_relationship_does_not_crash_comments_manager():
         assert "portal" in text
     except ValueError as e:
         if "target mode is External" in str(e):
-            pytest.fail(
-                f"Regression: Failed to handle external relationship in _ensure_xml_part: {e}"
-            )
+            pytest.fail(f"Regression: Failed to handle external relationship in _ensure_xml_part: {e}")
         raise e
 
 
@@ -1231,7 +1161,4 @@ def test_repro_comments_namespace_xml_syntax_error():
     # Ensure the tag was closed correctly (no syntax error implies this, but good to check string)
     # We expect the start tag to end with >
     # A rough check:
-    assert (
-        'mc:Ignorable="w14 w15 w16cid w16cex">' in xml_str
-        or 'mc:Ignorable="w14 w15 w16cid w16cex" >' in xml_str
-    )
+    assert 'mc:Ignorable="w14 w15 w16cid w16cex">' in xml_str or 'mc:Ignorable="w14 w15 w16cid w16cex" >' in xml_str

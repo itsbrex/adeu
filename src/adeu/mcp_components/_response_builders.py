@@ -75,11 +75,11 @@ def _build_appendix_pointer(file_path: str, has_appendix: bool) -> str:
     if not has_appendix:
         return ""
     return (
-        f"\n\n---\n\n"
-        f"> **Appendix available.** This document has structural metadata "
-        f"(defined terms, cross-references, bookmarks, diagnostics) that may "
-        f"be relevant when editing. Call `read_docx` with `mode='appendix'` "
-        f"to load it before submitting edits."
+        "\n\n---\n\n"
+        "> **Appendix available.** This document has structural metadata "
+        "(defined terms, cross-references, bookmarks, diagnostics) that may "
+        "be relevant when editing. Call `read_docx` with `mode='appendix'` "
+        "to load it before submitting edits."
     )
 
 
@@ -172,9 +172,7 @@ def build_paginated_response(text: str, page: int, file_path: str) -> ToolResult
     result = paginate(body, structural_appendix="")
 
     if page < 1 or page > result.total_pages:
-        raise ToolError(
-            f"Page {page} out of range (doc has {result.total_pages} pages)."
-        )
+        raise ToolError(f"Page {page} out of range (doc has {result.total_pages} pages).")
 
     selected = result.pages[page - 1]
 
@@ -237,11 +235,7 @@ def build_outline_response(
 
     visible_count = sum(1 for n in nodes if n.level <= outline_max_level)
     deeper_count = len(nodes) - visible_count
-    deeper_hint = (
-        f" ({deeper_count} more at deeper levels, raise outline_max_level to see)"
-        if deeper_count > 0
-        else ""
-    )
+    deeper_hint = f" ({deeper_count} more at deeper levels, raise outline_max_level to see)" if deeper_count > 0 else ""
 
     # Build the original UI markdown
     header = (
@@ -282,9 +276,9 @@ def build_appendix_response(text: str, page: int, file_path: str) -> ToolResult:
 
     if not appendix.strip():
         ui_markdown = (
-            f"# Appendix\n\n"
-            f"This document has no structural appendix "
-            f"(no defined terms, named anchors, or diagnostics detected)."
+            "# Appendix\n\n"
+            "This document has no structural appendix "
+            "(no defined terms, named anchors, or diagnostics detected)."
         )
         llm_content = f"> **File Path:** `{file_path}`\n\n{ui_markdown}"
         return ToolResult(
@@ -300,9 +294,7 @@ def build_appendix_response(text: str, page: int, file_path: str) -> ToolResult:
     result = paginate(appendix, structural_appendix="")
 
     if page < 1 or page > result.total_pages:
-        raise ToolError(
-            f"Appendix page {page} out of range (appendix has {result.total_pages} pages)."
-        )
+        raise ToolError(f"Appendix page {page} out of range (appendix has {result.total_pages} pages).")
 
     selected = result.pages[page - 1]
 
@@ -315,11 +307,7 @@ def build_appendix_response(text: str, page: int, file_path: str) -> ToolResult:
             f"structural metadata for this document.\n\n---\n\n"
         )
         footer = (
-            (
-                f"\n\n---\n\n"
-                f"> **Continues on appendix page {selected.page + 1} of "
-                f"{selected.total_pages}.**"
-            )
+            (f"\n\n---\n\n> **Continues on appendix page {selected.page + 1} of {selected.total_pages}.**")
             if selected.has_next
             else ""
         )

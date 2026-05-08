@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from docx import Document
+
 from adeu.ingest import _extract_text_from_doc
 from adeu.redline.comments import CommentsManager
 
@@ -25,9 +26,7 @@ def main(path):
     profiler.enable()
 
     # Run the core extraction (simulating a mode='outline' or mode='full' pass)
-    _extract_text_from_doc(
-        doc, clean_view=False, include_appendix=False, return_paragraph_offsets=True
-    )
+    _extract_text_from_doc(doc, clean_view=False, include_appendix=False, return_paragraph_offsets=True)
 
     profiler.disable()
 

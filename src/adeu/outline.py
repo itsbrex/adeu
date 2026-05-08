@@ -124,9 +124,7 @@ def extract_outline(
     # Fast path: we have authoritative paragraph offsets from the body
     # projection. Skip the legacy walk entirely.
     if paragraph_offsets is not None:
-        return _extract_outline_fast(
-            doc, projected_body, body_page_offsets, paragraph_offsets
-        )
+        return _extract_outline_fast(doc, projected_body, body_page_offsets, paragraph_offsets)
 
     # Legacy slow path (no offset map).
     # Build the comments map once — required by build_paragraph_text.
@@ -235,9 +233,7 @@ def _extract_outline_fast(
             continue
         if not _is_heading(item):
             continue
-        if not _heading_passes_quality_filter_fast(
-            item, projected_body, paragraph_offsets
-        ):
+        if not _heading_passes_quality_filter_fast(item, projected_body, paragraph_offsets):
             continue
         heading_indices.append(idx)
 
@@ -636,9 +632,7 @@ def _record_table_inner_blocks_lite(
                     # actually a heading — non-heading inner paragraphs do not
                     # need a true offset (they're never assigned a page).
                     if _is_heading(inner_item):
-                        true_offset = _compute_inner_block_offset(
-                            table, inner_item, inherited_offset, comments_map
-                        )
+                        true_offset = _compute_inner_block_offset(table, inner_item, inherited_offset, comments_map)
                     else:
                         true_offset = inherited_offset
 
@@ -661,9 +655,7 @@ def _record_table_inner_blocks_lite(
                             projected_length=0,
                         )
                     )
-                    _record_table_inner_blocks_lite(
-                        inner_item, inherited_offset, records, comments_map
-                    )
+                    _record_table_inner_blocks_lite(inner_item, inherited_offset, records, comments_map)
 
 
 def _project_part(part, comments_map: dict) -> str:

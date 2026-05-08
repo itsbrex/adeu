@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from unittest.mock import AsyncMock
+
 from adeu.mcp_components.tools.document import _read_docx_disk
 
 
@@ -22,9 +23,7 @@ async def main(path):
         {"outline_max_level": 2, "outline_verbose": True},
         {"outline_max_level": 6, "outline_verbose": False},
     ]:
-        res = await _read_docx_disk(
-            path, ctx, clean_view=True, mode="outline", **kwargs
-        )
+        res = await _read_docx_disk(path, ctx, clean_view=True, mode="outline", **kwargs)
         text = res.content[0].text
         print(f"\n=== outline {kwargs} ===")
         print(f"len: {len(text):,} chars")
