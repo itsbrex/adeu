@@ -1036,8 +1036,11 @@ class RedlineEngine:
         """
         errors = []
 
-        # Ensure base mapper is ready
-        self.mapper._build_map()
+        # Ensure base mapper is ready, but DO NOT rebuild it if it already exists!
+        # This saves ~15s of redundant O(N) DOM traversal on large files.
+        if not self.mapper.full_text:
+            self.mapper._build_map()
+
         # Category A: document-context-free string-shape validation.
         # Delegated to module-level helper so the Live Word path can call the
         # same checks. See validate_edit_strings docstring for what is checked.
