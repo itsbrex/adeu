@@ -421,6 +421,20 @@ if sys.platform == "win32":
         original_track_revisions = doc.TrackRevisions
         doc.TrackRevisions = True
 
+        original_track_formatting = True
+        try:
+            original_track_formatting = doc.TrackFormatting
+            doc.TrackFormatting = False
+        except Exception:
+            pass
+
+        original_track_moves = True
+        try:
+            original_track_moves = doc.TrackMoves
+            doc.TrackMoves = False
+        except Exception:
+            pass
+
         original_user = app.UserName
         app.UserName = author_name
 
@@ -848,6 +862,14 @@ if sys.platform == "win32":
             try:
                 if hasattr(app.Options, "SmartCutPaste"):
                     app.Options.SmartCutPaste = original_smart_cut_paste
+            except Exception:
+                pass
+            try:
+                doc.TrackFormatting = original_track_formatting
+            except Exception:
+                pass
+            try:
+                doc.TrackMoves = original_track_moves
             except Exception:
                 pass
             doc.TrackRevisions = original_track_revisions

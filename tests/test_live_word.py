@@ -494,7 +494,7 @@ def test_live_word_batch_fixes_ambiguity_and_comment_duplication(active_word_app
         process_active_word_batch,
     )
     from adeu.models import AcceptChange, ModifyText
-    from adeu.redline.mapper import DocumentMapper
+    from adeu.redline.mapper import DocumentMapper, renumber_snapshot_ids
 
     app, doc = active_word_app
     ctx = get_mock_ctx()
@@ -505,6 +505,11 @@ def test_live_word_batch_fixes_ambiguity_and_comment_duplication(active_word_app
 
     doc.TrackRevisions = True
     app.UserName = "Test Reviewer"
+    try:
+        doc.TrackFormatting = False
+        doc.TrackMoves = False
+    except Exception:
+        pass
 
     # Create Deletion
     rng_del = doc.Content
@@ -520,7 +525,9 @@ def test_live_word_batch_fixes_ambiguity_and_comment_duplication(active_word_app
         # 2. Extract Virtual Map to find dynamic XML ID
         xml_str = doc.WordOpenXML
         stream = _build_mock_docx_stream(xml_str)
-        mapper = DocumentMapper(Document(stream))
+        py_doc = Document(stream)
+        renumber_snapshot_ids(py_doc)
+        mapper = DocumentMapper(py_doc)
 
         target_chg_id = next(
             (s.del_id for s in mapper.spans if "DeletedText" in s.text and s.del_id),
