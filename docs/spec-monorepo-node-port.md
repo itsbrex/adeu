@@ -52,16 +52,17 @@ The Python engine relies on `python-docx` for OOP abstraction and `lxml` for bla
 
 ## 4. Execution Roadmap
 
-### Phase 1: Structural Migration (Git Preservation)
-*   Create `python/`, `node/`, and `shared/` directories.
-*   Use `git mv` to shift the existing Python codebase and configs into `python/` to preserve `git blame` history.
-*   Move `tests/fixtures/` to `shared/fixtures/`.
-*   Update `python/pyproject.toml` and Python test paths.
+### Phase 1: Structural Migration (Git Preservation) - **[COMPLETED]**
+*   [x] Created `python/`, `node/`, and `shared/` directories.
+*   [x] Used `git mv` to shift the existing Python codebase and configs into `python/` to preserve `git blame` history.
+*   [x] Moved `tests/fixtures/` to `shared/fixtures/`.
+*   [x] Updated CI/CD workflows using explicit `working-directory: ./python` settings to resolve multi-line shell state failures.
 
-### Phase 2: Node Workspace Scaffolding
-*   Initialize `node/package.json` with npm workspaces.
-*   Scaffold `@adeu/core` with `typescript`, `tsup` (for building ESM/CJS), and `vitest`.
-*   Update `.github/workflows/ci.yml` to run `uv pytest` in the Python dir and `npm test` in the Node dir.
+### Phase 2: Node Workspace Scaffolding (Next Steps)
+*   [ ] Scaffold `node/packages/core/package.json` to utilize the existing root `node/package.json` npm workspace.
+*   [ ] Setup `@adeu/core` with `typescript`, `tsup` (for dual ESM/CJS builds), and `vitest`.
+*   [ ] Configure `vitest` path aliases to seamlessly resolve `../../../shared/fixtures/` across the monorepo boundary.
+*   [ ] Update `.github/workflows/ci.yml` to execute the Node matrix (`npm install`, `npm test`) alongside Python.
 
 ### Phase 3: Porting `@adeu/core` (The Hard Part)
 *   **Step 1 (ZIP/XML Bridge):** Build a wrapper around `jszip` and `xmldom` that exposes a `Document` object mimicking the `python-docx` API surface we actually use (paragraphs, runs, tables, saving).
