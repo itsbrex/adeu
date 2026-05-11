@@ -114,12 +114,3 @@ jobs:
       - name: Publish to NPM
         working-directory: ./node
         run: npm publish --workspaces --access public
-
-      - name: Pack MCPB Bundle
-        working-directory: ./desktop-extension
-        run: zip -r Adeu.mcpb index.js manifest.json icon.png package.json
-
-      - name: Upload to GitHub Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload ${{ github.event.release.tag_name }} ./desktop-extension/Adeu.mcpb
