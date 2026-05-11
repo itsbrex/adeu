@@ -8,6 +8,9 @@ export default defineConfig([
     sourcemap: true,
     clean: true,
     outDir: 'dist',
+    banner: {
+      js: '#!/usr/bin/env node',
+    },
   },
   {
     entry: ['src/index.ts'],
