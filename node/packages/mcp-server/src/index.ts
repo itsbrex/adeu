@@ -90,7 +90,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         }
       },
       {
-        name: `${TOOL_PREFIX}diff_docx_files`,
+        name: 'diff_docx_files',
         description: DIFF_DOCX_DESC,
         inputSchema: {
           type: 'object',
