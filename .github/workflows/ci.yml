@@ -50,6 +50,18 @@ jobs:
         node-version: ["20.x", "22.x"]
     steps:
       - uses: actions/checkout@v6
+
+      - name: Install uv (Required for TS/Python Consistency Framework)
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "python/uv.lock"
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install Python Dependencies
+        working-directory: ./python
+        run: uv sync --all-extras --dev
+
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:

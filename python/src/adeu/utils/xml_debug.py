@@ -50,6 +50,9 @@ def abstract_docx_xml(xml_str: str, filename: str) -> str:
     # 8. Filter people.xml relationships (Word adds them, Adeu does not)
     xml_str = re.sub(r'<Relationship [^>]*Target="people\.xml"[^>]*/>', "", xml_str)
 
+    # 9. Strip empty lines to prevent minidom/regex whitespace drift
+    xml_str = re.sub(r'\n\s*\n', '\n', xml_str.strip())
+
     return xml_str
 
 
@@ -59,6 +62,20 @@ def format_and_sort_xml(xml_bytes: bytes, filename: str) -> str:
     """
     try:
         dom = parseString(xml_bytes)
+
+        def sort_node_attributes(node):
+            if node.nodeType == node.ELEMENT_NODE and node.attributes:
+                attrs = sorted(node.attributes.keys())
+                attr_vals = [(k, node.getAttribute(k)) for k in attrs]
+                for k in attrs:
+                    node.removeAttribute(k)
+                for k, v in attr_vals:
+                    node.setAttribute(k, v)
+            for child in node.childNodes:
+                sort_node_attributes(child)
+
+        if dom.documentElement:
+            sort_node_attributes(dom.documentElement)
 
         # Sort Relationships for deterministic diffing
         if filename.endswith(".rels"):

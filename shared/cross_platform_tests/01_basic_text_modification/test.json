@@ -1,0 +1,14 @@
+{
+  "name": "basic_text_modification",
+  "description": "Tests replacing a single word in a standard paragraph.",
+  "author": "Adeu AI",
+  "read_only": false,
+  "changes": [
+    {
+      "type": "modify",
+      "target_text": "initial document",
+      "new_text": "final contract",
+      "comment": "Updated terminology."
+    }
+  ]
+}
