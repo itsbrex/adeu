@@ -48,12 +48,12 @@ jobs:
 
       - name: Package Gemini Extension Archive
         run: |
-          mkdir -p gemini-release/adeu
-          cp desktop-extension/index.js gemini-release/adeu/index.js
-          cp gemini-extension.json gemini-release/adeu/gemini-extension.json
-          cp GEMINI.md gemini-release/adeu/GEMINI.md
+          mkdir -p gemini-release
+          cp desktop-extension/index.js gemini-release/index.js
+          cp gemini-extension.json gemini-release/gemini-extension.json
+          cp GEMINI.md gemini-release/GEMINI.md
           cd gemini-release
-          tar -czf ../adeu.tar.gz adeu/
+          tar -czf ../adeu.tar.gz .
 
       - name: Upload Gemini Extension Archive
         env:
