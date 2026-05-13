@@ -20,6 +20,7 @@ import {
   get_run_text,
   apply_formatting_to_segments,
 } from "./utils/docx.js";
+import { format_ambiguity_error } from "./markup.js";
 
 // --- DOM Mutation Helpers for xmldom ---
 function getNextElement(el: Element): Element | null {
@@ -818,8 +819,17 @@ export class RedlineEngine {
           `- Edit ${i + 1} Failed: Target text not found in document:\n  "${edit.target_text}"`,
         );
       } else if (matches.length > 1) {
+        const positions: [number, number][] = matches.map(([start, length]) => [
+          start,
+          start + length,
+        ]);
         errors.push(
-          `- Edit ${i + 1} Failed: Target text is ambiguous. Found ${matches.length} matches.\nProvide more context.`,
+          format_ambiguity_error(
+            i + 1,
+            edit.target_text,
+            activeText,
+            positions,
+          ),
         );
       }
 
