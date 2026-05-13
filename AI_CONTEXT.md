@@ -129,6 +129,9 @@ To solve domain visibility gaps without adding new MCP tools, `read_docx` projec
 *   **Explicit Relationship Mapping & Strict Namespaces**: In pure JS (`@xmldom` + `jszip`), we cannot rely on implicit `python-docx` relationship abstractions. External targets (like Hyperlinks) require explicitly fetching/creating the target `_rels/document.xml.rels` file and manually injecting the `<Relationship>` node. Crucially, these nodes MUST be created with explicit namespace awareness (`createElementNS`), or `XMLSerializer` will silently drop them during package serialization.
 *   **Pure-TS Bounded Levenshtein**: Node.js MCP environments cannot use C-bindings (like `rapidfuzz`). We implement a highly optimized, pure-TS Bounded Levenshtein algorithm (`max_dist = 2`) directly in the structural appendix generator to evaluate typographical errors without blocking the V8 event loop on large documents.
 *   **Test Utilities**: Because JS lacks `python-docx`'s in-memory factory methods, `test-utils.ts` shims document building by dynamically wiping and mutating an empty `initial.docx` fixture with raw OOXML node injection.
+*   **Zero-Dependency Finalization**: The Node.js `.mcpb` bundle strictly omits PDF export (`docx2pdf`/LibreOffice) and AES encryption (`msoffcrypto-tool`) capabilities from the `finalize_document` tool to strictly maintain its zero-dependency architecture.
+*   **Native OOXML Locking**: Document protection is achieved natively by injecting `<w:documentProtection w:edit="readOnly" w:enforcement="1"/>` directly into `word/settings.xml` using `@xmldom/xmldom`.
+*   **XML Serialization Quirks**: Emptying elements in `@xmldom/xmldom` (`el.textContent = ""`) serializes them as self-closing tags (e.g., `<Template/>` instead of `<Template></Template>`), requiring mathematically equivalent but structurally loose string assertions in unit tests.
 
 ## Developer Workflows
 
@@ -149,6 +152,7 @@ To solve domain visibility gaps without adding new MCP tools, `read_docx` projec
     - Ported the entire XML Redline Engine to TypeScript (`@adeu/core` and `@adeu/mcp-server`).
     - Replaced the Python `uvx` wrapper in the Claude Desktop extension with a fully standalone Node.js bundle, permanently eliminating Python dependency requirements for end users.
     - Automated NPM package publishing and GitHub Release bundle generation via CI/CD.
+    - Ported the unified `finalize_document` tool (metadata sanitization and native OOXML locking) to pure TypeScript, successfully maintaining the zero-dependency constraint.
 - **v1.5.2**: Smithery Marketplace & Desktop Extensions.
     - Published `adeu/adeu` to the Smithery.ai registry.
     - Implemented a Node.js bootstrapper for native Claude Desktop `.mcpb` installation, automatically managing `uvx` dependencies.

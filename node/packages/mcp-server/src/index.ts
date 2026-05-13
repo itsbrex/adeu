@@ -9,7 +9,8 @@ import {
   DocumentObject, 
   RedlineEngine, 
   BatchValidationError,
-  create_unified_diff
+  create_unified_diff,
+  finalize_document
 } from '@adeu/core';
 import { 
   build_paginated_response, 
@@ -99,6 +100,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             modified_path: { type: 'string', description: 'Absolute path to the modified DOCX file.' }
           },
           required: ['original_path', 'modified_path']
+        }
+      },
+      {
+        name: 'finalize_document',
+        description: "Prepares a document for external distribution or e-signature. This tool combines metadata sanitization, document locking (protection), and markup resolution into a single step. NOTE: PDF export and AES encryption are disabled in this environment.",
+        inputSchema: {
+          type: 'object',
+          properties: {
+            file_path: { type: 'string', description: 'Absolute path to the DOCX file.' },
+            output_path: { type: 'string', description: 'Optional output path.' },
+            sanitize_mode: { type: 'string', enum: ['full', 'keep-markup'], description: 'full removes all markup, keep-markup redacts metadata but keeps comments/redlines.' },
+            accept_all: { type: 'boolean', description: 'If true, auto-accepts all unresolved track changes before finalizing.' },
+            protection_mode: { type: 'string', enum: ['read_only', 'encrypt'], description: 'Native OOXML document locking. encrypt falls back to read_only in this environment.' },
+            password: { type: 'string', description: 'Ignored in this environment.' },
+            author: { type: 'string', description: 'Replace all remaining markup authorship with this name.' },
+            export_pdf: { type: 'boolean', description: 'Ignored in this environment.' }
+          },
+          required: ['file_path']
         }
       }
     ]
@@ -217,6 +236,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<any> =>
       
       return {
         content: [{ type: 'text', text: diff || "No differences found." }]
+      };
+    }
+
+    if (name === 'finalize_document') {
+      const filePath = args?.file_path as string;
+      let outPath = args?.output_path as string;
+      
+      if (!outPath) {
+        const ext = extname(filePath);
+        const base = basename(filePath, ext);
+        const dir = dirname(filePath);
+        outPath = resolve(dir, `${base}_final${ext}`);
+      }
+
+      const buf = readFileSync(filePath);
+      const doc = await DocumentObject.load(buf);
+
+      const result = await finalize_document(doc, {
+        filename: basename(filePath),
+        sanitize_mode: (args?.sanitize_mode as any) || 'full',
+        accept_all: args?.accept_all as boolean,
+        protection_mode: args?.protection_mode as any,
+        author: args?.author as string,
+        export_pdf: args?.export_pdf as boolean
+      });
+
+      const fs = await import('node:fs');
+      fs.writeFileSync(outPath, result.outBuffer!);
+
+      return {
+        content: [{ type: 'text', text: `Saved to: ${outPath}\n\n${result.reportText}` }]
       };
     }
 

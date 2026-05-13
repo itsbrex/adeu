@@ -10,3 +10,4 @@ export { apply_edits_to_markdown } from './markup.js';
 export { paginate, split_structural_appendix, PaginationResult, PageInfo } from './pagination.js';
 export { extract_outline, OutlineNode } from './outline.js';
 export { extractTextFromBuffer } from './ingest.js';
+export { finalize_document, FinalizeOptions, FinalizeResult } from './sanitize/core.js';
