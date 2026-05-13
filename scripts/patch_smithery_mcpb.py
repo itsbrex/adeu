@@ -130,7 +130,7 @@ def main():
 
         print(f"✅ Success! Created Smithery-compatible bundle: {dest_mcpb}")
 
-    except Exception as e:
+    except Exception:
         print(f"❌ Script failed with exception:\n{traceback.format_exc()}")
 
 

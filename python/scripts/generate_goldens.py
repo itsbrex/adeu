@@ -8,17 +8,17 @@ from pathlib import Path
 # Insert the src directory into path so we can run directly via `uv run`
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from adeu.redline.engine import RedlineEngine
 from adeu.ingest import extract_text_from_stream
-from adeu.utils.xml_debug import get_abstracted_xml_snapshot
 from adeu.models import (
-    ModifyText,
     AcceptChange,
+    DeleteTableRow,
+    InsertTableRow,
+    ModifyText,
     RejectChange,
     ReplyComment,
-    InsertTableRow,
-    DeleteTableRow,
 )
+from adeu.redline.engine import RedlineEngine
+from adeu.utils.xml_debug import get_abstracted_xml_snapshot
 
 MODEL_MAP = {
     "modify": ModifyText,
