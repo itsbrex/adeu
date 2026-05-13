@@ -20,7 +20,16 @@ import {
   build_outline_response,
   build_appendix_response,
 } from "./response-builders.js";
-
+function readFileBytesOrThrow(filePath: string): Buffer {
+  try {
+    return readFileSync(filePath);
+  } catch (err: any) {
+    if (err.code === "ENOENT") {
+      throw new Error(`File not found: ${filePath}`);
+    }
+    throw err;
+  }
+}
 // --- Tool Description Constants (Parity with Python) ---
 const READ_DOCX_COMMON_DESC =
   "Reads a DOCX file. Returns text with inline CriticMarkup for Tracked Changes and Comments: {++inserted++}, {--deleted--}, {==highlighted==}{>>comment<<}. Set clean_view=True for the finalized 'Accepted' text without markup.\n\n";
@@ -235,7 +244,7 @@ server.setRequestHandler(
         const outline_max_level = (args?.outline_max_level as number) ?? 2;
         const outline_verbose = (args?.outline_verbose as boolean) ?? false;
 
-        const buf = readFileSync(filePath);
+        const buf = readFileBytesOrThrow(filePath);
         const text = await extractTextFromBuffer(buf, cleanView);
 
         if (mode === "outline") {
@@ -279,7 +288,7 @@ server.setRequestHandler(
           outPath = resolve(dir, `${base}_processed${ext}`);
         }
 
-        const buf = readFileSync(origPath);
+        const buf = readFileBytesOrThrow(origPath);
         const doc = await DocumentObject.load(buf);
         const engine = new RedlineEngine(doc, authorName);
 
@@ -327,7 +336,7 @@ server.setRequestHandler(
           outPath = resolve(dir, `${base}_clean${ext}`);
         }
 
-        const buf = readFileSync(docxPath);
+        const buf = readFileBytesOrThrow(docxPath);
         const doc = await DocumentObject.load(buf);
         const engine = new RedlineEngine(doc);
 
@@ -351,8 +360,8 @@ server.setRequestHandler(
         const origPath = args?.original_path as string;
         const modPath = args?.modified_path as string;
         const compareClean = (args?.compare_clean as boolean) ?? true;
-        const origBuf = readFileSync(origPath);
-        const modBuf = readFileSync(modPath);
+        const origBuf = readFileBytesOrThrow(origPath);
+        const modBuf = readFileBytesOrThrow(modPath);
 
         // Pass compareClean flag into extraction
         const origText = await extractTextFromBuffer(origBuf, compareClean);
@@ -376,7 +385,7 @@ server.setRequestHandler(
           outPath = resolve(dir, `${base}_final${ext}`);
         }
 
-        const buf = readFileSync(filePath);
+        const buf = readFileBytesOrThrow(filePath);
         const doc = await DocumentObject.load(buf);
 
         const result = await finalize_document(doc, {
