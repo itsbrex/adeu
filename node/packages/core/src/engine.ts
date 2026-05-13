@@ -1,15 +1,25 @@
-import { DocumentObject } from './docx/bridge.js';
-import { Paragraph, Table, Run, DocxEvent } from './docx/primitives.js';
-import { DocumentMapper, TextSpan } from './mapper.js';
-import { CommentsManager } from './comments.js';
-import { 
-  ModifyText, InsertTableRow, DeleteTableRow, AcceptChange, RejectChange, ReplyComment, DocumentChange 
-} from './models.js';
-import { trim_common_context } from './diff.js';
-import { findChild, findAllDescendants, serializeXml } from './docx/dom.js';
-import { 
-  is_heading_paragraph, is_native_heading, get_run_style_markers, get_run_text, apply_formatting_to_segments 
-} from './utils/docx.js';
+import { DocumentObject } from "./docx/bridge.js";
+import { Paragraph, Table, Run, DocxEvent } from "./docx/primitives.js";
+import { DocumentMapper, TextSpan } from "./mapper.js";
+import { CommentsManager } from "./comments.js";
+import {
+  ModifyText,
+  InsertTableRow,
+  DeleteTableRow,
+  AcceptChange,
+  RejectChange,
+  ReplyComment,
+  DocumentChange,
+} from "./models.js";
+import { trim_common_context } from "./diff.js";
+import { findChild, findAllDescendants, serializeXml } from "./docx/dom.js";
+import {
+  is_heading_paragraph,
+  is_native_heading,
+  get_run_style_markers,
+  get_run_text,
+  apply_formatting_to_segments,
+} from "./utils/docx.js";
 
 // --- DOM Mutation Helpers for xmldom ---
 function getNextElement(el: Element): Element | null {
@@ -43,7 +53,9 @@ function insertBefore(newNode: Node, refNode: Element) {
 }
 
 function insertAtIndex(parent: Element, index: number, child: Node) {
-  const children = Array.from(parent.childNodes).filter(n => n.nodeType === 1);
+  const children = Array.from(parent.childNodes).filter(
+    (n) => n.nodeType === 1,
+  );
   if (index >= children.length) {
     parent.appendChild(child);
   } else {
@@ -69,18 +81,36 @@ export function validate_edit_strings(edits: any[]): string[] {
     const t_text = edit.target_text || "";
     const n_text = edit.new_text || "";
 
-    if (n_text.includes("{++") || n_text.includes("{--") || n_text.includes("{>>") || n_text.includes("{==")) {
-      errors.push(`- Edit ${i + 1} Failed: Do not manually write CriticMarkup tags ({++, {--, {>>, {==) in \`new_text\`. The engine handles redlining automatically. To add a comment, use the \`comment\` parameter.`);
+    if (
+      n_text.includes("{++") ||
+      n_text.includes("{--") ||
+      n_text.includes("{>>") ||
+      n_text.includes("{==")
+    ) {
+      errors.push(
+        `- Edit ${i + 1} Failed: Do not manually write CriticMarkup tags ({++, {--, {>>, {==) in \`new_text\`. The engine handles redlining automatically. To add a comment, use the \`comment\` parameter.`,
+      );
     }
 
     if (t_text.includes("[^") || n_text.includes("[^")) {
       const t_fns = (t_text.match(/\[\^(?:fn|en)-[^\]]+\]/g) || []).sort();
       const n_fns = (n_text.match(/\[\^(?:fn|en)-[^\]]+\]/g) || []).sort();
       if (JSON.stringify(t_fns) !== JSON.stringify(n_fns)) {
-        if (n_fns.length > t_fns.length || n_fns.some((f: string) => n_fns.filter((x: string) => x===f).length > t_fns.filter((x: string) => x===f).length)) {
-          errors.push(`- Edit ${i + 1} Failed: Cannot insert footnote/endnote markers via text replace. Markers like \`[^fn-N]\` are read-only projections. Use Word's References menu.`);
+        if (
+          n_fns.length > t_fns.length ||
+          n_fns.some(
+            (f: string) =>
+              n_fns.filter((x: string) => x === f).length >
+              t_fns.filter((x: string) => x === f).length,
+          )
+        ) {
+          errors.push(
+            `- Edit ${i + 1} Failed: Cannot insert footnote/endnote markers via text replace. Markers like \`[^fn-N]\` are read-only projections. Use Word's References menu.`,
+          );
         } else {
-          errors.push(`- Edit ${i + 1} Failed: Cannot delete footnote/endnote references via text replace. The marker corresponds to a structural XML element.`);
+          errors.push(
+            `- Edit ${i + 1} Failed: Cannot delete footnote/endnote references via text replace. The marker corresponds to a structural XML element.`,
+          );
         }
       }
     }
@@ -90,28 +120,43 @@ export function validate_edit_strings(edits: any[]): string[] {
       const n_links = (n_text.match(/\[(?!~)[^\]]+\]\([^)]+\)/g) || []).sort();
       if (t_links.length !== n_links.length) {
         if (n_links.length > t_links.length) {
-          errors.push(`- Edit ${i + 1} Failed: Cannot insert hyperlinks via text replace. Use a dedicated structural operation.`);
+          errors.push(
+            `- Edit ${i + 1} Failed: Cannot insert hyperlinks via text replace. Use a dedicated structural operation.`,
+          );
         } else {
-          errors.push(`- Edit ${i + 1} Failed: Cannot delete hyperlinks via text replace. The marker corresponds to a structural XML element.`);
+          errors.push(
+            `- Edit ${i + 1} Failed: Cannot delete hyperlinks via text replace. The marker corresponds to a structural XML element.`,
+          );
         }
-      } else if (t_links.length > 1 && JSON.stringify(t_links) !== JSON.stringify(n_links)) {
-        errors.push(`- Edit ${i + 1} Failed: Can only edit or retarget one hyperlink per text replacement. Please split into multiple edits.`);
+      } else if (
+        t_links.length > 1 &&
+        JSON.stringify(t_links) !== JSON.stringify(n_links)
+      ) {
+        errors.push(
+          `- Edit ${i + 1} Failed: Can only edit or retarget one hyperlink per text replacement. Please split into multiple edits.`,
+        );
       }
     }
 
     if (t_text.includes("[~") || n_text.includes("[~")) {
-      const t_xrefs = (t_text.match(/\[~[^~]+~\]\(#[^\)]+\)/g) || []);
-      const n_xrefs = (n_text.match(/\[~[^~]+~\]\(#[^\)]+\)/g) || []);
+      const t_xrefs = t_text.match(/\[~[^~]+~\]\(#[^\)]+\)/g) || [];
+      const n_xrefs = n_text.match(/\[~[^~]+~\]\(#[^\)]+\)/g) || [];
       if (t_xrefs.length !== n_xrefs.length) {
         if (n_xrefs.length > t_xrefs.length) {
-          errors.push(`- Edit ${i + 1} Failed: Cannot insert cross-references via text replace. Markers are read-only projections.`);
+          errors.push(
+            `- Edit ${i + 1} Failed: Cannot insert cross-references via text replace. Markers are read-only projections.`,
+          );
         } else {
-          errors.push(`- Edit ${i + 1} Failed: Cannot delete cross-references via text replace. The marker corresponds to a structural XML element.`);
+          errors.push(
+            `- Edit ${i + 1} Failed: Cannot delete cross-references via text replace. The marker corresponds to a structural XML element.`,
+          );
         }
       } else {
         // Advanced XREF validation simplified for port scope
         if (JSON.stringify(t_xrefs) !== JSON.stringify(n_xrefs)) {
-          errors.push(`- Edit ${i + 1} Failed: Modifying or retargeting cross-reference markers is disallowed to prevent dependency corruption.`);
+          errors.push(
+            `- Edit ${i + 1} Failed: Modifying or retargeting cross-reference markers is disallowed to prevent dependency corruption.`,
+          );
         }
       }
     }
@@ -120,30 +165,46 @@ export function validate_edit_strings(edits: any[]): string[] {
       const t_anchors = t_text.match(/\{#[^\}]+\}/g) || [];
       const n_anchors = n_text.match(/\{#[^\}]+\}/g) || [];
       for (const a of n_anchors) {
-        if (n_anchors.filter((x: string) => x===a).length > t_anchors.filter((x: string) => x===a).length) {
-          errors.push(`- Edit ${i + 1} Failed: Cannot modify or insert internal anchor markers (\`{#...}\`). These represent structural XML bookmarks.`);
+        if (
+          n_anchors.filter((x: string) => x === a).length >
+          t_anchors.filter((x: string) => x === a).length
+        ) {
+          errors.push(
+            `- Edit ${i + 1} Failed: Cannot modify or insert internal anchor markers (\`{#...}\`). These represent structural XML bookmarks.`,
+          );
           break;
         }
       }
     }
 
-    if (edit.type === 'modify' && n_text) {
-      const lines = n_text.split('\n');
+    if (edit.type === "modify" && n_text) {
+      const lines = n_text.split("\n");
       for (const line of lines) {
         const stripped = line.trimStart();
         if (stripped.startsWith("#######")) {
-          const level = stripped.length - stripped.replace(/^#+/, '').length;
-          if (stripped.substring(level).startsWith(' ') || stripped.substring(level) === '') {
-            errors.push(`- Edit ${i + 1} Failed: Heading level ${level} is not supported (maximum is 6).`);
+          const level = stripped.length - stripped.replace(/^#+/, "").length;
+          if (
+            stripped.substring(level).startsWith(" ") ||
+            stripped.substring(level) === ""
+          ) {
+            errors.push(
+              `- Edit ${i + 1} Failed: Heading level ${level} is not supported (maximum is 6).`,
+            );
             break;
           }
         }
       }
     }
 
-    if (t_text.includes("READONLY_BOUNDARY_START") || n_text.includes("READONLY_BOUNDARY_START") || 
-        t_text.includes("# Document Structure (Read-Only)") || n_text.includes("# Document Structure (Read-Only)")) {
-      errors.push(`- Edit ${i + 1} Failed: Modification targets the read-only boundary (Structural Appendix). This section cannot be edited.`);
+    if (
+      t_text.includes("READONLY_BOUNDARY_START") ||
+      n_text.includes("READONLY_BOUNDARY_START") ||
+      t_text.includes("# Document Structure (Read-Only)") ||
+      n_text.includes("# Document Structure (Read-Only)")
+    ) {
+      errors.push(
+        `- Edit ${i + 1} Failed: Modification targets the read-only boundary (Structural Appendix). This section cannot be edited.`,
+      );
     }
   }
 
@@ -164,13 +225,18 @@ export class RedlineEngine {
   constructor(doc: DocumentObject, author: string = "Adeu AI (TS)") {
     this.doc = doc;
     this.author = author;
-    this.timestamp = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
-    
-    const w16du_ns = "http://schemas.microsoft.com/office/word/2023/wordml/word16du";
+    this.timestamp = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+
+    const w16du_ns =
+      "http://schemas.microsoft.com/office/word/2023/wordml/word16du";
     for (const part of this.doc.pkg.parts) {
-      if (part === this.doc.part || (part.contentType.includes('wordprocessingml') && part.contentType.endsWith('+xml'))) {
-        if (!part._element.hasAttribute('xmlns:w16du')) {
-          part._element.setAttribute('xmlns:w16du', w16du_ns);
+      if (
+        part === this.doc.part ||
+        (part.contentType.includes("wordprocessingml") &&
+          part.contentType.endsWith("+xml"))
+      ) {
+        if (!part._element.hasAttribute("xmlns:w16du")) {
+          part._element.setAttribute("xmlns:w16du", w16du_ns);
         }
       }
     }
@@ -182,10 +248,10 @@ export class RedlineEngine {
 
   private _scan_existing_ids(): number {
     let maxId = 0;
-    for (const tag of ['w:ins', 'w:del']) {
+    for (const tag of ["w:ins", "w:del"]) {
       const elements = findAllDescendants(this.doc.element, tag);
       for (const el of elements) {
-        const val = parseInt(el.getAttribute('w:id') || '0', 10);
+        const val = parseInt(el.getAttribute("w:id") || "0", 10);
         if (!isNaN(val) && val > maxId) maxId = val;
       }
     }
@@ -193,20 +259,20 @@ export class RedlineEngine {
   }
 
   public accept_all_revisions() {
-    const dels = findAllDescendants(this.doc.element, 'w:del');
+    const dels = findAllDescendants(this.doc.element, "w:del");
     for (const d of dels) {
       const parent = d.parentNode as Element | null;
-      if (parent?.tagName === 'w:trPr') {
+      if (parent?.tagName === "w:trPr") {
         const tr = parent.parentNode;
         tr?.parentNode?.removeChild(tr);
       } else {
         parent?.removeChild(d);
       }
     }
-    const insNodes = findAllDescendants(this.doc.element, 'w:ins');
+    const insNodes = findAllDescendants(this.doc.element, "w:ins");
     for (const i of insNodes) {
       const parent = i.parentNode as Element | null;
-      if (parent?.tagName === 'w:trPr') {
+      if (parent?.tagName === "w:trPr") {
         parent.removeChild(i);
       } else {
         while (i.firstChild) parent?.insertBefore(i.firstChild, i);
@@ -220,7 +286,11 @@ export class RedlineEngine {
     return this.current_id.toString();
   }
 
-  private _create_track_change_tag(tagName: string, author: string = "", reuseId: string | null = null): Element {
+  private _create_track_change_tag(
+    tagName: string,
+    author: string = "",
+    reuseId: string | null = null,
+  ): Element {
     const xmlDoc = this.doc.part._element.ownerDocument!;
     const tag = xmlDoc.createElement(tagName);
     const wid = reuseId !== null ? reuseId : this._getNextId();
@@ -238,6 +308,357 @@ export class RedlineEngine {
     }
   }
 
+  /**
+   * Attaches a comment that wraps a contiguous range within a single paragraph.
+   * start_element and end_element must both be direct children of parent_element
+   * and start_element must come before (or equal) end_element in document order.
+   * Ported from Python `RedlineEngine._attach_comment`.
+   */
+  private _attach_comment(
+    parent_element: Element,
+    start_element: Element,
+    end_element: Element,
+    text: string,
+  ) {
+    if (!text) return;
+
+    const comment_id = this.comments_manager.addComment(this.author, text);
+    const xmlDoc = parent_element.ownerDocument!;
+
+    const range_start = xmlDoc.createElement("w:commentRangeStart");
+    range_start.setAttribute("w:id", comment_id);
+
+    const range_end = xmlDoc.createElement("w:commentRangeEnd");
+    range_end.setAttribute("w:id", comment_id);
+
+    const ref_run = xmlDoc.createElement("w:r");
+    const rPr = xmlDoc.createElement("w:rPr");
+    const rStyle = xmlDoc.createElement("w:rStyle");
+    rStyle.setAttribute("w:val", "CommentReference");
+    rPr.appendChild(rStyle);
+    ref_run.appendChild(rPr);
+
+    const ref = xmlDoc.createElement("w:commentReference");
+    ref.setAttribute("w:id", comment_id);
+    ref_run.appendChild(ref);
+
+    // Insert <w:commentRangeStart> immediately before start_element.
+    // Insert <w:commentRangeEnd> immediately after end_element.
+    // Insert <w:r><w:commentReference/></w:r> immediately after the range end.
+    parent_element.insertBefore(range_start, start_element);
+
+    // After insertBefore above, sibling positions shifted. Re-find end_element's next sibling.
+    const after_end = end_element.nextSibling;
+    if (after_end) {
+      parent_element.insertBefore(range_end, after_end);
+      parent_element.insertBefore(ref_run, range_end.nextSibling);
+    } else {
+      parent_element.appendChild(range_end);
+      parent_element.appendChild(ref_run);
+    }
+  }
+
+  /**
+   * Attaches a comment that spans across two different paragraphs (or other block
+   * containers). start_element lives inside start_p, end_element lives inside end_p,
+   * and the comment is open from start_element through end_element.
+   * Ported from Python `RedlineEngine._attach_comment_spanning`.
+   */
+  private _attach_comment_spanning(
+    start_p: Element,
+    start_el: Element,
+    end_p: Element,
+    end_el: Element,
+    text: string,
+  ) {
+    if (!text) return;
+
+    const comment_id = this.comments_manager.addComment(this.author, text);
+    const xmlDocStart = start_p.ownerDocument!;
+    const xmlDocEnd = end_p.ownerDocument!;
+
+    const range_start = xmlDocStart.createElement("w:commentRangeStart");
+    range_start.setAttribute("w:id", comment_id);
+
+    const range_end = xmlDocEnd.createElement("w:commentRangeEnd");
+    range_end.setAttribute("w:id", comment_id);
+
+    const ref_run = xmlDocEnd.createElement("w:r");
+    const rPr = xmlDocEnd.createElement("w:rPr");
+    const rStyle = xmlDocEnd.createElement("w:rStyle");
+    rStyle.setAttribute("w:val", "CommentReference");
+    rPr.appendChild(rStyle);
+    ref_run.appendChild(rPr);
+
+    const ref = xmlDocEnd.createElement("w:commentReference");
+    ref.setAttribute("w:id", comment_id);
+    ref_run.appendChild(ref);
+
+    // Place range start before start_el.
+    start_p.insertBefore(range_start, start_el);
+
+    // Place range end + reference run after end_el.
+    const after_end = end_el.nextSibling;
+    if (after_end) {
+      end_p.insertBefore(range_end, after_end);
+      end_p.insertBefore(ref_run, range_end.nextSibling);
+    } else {
+      end_p.appendChild(range_end);
+      end_p.appendChild(ref_run);
+    }
+  } /**
+   * Inserts `text` as one or more tracked paragraphs anchored relative to
+   * either an existing run or a paragraph. Returns:
+   *   { first_node, last_p, last_ins, used_block_mode }
+   * where:
+   *   - first_node: the first <w:ins> (for inline mode) OR the first new <w:p>
+   *     (for block mode). The caller uses this for splicing into the DOM and
+   *     for anchoring comments.
+   *   - last_p: the last new <w:p> created, if any. null when entirely inline.
+   *   - last_ins: the last <w:ins> created (inside the last new <w:p>, or the
+   *     sole inline ins). Used as the comment's end anchor.
+   *   - used_block_mode: true when the first line carried a heading/list style
+   *     marker and we created a new paragraph for it (rather than inlining it).
+   *
+   * Multi-paragraph rules (only when text contains '\n'):
+   *   - Each additional line becomes a new <w:p>, inserted after the anchor
+   *     paragraph in document order.
+   *   - Each new <w:p> gets a copy of the anchor paragraph's <w:pPr> (so list
+   *     numbering / indentation are preserved) unless the line itself starts
+   *     with a markdown heading or list marker, which overrides the style.
+   *   - Each new <w:p> carries a tracked paragraph-break marker
+   *     (<w:pPr><w:rPr><w:ins/></w:rPr></w:pPr>) so Word natively tracks the
+   *     paragraph break.
+   *   - Each new <w:p>'s content is wrapped in a <w:ins>, with inline bold/
+   *     italic markdown parsed via _parse_inline_markdown.
+   *
+   * The first line:
+   *   - If it carries a heading / list marker AND we have a paragraph anchor,
+   *     we drop into "block mode": no inline <w:ins>; the first line itself
+   *     becomes the first new <w:p>.
+   *   - Otherwise we emit a single inline <w:ins> for the first line (current
+   *     behaviour) and treat the remaining lines as block extensions.
+   *
+   * Does NOT attach comments; callers handle that.
+   */
+  private _track_insert_multiline(
+    text: string,
+    anchor_run: Run | null,
+    anchor_paragraph: Paragraph | null,
+    reuse_id: string,
+  ): {
+    first_node: Element | null;
+    last_p: Element | null;
+    last_ins: Element | null;
+    used_block_mode: boolean;
+  } {
+    if (!text) {
+      return {
+        first_node: null,
+        last_p: null,
+        last_ins: null,
+        used_block_mode: false,
+      };
+    }
+
+    const xmlDoc = this.doc.part._element.ownerDocument!;
+    const lines = text.split(/\r?\n/);
+
+    // Resolve the containing <w:p> (current_p) for the anchor.
+    let current_p: Element | null = null;
+    if (anchor_paragraph !== null) {
+      current_p = anchor_paragraph._element;
+    } else if (anchor_run !== null) {
+      let walker: Element | null = anchor_run._element;
+      while (walker && walker.tagName !== "w:p") {
+        walker = walker.parentNode as Element | null;
+      }
+      current_p = walker;
+    }
+
+    // Drop trailing empty line. "foo\n\nbar\n\n" splits to
+    // ['foo', '', 'bar', '']; that trailing empty is just a terminator, not
+    // a real empty paragraph.
+    while (lines.length > 1 && lines[lines.length - 1] === "") {
+      lines.pop();
+    }
+    if (lines.length === 0) {
+      return {
+        first_node: null,
+        last_p: null,
+        last_ins: null,
+        used_block_mode: false,
+      };
+    }
+
+    // Inspect the first line for heading/list markers.
+    const [first_clean, first_style] = this._parse_markdown_style(lines[0]);
+    const have_paragraph_context = current_p !== null;
+    const block_mode = first_style !== null && have_paragraph_context;
+
+    let first_node: Element | null = null;
+    let inline_ins: Element | null = null;
+
+    // ---- INLINE PATH for the first line (when NOT in block mode) ----
+    if (!block_mode) {
+      inline_ins = this._build_tracked_ins_for_line(
+        first_clean === lines[0] ? lines[0] : lines[0],
+        anchor_run,
+        reuse_id,
+        xmlDoc,
+      );
+      first_node = inline_ins;
+      // Caller will attach `inline_ins` to the DOM later — keep it for now.
+    }
+
+    // ---- BLOCK PATH for the first line (when in block mode) ----
+    // Block-mode first line is just the first extension paragraph below.
+    const remaining_lines = block_mode ? lines : lines.slice(1);
+
+    // If there's nothing to do beyond inline, we're done.
+    if (remaining_lines.length === 0) {
+      return {
+        first_node,
+        last_p: null,
+        last_ins: inline_ins,
+        used_block_mode: false,
+      };
+    }
+
+    if (!current_p) {
+      // Multi-paragraph insertion needs a paragraph context. Without one, fall
+      // back to the inline result we already built.
+      return {
+        first_node,
+        last_p: null,
+        last_ins: inline_ins,
+        used_block_mode: false,
+      };
+    }
+
+    const parent_body = current_p.parentNode as Element | null;
+    if (!parent_body) {
+      return {
+        first_node,
+        last_p: null,
+        last_ins: inline_ins,
+        used_block_mode: false,
+      };
+    }
+
+    const insertAfterEl = (newNode: Element, ref: Element) => {
+      parent_body.insertBefore(newNode, ref.nextSibling);
+    };
+
+    let last_p: Element | null = null;
+    let last_ins: Element | null = null;
+    let after: Element = current_p;
+
+    for (let i = 0; i < remaining_lines.length; i++) {
+      const raw_line = remaining_lines[i];
+      const [clean_text, style_name] = this._parse_markdown_style(raw_line);
+
+      const new_p = xmlDoc.createElement("w:p");
+
+      if (style_name) {
+        // Heading or list style was explicitly authored: replace pPr entirely.
+        this._set_paragraph_style(new_p, style_name);
+      } else {
+        // Inherit pPr from the anchor paragraph (preserves list numbering).
+        const existing_pPr = findChild(current_p, "w:pPr");
+        if (existing_pPr) {
+          new_p.appendChild(existing_pPr.cloneNode(true));
+        }
+      }
+
+      // Track the paragraph break itself as an insertion.
+      let pPr = findChild(new_p, "w:pPr");
+      if (!pPr) {
+        pPr = xmlDoc.createElement("w:pPr");
+        new_p.insertBefore(pPr, new_p.firstChild);
+      }
+      let rPr = findChild(pPr, "w:rPr");
+      if (!rPr) {
+        rPr = xmlDoc.createElement("w:rPr");
+        pPr.appendChild(rPr);
+      }
+      const ins_mark = this._create_track_change_tag("w:ins", "", reuse_id);
+      rPr.appendChild(ins_mark);
+
+      // Build the content <w:ins>.
+      const content_ins = this._build_tracked_ins_for_line(
+        clean_text,
+        anchor_run,
+        reuse_id,
+        xmlDoc,
+      );
+      if (content_ins) {
+        new_p.appendChild(content_ins);
+      }
+
+      insertAfterEl(new_p, after);
+      after = new_p;
+      last_p = new_p;
+      last_ins = content_ins;
+
+      // In block mode, the first new paragraph IS first_node.
+      if (block_mode && i === 0) {
+        first_node = new_p;
+      }
+    }
+
+    return { first_node, last_p, last_ins, used_block_mode: block_mode };
+  }
+
+  /**
+   * Builds a single tracked-insert wrapper (<w:ins>) containing one or more
+   * <w:r> elements representing the inline markdown segments of `line_text`.
+   * Returns null if line_text is empty.
+   */
+  private _build_tracked_ins_for_line(
+    line_text: string,
+    anchor_run: Run | null,
+    reuse_id: string,
+    xmlDoc: Document,
+  ): Element | null {
+    if (!line_text && line_text !== "") return null;
+    const ins = this._create_track_change_tag("w:ins", "", reuse_id);
+    const segments = this._parse_inline_markdown(line_text);
+    if (segments.length === 0) {
+      // Even for "" we still want an empty paragraph to project the break.
+      // We achieve that by producing no run; xmldom will serialize <w:ins/>.
+      // But Word prefers at least one empty <w:t/>, so emit a minimal run.
+      const r = xmlDoc.createElement("w:r");
+      const t = xmlDoc.createElement("w:t");
+      t.setAttribute("xml:space", "preserve");
+      r.appendChild(t);
+      ins.appendChild(r);
+      return ins;
+    }
+    for (const [segText, segProps] of segments) {
+      const r = xmlDoc.createElement("w:r");
+      // Inherit run formatting (e.g. bold from a heading style) only when we
+      // have an anchor run AND we are not overriding via segment props.
+      if (anchor_run && anchor_run._element) {
+        const anchor_rPr = findChild(anchor_run._element, "w:rPr");
+        if (anchor_rPr) {
+          const clone = anchor_rPr.cloneNode(true) as Element;
+          // Strip vanish / strike to avoid invisible inserts.
+          for (const tag of ["w:vanish", "w:strike", "w:dstrike"]) {
+            const found = findChild(clone, tag);
+            if (found) clone.removeChild(found);
+          }
+          r.appendChild(clone);
+        }
+      }
+      this._apply_run_props(r, segProps, false);
+      const t = xmlDoc.createElement("w:t");
+      this._set_text_content(t, segText);
+      r.appendChild(t);
+      ins.appendChild(r);
+    }
+    return ins;
+  }
   private _parse_markdown_style(text: string): [string, string | null] {
     const stripped_text = text.trimStart();
 
@@ -263,7 +684,10 @@ export class RedlineEngine {
     return [text, null];
   }
 
-  private _parse_inline_markdown(text: string, baseStyle: any = {}): [string, any][] {
+  private _parse_inline_markdown(
+    text: string,
+    baseStyle: any = {},
+  ): [string, any][] {
     if (!text) return [];
 
     const tokenPattern = /(\*\*.*?\*\*)|(_.*?_)/;
@@ -275,8 +699,10 @@ export class RedlineEngine {
     const raw = match[0];
     const end = start + raw.length;
 
-    const isBold = raw.startsWith('**');
-    const innerContent = isBold ? raw.substring(2, raw.length - 2) : raw.substring(1, raw.length - 1);
+    const isBold = raw.startsWith("**");
+    const innerContent = isBold
+      ? raw.substring(2, raw.length - 2)
+      : raw.substring(1, raw.length - 1);
 
     const preText = text.substring(0, start);
     const postText = text.substring(end);
@@ -294,44 +720,82 @@ export class RedlineEngine {
     return results;
   }
 
-  private _apply_run_props(runElement: Element, props: any, suppressInherited: boolean = false) {
+  private _apply_run_props(
+    runElement: Element,
+    props: any,
+    suppressInherited: boolean = false,
+  ) {
     if (!props) {
       if (!suppressInherited) return;
       props = {};
     }
 
-    let rPr = findChild(runElement, 'w:rPr');
+    let rPr = findChild(runElement, "w:rPr");
     if (!rPr && (props.bold || props.italic || suppressInherited)) {
       const doc = runElement.ownerDocument!;
-      rPr = doc.createElement('w:rPr');
+      rPr = doc.createElement("w:rPr");
       runElement.appendChild(rPr);
     }
 
     if (rPr) {
       const doc = runElement.ownerDocument!;
       if (props.bold) {
-        let b = findChild(rPr, 'w:b');
-        if (!b) { b = doc.createElement('w:b'); rPr.appendChild(b); }
-        b.setAttribute('w:val', '1');
+        let b = findChild(rPr, "w:b");
+        if (!b) {
+          b = doc.createElement("w:b");
+          rPr.appendChild(b);
+        }
+        b.setAttribute("w:val", "1");
       } else if (suppressInherited) {
-        const b = findChild(rPr, 'w:b');
+        const b = findChild(rPr, "w:b");
         if (b) rPr.removeChild(b);
       }
 
       if (props.italic) {
-        let i = findChild(rPr, 'w:i');
-        if (!i) { i = doc.createElement('w:i'); rPr.appendChild(i); }
-        i.setAttribute('w:val', '1');
+        let i = findChild(rPr, "w:i");
+        if (!i) {
+          i = doc.createElement("w:i");
+          rPr.appendChild(i);
+        }
+        i.setAttribute("w:val", "1");
       } else if (suppressInherited) {
-        const i = findChild(rPr, 'w:i');
+        const i = findChild(rPr, "w:i");
         if (i) rPr.removeChild(i);
       }
     }
   }
+  /**
+   * Replaces (or creates) a paragraph's <w:pPr> with a single <w:pStyle> entry
+   * pointing at `style_name`. Strips any existing pPr to avoid layering a new
+   * heading style on top of a previous list/heading configuration.
+   *
+   * In Python, the style id is resolved via doc.styles[style_name].style_id and
+   * falls back to stripping spaces. Node has no equivalent style cache exposed
+   * on `doc`, so we always use the simple "strip spaces" fallback: "Heading 1"
+   * becomes the style id "Heading1", "List Number" becomes "ListNumber", etc.
+   * This matches python-docx's default style-id convention for the built-in
+   * paragraph styles and is what Word writes by default.
+   */
+  private _set_paragraph_style(p_element: Element, style_name: string) {
+    const xmlDoc = p_element.ownerDocument!;
 
+    const existing_pPr = findChild(p_element, "w:pPr");
+    if (existing_pPr) {
+      p_element.removeChild(existing_pPr);
+    }
+
+    const pPr = xmlDoc.createElement("w:pPr");
+    const pStyle = xmlDoc.createElement("w:pStyle");
+    const style_id = style_name.replace(/\s+/g, "");
+    pStyle.setAttribute("w:val", style_id);
+    pPr.appendChild(pStyle);
+
+    // pPr is the first child of <w:p> per OOXML schema.
+    p_element.insertBefore(pPr, p_element.firstChild);
+  }
   public validate_edits(edits: any[]): string[] {
     const errors: string[] = [];
-    if (!this.mapper.full_text) this.mapper['_build_map']();
+    if (!this.mapper.full_text) this.mapper["_build_map"]();
 
     errors.push(...validate_edit_strings(edits));
 
@@ -343,31 +807,43 @@ export class RedlineEngine {
       let activeText = this.mapper.full_text;
 
       if (matches.length === 0) {
-        if (!this.clean_mapper) this.clean_mapper = new DocumentMapper(this.doc, true);
+        if (!this.clean_mapper)
+          this.clean_mapper = new DocumentMapper(this.doc, true);
         matches = this.clean_mapper.find_all_match_indices(edit.target_text);
         if (matches.length > 0) activeText = this.clean_mapper.full_text;
       }
 
       if (matches.length === 0) {
-        errors.push(`- Edit ${i + 1} Failed: Target text not found in document:\n  "${edit.target_text}"`);
+        errors.push(
+          `- Edit ${i + 1} Failed: Target text not found in document:\n  "${edit.target_text}"`,
+        );
       } else if (matches.length > 1) {
-        errors.push(`- Edit ${i + 1} Failed: Target text is ambiguous. Found ${matches.length} matches.\nProvide more context.`);
+        errors.push(
+          `- Edit ${i + 1} Failed: Target text is ambiguous. Found ${matches.length} matches.\nProvide more context.`,
+        );
       }
 
       for (const [start, length] of matches) {
-        const spans = this.mapper.spans.filter(s => s.end > start && s.start < start + length);
+        const spans = this.mapper.spans.filter(
+          (s) => s.end > start && s.start < start + length,
+        );
         const nestedAuthors = new Set<string>();
         for (const s of spans) {
           if (s.ins_id) {
-            const insNodes = findAllDescendants(this.doc.element, 'w:ins').filter(n => n.getAttribute('w:id') === s.ins_id);
+            const insNodes = findAllDescendants(
+              this.doc.element,
+              "w:ins",
+            ).filter((n) => n.getAttribute("w:id") === s.ins_id);
             if (insNodes.length > 0) {
-              const auth = insNodes[0].getAttribute('w:author');
+              const auth = insNodes[0].getAttribute("w:author");
               if (auth && auth !== this.author) nestedAuthors.add(auth);
             }
           }
         }
         if (nestedAuthors.size > 0) {
-          errors.push(`- Edit ${i + 1} Failed: Modification targets an active insertion from another author (${Array.from(nestedAuthors).join(', ')}).`);
+          errors.push(
+            `- Edit ${i + 1} Failed: Modification targets an active insertion from another author (${Array.from(nestedAuthors).join(", ")}).`,
+          );
         }
       }
     }
@@ -376,17 +852,22 @@ export class RedlineEngine {
 
   public process_batch(changes: DocumentChange[]): any {
     this.skipped_details = [];
-    const actions = changes.filter(c => ['accept', 'reject', 'reply'].includes(c.type));
-    const edits = changes.filter(c => !['accept', 'reject', 'reply'].includes(c.type));
+    const actions = changes.filter((c) =>
+      ["accept", "reject", "reply"].includes(c.type),
+    );
+    const edits = changes.filter(
+      (c) => !["accept", "reject", "reply"].includes(c.type),
+    );
 
-    let applied_actions = 0, skipped_actions = 0;
+    let applied_actions = 0,
+      skipped_actions = 0;
     if (actions.length > 0) {
       const res = this.apply_review_actions(actions);
       applied_actions = res[0];
       skipped_actions = res[1];
       if (applied_actions > 0) {
-        this.mapper['_build_map']();
-        if (this.clean_mapper) this.clean_mapper['_build_map']();
+        this.mapper["_build_map"]();
+        if (this.clean_mapper) this.clean_mapper["_build_map"]();
       }
     }
 
@@ -395,7 +876,8 @@ export class RedlineEngine {
       if (errors.length > 0) throw new BatchValidationError(errors);
     }
 
-    let applied_edits = 0, skipped_edits = 0;
+    let applied_edits = 0,
+      skipped_edits = 0;
     if (edits.length > 0) {
       const res = this.apply_edits(edits as any[]);
       applied_edits = res[0];
@@ -417,16 +899,21 @@ export class RedlineEngine {
     const resolved_edits: [any, string | null][] = [];
 
     for (const edit of edits) {
-      if (edit._match_start_index !== undefined && edit._match_start_index !== null) {
+      if (
+        edit._match_start_index !== undefined &&
+        edit._match_start_index !== null
+      ) {
         resolved_edits.push([edit, edit.new_text || null]);
-      } else if (edit.type === 'insert_row' || edit.type === 'delete_row') {
+      } else if (edit.type === "insert_row" || edit.type === "delete_row") {
         const [idx] = this.mapper.find_match_index(edit.target_text);
         if (idx !== -1) {
           edit._match_start_index = idx;
           resolved_edits.push([edit, null]);
         } else {
           skipped++;
-          this.skipped_details.push(`- Failed to locate row target: '${(edit.target_text || '').substring(0, 40)}...'`);
+          this.skipped_details.push(
+            `- Failed to locate row target: '${(edit.target_text || "").substring(0, 40)}...'`,
+          );
         }
       } else {
         const resolved = this._pre_resolve_heuristic_edit(edit);
@@ -438,29 +925,37 @@ export class RedlineEngine {
           }
         } else {
           skipped++;
-          this.skipped_details.push(`- Failed to apply edit targeting: '${(edit.target_text || 'insertion').substring(0, 40)}...'`);
+          this.skipped_details.push(
+            `- Failed to apply edit targeting: '${(edit.target_text || "insertion").substring(0, 40)}...'`,
+          );
         }
       }
     }
 
-    resolved_edits.sort((a, b) => (b[0]._match_start_index || 0) - (a[0]._match_start_index || 0));
+    resolved_edits.sort(
+      (a, b) => (b[0]._match_start_index || 0) - (a[0]._match_start_index || 0),
+    );
     const occupied_ranges: [number, number][] = [];
 
     for (const [edit, orig_new] of resolved_edits) {
       const start = edit._match_start_index || 0;
       const end = start + (edit.target_text ? edit.target_text.length : 0);
 
-      const overlaps = occupied_ranges.some(([occ_start, occ_end]) => start < occ_end && end > occ_start);
+      const overlaps = occupied_ranges.some(
+        ([occ_start, occ_end]) => start < occ_end && end > occ_start,
+      );
       if (overlaps) {
         skipped++;
-        this.skipped_details.push(`- Skipped overlapping edit targeting: '${(edit.target_text || 'insertion').substring(0, 40)}...'`);
+        this.skipped_details.push(
+          `- Skipped overlapping edit targeting: '${(edit.target_text || "insertion").substring(0, 40)}...'`,
+        );
         continue;
       }
 
       let success = false;
-      if (edit.type === 'modify') {
+      if (edit.type === "modify") {
         success = this._apply_single_edit_indexed(edit, orig_new, false);
-      } else if (edit.type === 'insert_row' || edit.type === 'delete_row') {
+      } else if (edit.type === "insert_row" || edit.type === "delete_row") {
         success = this._apply_table_edit(edit, false);
       }
 
@@ -469,7 +964,9 @@ export class RedlineEngine {
         occupied_ranges.push([start, end]);
       } else {
         skipped++;
-        this.skipped_details.push(`- Failed to apply edit targeting: '${(edit.target_text || 'insertion').substring(0, 40)}...'`);
+        this.skipped_details.push(
+          `- Failed to apply edit targeting: '${(edit.target_text || "insertion").substring(0, 40)}...'`,
+        );
       }
     }
 
@@ -482,34 +979,43 @@ export class RedlineEngine {
 
     for (const action of actions) {
       const type = action.type;
-      if (type === 'reply') {
-        const cid = action.target_id.replace('Com:', '');
+      if (type === "reply") {
+        const cid = action.target_id.replace("Com:", "");
         this.comments_manager.addComment(this.author, action.text, cid);
         applied++;
         continue;
       }
 
-      const target_id = action.target_id.replace('Chg:', '');
-      const all_ins = findAllDescendants(this.doc.element, 'w:ins').filter(n => n.getAttribute('w:id') === target_id);
-      const all_del = findAllDescendants(this.doc.element, 'w:del').filter(n => n.getAttribute('w:id') === target_id);
+      const target_id = action.target_id.replace("Chg:", "");
+      const all_ins = findAllDescendants(this.doc.element, "w:ins").filter(
+        (n) => n.getAttribute("w:id") === target_id,
+      );
+      const all_del = findAllDescendants(this.doc.element, "w:del").filter(
+        (n) => n.getAttribute("w:id") === target_id,
+      );
       const all_nodes = [...all_ins, ...all_del];
 
       if (all_nodes.length === 0) {
         skipped++;
-        this.skipped_details.push(`- Failed to apply action: Target ID ${action.target_id} not found.`);
+        this.skipped_details.push(
+          `- Failed to apply action: Target ID ${action.target_id} not found.`,
+        );
         continue;
       }
 
       for (const node of all_nodes) {
-        const is_ins = node.tagName === 'w:ins';
-        const parent_tag = node.parentNode ? (node.parentNode as Element).tagName : '';
-        const is_trPr = parent_tag === 'w:trPr';
+        const is_ins = node.tagName === "w:ins";
+        const parent_tag = node.parentNode
+          ? (node.parentNode as Element).tagName
+          : "";
+        const is_trPr = parent_tag === "w:trPr";
 
-        if (type === 'accept') {
+        if (type === "accept") {
           if (is_ins) {
             if (is_trPr) node.parentNode?.removeChild(node);
             else {
-              while (node.firstChild) node.parentNode?.insertBefore(node.firstChild, node);
+              while (node.firstChild)
+                node.parentNode?.insertBefore(node.firstChild, node);
               node.parentNode?.removeChild(node);
             }
           } else {
@@ -520,7 +1026,7 @@ export class RedlineEngine {
               node.parentNode?.removeChild(node);
             }
           }
-        } else if (type === 'reject') {
+        } else if (type === "reject") {
           if (is_ins) {
             if (is_trPr) {
               const tr = node.parentNode?.parentNode;
@@ -529,14 +1035,18 @@ export class RedlineEngine {
           } else {
             if (is_trPr) node.parentNode?.removeChild(node);
             else {
-              const delTexts = Array.from(node.getElementsByTagName('w:delText'));
+              const delTexts = Array.from(
+                node.getElementsByTagName("w:delText"),
+              );
               for (const dt of delTexts) {
-                const t = dt.ownerDocument!.createElement('w:t');
+                const t = dt.ownerDocument!.createElement("w:t");
                 t.textContent = dt.textContent;
-                if (dt.hasAttribute('xml:space')) t.setAttribute('xml:space', 'preserve');
+                if (dt.hasAttribute("xml:space"))
+                  t.setAttribute("xml:space", "preserve");
                 dt.parentNode?.replaceChild(t, dt);
               }
-              while (node.firstChild) node.parentNode?.insertBefore(node.firstChild, node);
+              while (node.firstChild)
+                node.parentNode?.insertBefore(node.firstChild, node);
               node.parentNode?.removeChild(node);
             }
           }
@@ -549,8 +1059,11 @@ export class RedlineEngine {
 
   private _apply_table_edit(edit: any, rebuild_map: boolean): boolean {
     const start_idx = edit._match_start_index || 0;
-    const [anchor_run, anchor_para] = this.mapper.get_insertion_anchor(start_idx, rebuild_map);
-    
+    const [anchor_run, anchor_para] = this.mapper.get_insertion_anchor(
+      start_idx,
+      rebuild_map,
+    );
+
     let target_element: Element | null = null;
     if (anchor_run) target_element = anchor_run._element;
     else if (anchor_para) target_element = anchor_para._element;
@@ -558,32 +1071,36 @@ export class RedlineEngine {
     if (!target_element) return false;
 
     let tr: Element | null = target_element;
-    while (tr && tr.tagName !== 'w:tr') tr = tr.parentNode as Element;
+    while (tr && tr.tagName !== "w:tr") tr = tr.parentNode as Element;
     if (!tr) return false;
 
-    if (edit.type === 'delete_row') {
-      let trPr = findChild(tr, 'w:trPr');
+    if (edit.type === "delete_row") {
+      let trPr = findChild(tr, "w:trPr");
       if (!trPr) {
-        trPr = tr.ownerDocument!.createElement('w:trPr');
+        trPr = tr.ownerDocument!.createElement("w:trPr");
         tr.insertBefore(trPr, tr.firstChild);
       }
-      trPr.appendChild(this._create_track_change_tag('w:del'));
+      trPr.appendChild(this._create_track_change_tag("w:del"));
       return true;
-    } else if (edit.type === 'insert_row') {
-      const new_tr = tr.ownerDocument!.createElement('w:tr');
-      const trPr = tr.ownerDocument!.createElement('w:trPr');
+    } else if (edit.type === "insert_row") {
+      const new_tr = tr.ownerDocument!.createElement("w:tr");
+      const trPr = tr.ownerDocument!.createElement("w:trPr");
       new_tr.appendChild(trPr);
-      trPr.appendChild(this._create_track_change_tag('w:ins'));
+      trPr.appendChild(this._create_track_change_tag("w:ins"));
       for (const cellText of edit.cells) {
-        const tc = tr.ownerDocument!.createElement('w:tc');
-        const p = tr.ownerDocument!.createElement('w:p');
-        const r = tr.ownerDocument!.createElement('w:r');
-        const t = tr.ownerDocument!.createElement('w:t');
+        const tc = tr.ownerDocument!.createElement("w:tc");
+        const p = tr.ownerDocument!.createElement("w:p");
+        const r = tr.ownerDocument!.createElement("w:r");
+        const t = tr.ownerDocument!.createElement("w:t");
         t.textContent = cellText;
-        if (cellText.trim() !== cellText) t.setAttribute('xml:space', 'preserve');
-        r.appendChild(t); p.appendChild(r); tc.appendChild(p); new_tr.appendChild(tc);
+        if (cellText.trim() !== cellText)
+          t.setAttribute("xml:space", "preserve");
+        r.appendChild(t);
+        p.appendChild(r);
+        tc.appendChild(p);
+        new_tr.appendChild(tc);
       }
-      if (edit.position === 'above') tr.parentNode?.insertBefore(new_tr, tr);
+      if (edit.position === "above") tr.parentNode?.insertBefore(new_tr, tr);
       else insertAfter(new_tr, tr);
       return true;
     }
@@ -597,17 +1114,26 @@ export class RedlineEngine {
     let use_clean_map = false;
 
     if (start_idx === -1) {
-      if (!this.clean_mapper) this.clean_mapper = new DocumentMapper(this.doc, true);
-      [start_idx, match_len] = this.clean_mapper.find_match_index(edit.target_text);
+      if (!this.clean_mapper)
+        this.clean_mapper = new DocumentMapper(this.doc, true);
+      [start_idx, match_len] = this.clean_mapper.find_match_index(
+        edit.target_text,
+      );
       if (start_idx !== -1) use_clean_map = true;
       else return null;
     }
 
     const active_mapper = use_clean_map ? this.clean_mapper! : this.mapper;
     const effective_new_text = edit.new_text || "";
-    const actual_doc_text = this.mapper.full_text.substring(start_idx, start_idx + match_len);
+    const actual_doc_text = this.mapper.full_text.substring(
+      start_idx,
+      start_idx + match_len,
+    );
 
-    if (actual_doc_text === effective_new_text || edit.target_text === effective_new_text) {
+    if (
+      actual_doc_text === effective_new_text ||
+      edit.target_text === effective_new_text
+    ) {
       return {
         type: "modify",
         target_text: actual_doc_text,
@@ -615,7 +1141,7 @@ export class RedlineEngine {
         comment: edit.comment,
         _match_start_index: start_idx,
         _internal_op: "COMMENT_ONLY",
-        _active_mapper_ref: active_mapper
+        _active_mapper_ref: active_mapper,
       };
     }
 
@@ -629,13 +1155,16 @@ export class RedlineEngine {
       final_new = effective_new_text.substring(actual_doc_text.length);
       effective_start_idx = start_idx + match_len;
     } else {
-      const [prefix_len, suffix_len] = trim_common_context(actual_doc_text, effective_new_text);
+      const [prefix_len, suffix_len] = trim_common_context(
+        actual_doc_text,
+        effective_new_text,
+      );
       const t_end = actual_doc_text.length - suffix_len;
       const n_end = effective_new_text.length - suffix_len;
 
       final_target = actual_doc_text.substring(prefix_len, t_end);
       final_new = effective_new_text.substring(prefix_len, n_end);
-      effective_start_idx = start_idx + prefix_len
+      effective_start_idx = start_idx + prefix_len;
 
       if (!final_target && final_new) effective_op = "INSERTION";
       else if (final_target && !final_new) effective_op = "DELETION";
@@ -650,84 +1179,271 @@ export class RedlineEngine {
       comment: edit.comment,
       _match_start_index: effective_start_idx,
       _internal_op: effective_op,
-      _active_mapper_ref: active_mapper
+      _active_mapper_ref: active_mapper,
     };
   }
 
-  private _apply_single_edit_indexed(edit: any, orig_new: string | null, rebuild_map: boolean): boolean {
+  private _apply_single_edit_indexed(
+    edit: any,
+    orig_new: string | null,
+    rebuild_map: boolean,
+  ): boolean {
     let op = edit._internal_op;
     const active_mapper = edit._active_mapper_ref || this.mapper;
     const start_idx = edit._match_start_index || 0;
     const length = edit.target_text ? edit.target_text.length : 0;
 
-    const del_id = ['DELETION', 'MODIFICATION'].includes(op) ? this._getNextId() : null;
-    const ins_id = ['INSERTION', 'MODIFICATION'].includes(op) ? this._getNextId() : null;
+    const del_id = ["DELETION", "MODIFICATION"].includes(op)
+      ? this._getNextId()
+      : null;
+    const ins_id = ["INSERTION", "MODIFICATION"].includes(op)
+      ? this._getNextId()
+      : null;
 
     if (op === "COMMENT_ONLY") {
-      // Mocked for Port limits, normally anchors to found runs
+      // Resolve the runs covering [start_idx, start_idx+length) and attach a
+      // comment around them. No tracked-change is produced.
+      const target_runs = active_mapper.find_target_runs_by_index(
+        start_idx,
+        length,
+        rebuild_map,
+      );
+      if (target_runs.length === 0) return false;
+      if (!edit.comment) return true;
+
+      const first_el = target_runs[0]._element;
+      const last_el = target_runs[target_runs.length - 1]._element;
+
+      // Walk up from the first/last run to their containing <w:p>.
+      let start_p: Element | null = first_el;
+      while (start_p && start_p.tagName !== "w:p")
+        start_p = start_p.parentNode as Element;
+      let end_p: Element | null = last_el;
+      while (end_p && end_p.tagName !== "w:p")
+        end_p = end_p.parentNode as Element;
+      if (!start_p || !end_p) return false;
+
+      // first_el / last_el may live inside a <w:ins> or <w:del>. We need their
+      // top-level child-of-paragraph ancestor so the comment markers become
+      // siblings of those wrappers, not children.
+      const ascend_to_paragraph_child = (el: Element, p: Element): Element => {
+        let cur: Element = el;
+        while (cur.parentNode && cur.parentNode !== p) {
+          cur = cur.parentNode as Element;
+        }
+        return cur;
+      };
+      const first_anchor = ascend_to_paragraph_child(first_el, start_p);
+      const last_anchor = ascend_to_paragraph_child(last_el, end_p);
+
+      if (start_p === end_p) {
+        this._attach_comment(start_p, first_anchor, last_anchor, edit.comment);
+      } else {
+        this._attach_comment_spanning(
+          start_p,
+          first_anchor,
+          end_p,
+          last_anchor,
+          edit.comment,
+        );
+      }
       return true;
     }
-
     if (op === "INSERTION") {
-      const [anchor_run, anchor_para] = active_mapper.get_insertion_anchor(start_idx, rebuild_map);
+      const [anchor_run, anchor_para] = active_mapper.get_insertion_anchor(
+        start_idx,
+        rebuild_map,
+      );
       if (!anchor_run && !anchor_para) return false;
 
-      const xmlDoc = this.doc.part._element.ownerDocument!;
-      const ins = this._create_track_change_tag('w:ins', '', ins_id);
-      
-      const segments = this._parse_inline_markdown(edit.new_text || "");
-      for (const [segText, segProps] of segments) {
-        const r = xmlDoc.createElement('w:r');
-        this._apply_run_props(r, segProps, false);
-        const t = xmlDoc.createElement('w:t');
-        this._set_text_content(t, segText);
-        r.appendChild(t);
-        ins.appendChild(r);
+      const result = this._track_insert_multiline(
+        edit.new_text || "",
+        anchor_run,
+        anchor_para,
+        ins_id!,
+      );
+
+      if (!result.first_node) return false;
+
+      // Place the inline <w:ins> (or block-mode first paragraph) into the DOM.
+      // Block-mode first_node is already a freshly-inserted <w:p>; only the
+      // inline case needs DOM splicing here.
+      const is_inline_first = result.first_node.tagName === "w:ins";
+      if (is_inline_first) {
+        if (anchor_run) {
+          insertAfter(result.first_node, anchor_run._element);
+        } else if (anchor_para) {
+          anchor_para._element.appendChild(result.first_node);
+        }
       }
 
-      if (anchor_run) {
-        insertAfter(ins, anchor_run._element);
-      } else if (anchor_para) {
-        anchor_para._element.appendChild(ins);
+      // Attach the comment if requested. Anchor depends on whether we created
+      // additional paragraphs.
+      if (edit.comment) {
+        const ascend_to_paragraph_child = (
+          el: Element,
+          p: Element,
+        ): Element => {
+          let cur: Element = el;
+          while (cur.parentNode && cur.parentNode !== p) {
+            cur = cur.parentNode as Element;
+          }
+          return cur;
+        };
+
+        if (result.last_p && result.last_ins) {
+          // Multi-paragraph: anchor from first_node (in its host paragraph)
+          // through last_ins (inside last_p).
+          let start_p: Element | null = result.first_node;
+          while (start_p && start_p.tagName !== "w:p")
+            start_p = start_p.parentNode as Element;
+          if (start_p) {
+            const start_anchor = ascend_to_paragraph_child(
+              result.first_node,
+              start_p,
+            );
+            const end_anchor = ascend_to_paragraph_child(
+              result.last_ins,
+              result.last_p,
+            );
+            this._attach_comment_spanning(
+              start_p,
+              start_anchor,
+              result.last_p,
+              end_anchor,
+              edit.comment,
+            );
+          }
+        } else {
+          // Inline only: anchor around first_node in its host paragraph.
+          let host_p: Element | null = result.first_node;
+          while (host_p && host_p.tagName !== "w:p")
+            host_p = host_p.parentNode as Element;
+          if (host_p) {
+            const anchor = ascend_to_paragraph_child(result.first_node, host_p);
+            this._attach_comment(host_p, anchor, anchor, edit.comment);
+          }
+        }
       }
       return true;
     }
 
     // DELETION / MODIFICATION
-    const target_runs = active_mapper.find_target_runs_by_index(start_idx, length, rebuild_map);
+    const target_runs = active_mapper.find_target_runs_by_index(
+      start_idx,
+      length,
+      rebuild_map,
+    );
     if (target_runs.length === 0) return false;
 
+    let first_del: Element | null = null;
     let last_del: Element | null = null;
     for (const run of target_runs) {
-      const del_tag = this._create_track_change_tag('w:del', '', del_id);
+      const del_tag = this._create_track_change_tag("w:del", "", del_id);
       const new_run = run._element.cloneNode(true) as Element;
-      
-      const tNodes = Array.from(new_run.getElementsByTagName('w:t'));
-      tNodes.forEach(t => {
-        const delText = new_run.ownerDocument!.createElement('w:delText');
+
+      const tNodes = Array.from(new_run.getElementsByTagName("w:t"));
+      tNodes.forEach((t) => {
+        const delText = new_run.ownerDocument!.createElement("w:delText");
         delText.textContent = t.textContent;
-        if (t.hasAttribute('xml:space')) delText.setAttribute('xml:space', 'preserve');
+        if (t.hasAttribute("xml:space"))
+          delText.setAttribute("xml:space", "preserve");
         new_run.replaceChild(delText, t);
       });
 
       del_tag.appendChild(new_run);
       run._element.parentNode?.replaceChild(del_tag, run._element);
+      if (first_del === null) first_del = del_tag;
       last_del = del_tag;
     }
 
+    let ins_elem: Element | null = null;
+    let mod_last_p: Element | null = null;
+    let mod_last_ins: Element | null = null;
+
     if (op === "MODIFICATION" && edit.new_text && last_del) {
-      const xmlDoc = this.doc.part._element.ownerDocument!;
-      const ins = this._create_track_change_tag('w:ins', '', ins_id);
-      const segments = this._parse_inline_markdown(edit.new_text);
-      for (const [segText, segProps] of segments) {
-        const r = xmlDoc.createElement('w:r');
-        this._apply_run_props(r, segProps, false);
-        const t = xmlDoc.createElement('w:t');
-        this._set_text_content(t, segText);
-        r.appendChild(t);
-        ins.appendChild(r);
+      // Resolve a paragraph anchor: the <w:p> hosting last_del.
+      let mod_anchor_para_el: Element | null = last_del;
+      while (mod_anchor_para_el && mod_anchor_para_el.tagName !== "w:p") {
+        mod_anchor_para_el = mod_anchor_para_el.parentNode as Element | null;
       }
-      insertAfter(ins, last_del);
+      const mod_anchor_para: Paragraph | null = mod_anchor_para_el
+        ? new Paragraph(mod_anchor_para_el, null)
+        : null;
+
+      // The "anchor run" for style inheritance is the run we just deleted; reuse
+      // the deleted run's rPr by sourcing the original target run if available.
+      const style_source_run: Run | null =
+        target_runs.length > 0 ? target_runs[target_runs.length - 1] : null;
+
+      const result = this._track_insert_multiline(
+        edit.new_text,
+        style_source_run,
+        mod_anchor_para,
+        ins_id!,
+      );
+
+      if (result.first_node) {
+        const is_inline_first = result.first_node.tagName === "w:ins";
+        if (is_inline_first) {
+          // Inline: place the first <w:ins> immediately after last_del.
+          insertAfter(result.first_node, last_del);
+          ins_elem = result.first_node;
+        } else {
+          // Block-mode first paragraph was already inserted after the anchor
+          // paragraph by the helper. We still need ins_elem for comment fallback.
+          ins_elem = result.last_ins;
+        }
+        mod_last_p = result.last_p;
+        mod_last_ins = result.last_ins;
+      }
+    }
+
+    // Attach comment around the modification or deletion if requested.
+    if (edit.comment && first_del !== null) {
+      // Resolve the comment END anchor. For multi-paragraph modifications,
+      // the end anchor lives in the LAST inserted paragraph (mod_last_p);
+      // otherwise it's the inline ins/del in the source paragraph.
+      let end_anchor_el: Element;
+      let end_p: Element | null;
+
+      if (mod_last_p && mod_last_ins) {
+        end_anchor_el = mod_last_ins;
+        end_p = mod_last_p;
+      } else {
+        const final_anchor: Element = ins_elem !== null ? ins_elem : last_del!;
+        end_anchor_el = final_anchor;
+        end_p = final_anchor;
+        while (end_p && end_p.tagName !== "w:p")
+          end_p = end_p.parentNode as Element | null;
+      }
+
+      let start_p: Element | null = first_del;
+      while (start_p && start_p.tagName !== "w:p")
+        start_p = start_p.parentNode as Element | null;
+      if (!start_p || !end_p) return true;
+
+      const ascend_to_paragraph_child = (el: Element, p: Element): Element => {
+        let cur: Element = el;
+        while (cur.parentNode && cur.parentNode !== p) {
+          cur = cur.parentNode as Element;
+        }
+        return cur;
+      };
+      const start_anchor = ascend_to_paragraph_child(first_del, start_p);
+      const end_anchor = ascend_to_paragraph_child(end_anchor_el, end_p);
+
+      if (start_p === end_p) {
+        this._attach_comment(start_p, start_anchor, end_anchor, edit.comment);
+      } else {
+        this._attach_comment_spanning(
+          start_p,
+          start_anchor,
+          end_p,
+          end_anchor,
+          edit.comment,
+        );
+      }
     }
 
     return true;
