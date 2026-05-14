@@ -311,4 +311,31 @@ describe("Resolved Bugs Core Engine Verification", () => {
     expect(xml).not.toContain("w:commentRangeEnd");
     expect(xml).not.toContain("w:commentReference");
   });
+
+  it("BUG-DOM-1: Safely handles multi-paragraph replace with heading and comment without throwing DOM errors", async () => {
+    const doc = await createTestDocument();
+    addParagraph(doc, "This is the old text that will be replaced.");
+    const engine = new RedlineEngine(doc, "Reviewer");
+
+    // This specific combination caused a "child not in parent" DOM error in Node:
+    // 1. Modifying text
+    // 2. new_text has multiple paragraphs (\n\n)
+    // 3. new_text includes a markdown heading (##) which triggers block mode
+    // 4. A comment is attached
+    expect(() => {
+      engine.process_batch([
+        {
+          type: "modify",
+          target_text: "old text that will be replaced.",
+          new_text: "new introduction\n\n## Section 1\n\nNew paragraph content",
+          comment: "Restructuring this section",
+        },
+      ]);
+    }).not.toThrow();
+
+    const xml = doc.element.toString();
+    expect(xml).toContain("w:commentRangeStart");
+    expect(xml).toContain("w:commentRangeEnd");
+    expect(xml).toContain("Section 1");
+  });
 });

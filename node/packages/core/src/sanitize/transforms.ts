@@ -15,6 +15,93 @@ export function findDescendantsByLocalName(element: Element, localName: string):
   return result;
 }
 
+export function coalesce_runs(doc: DocumentObject): string[] {
+  let count = 0;
+
+  function areRunsIdentical(rPr1: Element | null, rPr2: Element | null): boolean {
+    const xml1 = rPr1 ? rPr1.toString() : '';
+    const xml2 = rPr2 ? rPr2.toString() : '';
+    return xml1 === xml2;
+  }
+
+  function hasSpecialContent(run: Element): boolean {
+    const safeTags = ['w:t', 'w:tab', 'w:br', 'w:cr', 'w:delText', 'w:rPr'];
+    for (let i = 0; i < run.childNodes.length; i++) {
+      const child = run.childNodes[i];
+      if (child.nodeType === 1) {
+        const tag = (child as Element).tagName;
+        if (!safeTags.includes(tag)) return true;
+      }
+    }
+    return false;
+  }
+
+  function coalesceContainer(container: Element) {
+    const children = Array.from(container.childNodes).filter(n => n.nodeType === 1) as Element[];
+    let i = 0;
+    while (i < children.length - 1) {
+      const curr = children[i];
+      const nxt = children[i + 1];
+
+      if (curr.tagName === 'w:r' && nxt.tagName === 'w:r') {
+        if (!hasSpecialContent(curr) && !hasSpecialContent(nxt)) {
+          const rPr1 = findChild(curr, 'w:rPr');
+          const rPr2 = findChild(nxt, 'w:rPr');
+          if (areRunsIdentical(rPr1, rPr2)) {
+            let last_t: Element | null = null;
+            for (let c = 0; c < curr.childNodes.length; c++) {
+              const child = curr.childNodes[c];
+              if (child.nodeType === 1 && ((child as Element).tagName === 'w:t' || (child as Element).tagName === 'w:delText')) {
+                last_t = child as Element;
+              }
+            }
+
+            const nxtChildren = Array.from(nxt.childNodes).filter(n => n.nodeType === 1) as Element[];
+            for (const child of nxtChildren) {
+              if (child.tagName === 'w:rPr') continue;
+              if ((child.tagName === 'w:t' || child.tagName === 'w:delText') && last_t && last_t.tagName === child.tagName) {
+                const t1 = last_t.textContent || '';
+                const t2 = child.textContent || '';
+                const combined = t1 + t2;
+                last_t.textContent = combined;
+                if (combined.trim() !== combined) {
+                  last_t.setAttribute('xml:space', 'preserve');
+                }
+              } else {
+                curr.appendChild(child);
+                if (child.tagName === 'w:t' || child.tagName === 'w:delText') {
+                  last_t = child;
+                }
+              }
+            }
+            container.removeChild(nxt);
+            children.splice(i + 1, 1);
+            count++;
+            continue; 
+          }
+        }
+      }
+
+      if (['w:ins', 'w:del', 'w:hyperlink', 'w:sdt', 'w:smartTag', 'w:fldSimple', 'w:sdtContent'].includes(curr.tagName)) {
+        coalesceContainer(curr);
+      }
+      i++;
+    }
+    
+    if (children.length > 0) {
+      const last = children[children.length - 1];
+      if (['w:ins', 'w:del', 'w:hyperlink', 'w:sdt', 'w:smartTag', 'w:fldSimple', 'w:sdtContent'].includes(last.tagName)) {
+        coalesceContainer(last);
+      }
+    }
+  }
+
+  const paragraphs = findAllDescendants(doc.element, 'w:p');
+  for (const p of paragraphs) coalesceContainer(p);
+
+  return count ? [`Adjacent identical runs coalesced: ${count}`] : [];
+}
+
 export function strip_rsid(doc: DocumentObject): string[] {
   let count = 0;
   const rsidAttrs = ['w:rsidR', 'w:rsidRPr', 'w:rsidRDefault', 'w:rsidP', 'w:rsidDel', 'w:rsidSect', 'w:rsidTr'];

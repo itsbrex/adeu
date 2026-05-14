@@ -1590,8 +1590,12 @@ export class RedlineEngine {
           while (start_p && start_p.tagName !== "w:p")
             start_p = start_p.parentNode as Element;
           if (start_p) {
+            let first_anchor_target = result.first_node;
+            if (result.first_node.tagName === "w:p") {
+              first_anchor_target = findAllDescendants(result.first_node, "w:ins")[0] || result.first_node;
+            }
             const start_anchor = ascend_to_paragraph_child(
-              result.first_node,
+              first_anchor_target,
               start_p,
             );
             const end_anchor = ascend_to_paragraph_child(
@@ -1605,18 +1609,22 @@ export class RedlineEngine {
               end_anchor,
               edit.comment,
             );
-          }
-        } else {
-          // Inline only: anchor around first_node in its host paragraph.
-          let host_p: Element | null = result.first_node;
-          while (host_p && host_p.tagName !== "w:p")
+            }
+          } else {
+            // Inline only: anchor around first_node in its host paragraph.
+            let host_p: Element | null = result.first_node;
+            while (host_p && host_p.tagName !== "w:p")
             host_p = host_p.parentNode as Element;
-          if (host_p) {
-            const anchor = ascend_to_paragraph_child(result.first_node, host_p);
+            if (host_p) {
+            let first_anchor_target = result.first_node;
+            if (result.first_node.tagName === "w:p") {
+              first_anchor_target = findAllDescendants(result.first_node, "w:ins")[0] || result.first_node;
+            }
+            const anchor = ascend_to_paragraph_child(first_anchor_target, host_p);
             this._attach_comment(host_p, anchor, anchor, edit.comment);
+            }
           }
         }
-      }
       return true;
     }
 

@@ -1,6 +1,7 @@
 import { DocumentObject } from '../docx/bridge.js';
 import { SanitizeReport } from './report.js';
 import * as transforms from './transforms.js';
+import { findAllDescendants } from '../docx/dom.js';
 
 export interface FinalizeOptions {
   filename: string;
@@ -61,6 +62,7 @@ export async function finalize_document(doc: DocumentObject, options: FinalizeOp
   report.add_transform_lines(transforms.strip_proof_errors(doc));
   report.add_transform_lines(transforms.strip_empty_properties(doc));
   report.add_transform_lines(transforms.strip_hidden_text(doc));
+  report.add_transform_lines(transforms.coalesce_runs(doc));
   report.add_transform_lines(transforms.scrub_doc_properties(doc));
   report.add_transform_lines(transforms.scrub_timestamps(doc));
   report.add_transform_lines(transforms.strip_custom_xml(doc));
@@ -95,6 +97,30 @@ export async function finalize_document(doc: DocumentObject, options: FinalizeOp
 
   if (options.export_pdf) {
     report.warnings.push("PDF export requires the Python/Word COM environment and is skipped in this zero-dependency Node agent.");
+  }
+
+  // Clean up leaked Microsoft namespaces
+  for (const part of doc.pkg.parts) {
+    // Match the exact injection condition from RedlineEngine constructor
+    if (part === doc.part || (part.contentType.includes('wordprocessingml') && part.contentType.endsWith('+xml'))) {
+      if (part._element.hasAttribute('xmlns:w16du')) {
+        let hasW16du = false;
+        // Check root element attributes (excluding the xmlns declaration itself)
+        if (Array.from(part._element.attributes || []).some(a => a.name.startsWith('w16du:') && a.name !== 'xmlns:w16du')) {
+          hasW16du = true;
+        }
+        if (!hasW16du) {
+          const allNodes = findAllDescendants(part._element, '*');
+          for (const n of allNodes) {
+            if (n.tagName.startsWith('w16du:') || Array.from(n.attributes || []).some(a => a.name.startsWith('w16du:'))) {
+              hasW16du = true;
+              break;
+            }
+          }
+        }
+        if (!hasW16du) part._element.removeAttribute('xmlns:w16du');
+      }
+    }
   }
 
   if (report.warnings.length > 0) report.status = 'clean_with_warnings';

@@ -189,4 +189,49 @@ describe('Finalize Document (Core)', () => {
     expect(res.reportText).toContain('unresolved tracked changes');
   });
 
+  describe('Resolved Bugs Sanitize Parity Verification', () => {
+    
+    it('BUG-FRAG-1: Coalesces adjacent identical runs after accepting tracked changes', async () => {
+      const doc = createMockDoc(`
+        <w:p>
+          <w:r><w:t xml:space="preserve">The term shall be </w:t></w:r>
+          <w:ins w:id="1"><w:r><w:t>five (5)</w:t></w:r></w:ins>
+          <w:r><w:t xml:space="preserve"> years from the Effective Date.</w:t></w:r>
+        </w:p>
+      `);
+      
+      doc.save = vi.fn().mockResolvedValue(Buffer.from('mock'));
+      
+      await finalize_document(doc, {
+        filename: 'test.docx',
+        sanitize_mode: 'full',
+        accept_all: true
+      });
+
+      const xml = doc.element.toString();
+      // We should see a single coalesced string rather than fragmented <w:t> nodes
+      expect(xml).toContain('The term shall be five (5) years from the Effective Date.');
+
+      const runs = doc.element.getElementsByTagName('w:r');
+      // If they are coalesced properly, there will be exactly 1 run instead of 3
+      expect(runs.length).toBe(1);
+    });
+
+    it('BUG-NS-1: Strips unused xmlns:w16du namespace declarations during finalization', async () => {
+      const doc = createMockDoc('<w:p/>');
+      // Manually inject the namespace onto the absolute root as the engine does
+      doc.part._element.setAttribute('xmlns:w16du', 'http://schemas.microsoft.com/office/word/2023/wordml/word16du');
+      
+      doc.save = vi.fn().mockResolvedValue(Buffer.from('mock'));
+
+      await finalize_document(doc, {
+        filename: 'test.docx',
+        sanitize_mode: 'full'
+      });
+
+      // The final stringified XML of the root document should NOT contain the unused namespace
+      const xml = doc.part._element.toString();
+      expect(xml).not.toContain('xmlns:w16du');
+    });
+  });
 });
