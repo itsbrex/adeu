@@ -9,7 +9,7 @@
 [![CI](https://github.com/dealfluence/adeu/actions/workflows/ci.yml/badge.svg)](https://github.com/dealfluence/adeu/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-**LLMs speak Markdown; Lawyers speak "Track Changes."**
+**LLMs speak Markdown; reviewers speak "Track Changes."**
 
 Adeu is a **docx ↔ LLM translator**: a Model Context Protocol (MCP) server (Python and Node.js implementations) and accompanying SDKs that act as a **Virtual DOM for Microsoft Word**. It provides a two-way abstraction layer that lets AI agents freely edit document text without destroying the underlying formatting or complex DOCX XML.
 
