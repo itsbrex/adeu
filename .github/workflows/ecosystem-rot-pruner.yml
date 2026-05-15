@@ -1,0 +1,67 @@
+name: Ecosystem Rot Pruner
+
+on:
+  schedule:
+    # Run automatically every day at midnight UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch: # Allow manual triggering for administrative audits
+
+permissions:
+  issues: write
+
+jobs:
+  prune-stale-integrations:
+    name: Enforce 14-Day Vendor SLA
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for expired Vendor SLAs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // SLA defined by VENDOR_POLICY.md
+            const SLA_DAYS = 14; 
+            const dateThreshold = new Date();
+            dateThreshold.setDate(dateThreshold.getDate() - SLA_DAYS);
+
+            console.log(`Checking for vendor issues un-updated since: ${dateThreshold.toISOString()}`);
+
+            // Fetch all open issues with the 'vendor-action-required' label
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'vendor-action-required',
+              state: 'open'
+            });
+
+            if (issues.data.length === 0) {
+              console.log("No pending vendor issues found.");
+              return;
+            }
+
+            for (const issue of issues.data) {
+              const updatedDate = new Date(issue.updated_at);
+              
+              if (updatedDate < dateThreshold) {
+                console.log(`Issue #${issue.number} has exceeded the 14-day SLA. Pruning.`);
+                
+                const warningMessage = `🚨 **Automated Rot Policy Enforced** 🚨\n\nThis issue has exceeded the 14-day Vendor Support SLA outlined in our \`VENDOR_POLICY.md\` without resolution.\n\nTo protect the core Adeu repository from integration rot and dependency vulnerabilities, this ecosystem component is now scheduled for deprecation and removal. \n\nClosing this issue and applying the \`ecosystem-pruned\` label.`;
+                
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: warningMessage
+                });
+
+                // Close the issue and tag it for the maintainers to delete the folder
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  state: 'closed',
+                  labels: [...issue.labels.map(l => l.name), 'ecosystem-pruned']
+                });
+              } else {
+                console.log(`Issue #${issue.number} is still within the SLA window (Last updated: ${updatedDate.toISOString()}).`);
+              }
+            }
