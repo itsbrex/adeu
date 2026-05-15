@@ -11,7 +11,7 @@
 
 **LLMs speak Markdown; Lawyers speak "Track Changes."**
 
-Adeu is a Model Context Protocol (MCP) server and Python SDK that acts as a **"Virtual DOM" for Microsoft Word**. It provides a two-way abstraction layer that lets AI agents freely edit document text without destroying the underlying formatting or complex DOCX XML.
+Adeu is a **docx ↔ LLM translator**: a Model Context Protocol (MCP) server (Python and Node.js implementations) and accompanying SDKs that act as a **Virtual DOM for Microsoft Word**. It provides a two-way abstraction layer that lets AI agents freely edit document text without destroying the underlying formatting or complex DOCX XML.
 
 While standard libraries like `python-docx` excel at generating documents from scratch, they fail at non-destructive redlining. Adeu solves this by translating `.docx` files into a token-efficient Markdown representation. This frees AI agents to focus entirely on document semantics instead of wasting tokens wrestling with OpenXML.
 
@@ -21,7 +21,7 @@ Adeu acts as an **intelligent proxy**, processing AI edits as safe, atomic trans
 2. **Validate:** Acts as a strict safety gate. It protects the document's integrity by automatically blocking ambiguous text matches or invalid structural changes before they touch the file.
 3. **Commit:** Translates the AI's text edits into native Word Track Changes. Adeu handles the complex XML under the hood, ensuring existing layouts, fonts, and margin comments are perfectly preserved.
 
-Maintained by [Adeu](https://adeu.ai).
+Built and maintained by the team at [Adeu](https://adeu.ai).
 
 ---
 
