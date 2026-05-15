@@ -209,6 +209,19 @@ Existing metadata scrubbers break redlines or silently strip data. Adeu's `sanit
 
 ---
 
+## Ecosystem & Integrations
+
+Adeu is designed as a core infrastructure primitive—an un-opinionated Virtual DOM for DOCX. Because we keep the core strictly focused on OpenXML safety, we maintain a dedicated [`ecosystem/`](ecosystem/) directory for third-party integrations.
+
+In the ecosystem folder, you will find advanced workflows, wrappers, and tools built by the community and LegalTech vendors, including:
+- Legal validation and case-law routing before applying edits.
+- Contract Lifecycle Management (CLM) sync scripts.
+- Specialized multi-agent architectures (LangChain, AutoGen, etc.).
+
+**Are you a vendor or builder?** We welcome PRs to the ecosystem folder! Please see our [Vendor & Integration Policy](ecosystem/VENDOR_POLICY.md) to get started.
+
+---
+
 ## Adeu Cloud
 
 By default, the core Adeu redlining engine and local file tools are fully open-source and execute entirely on your machine. **Adeu never phones home with your local documents** (though your chosen LLM provider will naturally process the text the agent reads).
