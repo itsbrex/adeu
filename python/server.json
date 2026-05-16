@@ -11,7 +11,7 @@
     {
       "registryType": "npm",
       "identifier": "@adeu/mcp-server",
-      "version": "1.6.9",
+      "version": "1.7.1",
       "transport": {
         "type": "stdio"
       }
