@@ -6,7 +6,7 @@
     "url": "https://github.com/dealfluence/adeu",
     "source": "github"
   },
-  "version": "1.6.9",
+  "version": "1.7.0",
   "packages": [
     {
       "registryType": "npm",
