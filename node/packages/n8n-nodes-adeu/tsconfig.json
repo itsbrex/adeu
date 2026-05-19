@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"],
+    "ignoreDeprecations": "6.0",
+    "rootDir": "./nodes",
+    "outDir": "./dist/nodes",
+    "declaration": true,
+    "sourceMap": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true
+  },
+  "include": ["nodes/**/*"],
+  "exclude": ["node_modules", "dist", "test", "**/*.test.ts"]
+}

@@ -1,0 +1,61 @@
+{
+  "name": "n8n-nodes-adeu",
+  "version": "1.0.0",
+  "description": "n8n community node for Adeu — apply AI-driven tracked changes, generate diffs, and sanitize Microsoft Word (.docx) documents.",
+  "keywords": [
+    "n8n-community-node-package",
+    "n8n",
+    "adeu",
+    "docx",
+    "word",
+    "redline",
+    "track-changes",
+    "diff",
+    "openxml"
+  ],
+  "license": "MIT",
+  "homepage": "https://adeu.ai",
+  "author": {
+    "name": "Mikko Korpela",
+    "email": "mikko@adeu.ai"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dealfluence/adeu.git",
+    "directory": "node/packages/n8n-nodes-adeu"
+  },
+  "main": "dist/nodes/Adeu/Adeu.node.js",
+  "scripts": {
+    "build": "tsc && npm run copy-assets",
+    "copy-assets": "copyfiles -u 1 \"nodes/**/*.svg\" \"nodes/**/*.json\" dist/nodes/",
+    "dev": "tsc --watch",
+    "lint": "eslint nodes/**/*.ts package.json",
+    "lintfix": "eslint nodes/**/*.ts package.json --fix",
+    "test": "vitest run"
+  },
+  "files": [
+    "dist"
+  ],
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "nodes": [
+      "dist/nodes/Adeu/Adeu.node.js"
+    ]
+  },
+  "dependencies": {
+    "@adeu/core": "^1.7.1"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  },
+  "devDependencies": {
+    "@n8n/eslint-plugin-community-nodes": "^0.15.0",
+    "@types/node": "^25.6.2",
+    "@typescript-eslint/parser": "^8.35.0",
+    "copyfiles": "^2.4.1",
+    "eslint": "^9.0.0",
+    "n8n-workflow": "^1.0.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
+  }
+}
