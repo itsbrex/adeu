@@ -22,7 +22,20 @@ export class Adeu implements INodeType {
     version: 1,
     subtitle: '={{$parameter["operation"]}}',
     description:
-      "Apply AI-driven tracked changes, extract Markdown, generate diffs, and sanitize Microsoft Word (.docx) documents.",
+      "Operate on Microsoft Word (.docx) files: extract LLM-friendly Markdown with CriticMarkup, apply tracked changes and comments, generate sub-word diffs, and sanitize/finalize documents. " +
+      "Four operations on the Document resource: " +
+      "(1) Extract Markdown — project a .docx into Markdown plus a Semantic Appendix (defined terms, cross-references, typos); toggle Clean View to simulate Accept All. " +
+      "(2) Apply Edits — apply a JSON array of DocumentChange objects as native Word tracked changes; the entire batch is pre-validated atomically and rejected if any single edit is invalid. " +
+      "(3) Generate Diff — produce a @@ Word Patch @@ sub-word level diff between two .docx files. " +
+      "(4) Finalize Document — strip metadata, optionally accept all pending markup, and optionally lock the file read-only. " +
+      "DocumentChange schema (used by Apply Edits): each object has a 'type' field discriminator. " +
+      "type='modify' requires target_text (string, copied EXACTLY from the source including punctuation, spacing, and case) and new_text (string); optional 'comment' attaches a comment bubble. " +
+      "type='accept' or type='reject' requires target_id (string like 'Chg:12' from the Markdown projection); optional 'comment'. " +
+      "type='reply' requires target_id (string like 'Com:45') and text (string). " +
+      "type='insert_row' requires target_text (string), position ('above' or 'below'), and cells (array of strings). " +
+      "type='delete_row' requires target_text (string). " +
+      "Never wrap new_text in CriticMarkup tags like {++ ++} or {-- --}; the engine applies tracking automatically. " +
+      "Never target text already wrapped in another author's pending tracked change; accept or reject their change first by target_id.",
     defaults: {
       name: "Adeu",
     },

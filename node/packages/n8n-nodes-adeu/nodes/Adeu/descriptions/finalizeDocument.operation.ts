@@ -20,7 +20,7 @@ export const finalizeDocumentDescription: INodeProperties[] = [
     required: true,
     placeholder: "e.g. data",
     description:
-      "Name of the binary property on the incoming item that holds the .docx file",
+      "Name of the binary property on the incoming item that holds the .docx file (string, e.g. 'data'). The file must be a valid .docx.",
     displayOptions: {
       show: {
         resource: ["document"],
@@ -36,7 +36,7 @@ export const finalizeDocumentDescription: INodeProperties[] = [
     required: true,
     placeholder: "e.g. data",
     description:
-      "Name of the binary property on the outgoing item that will hold the finalized .docx file",
+      "Name of the binary property on the outgoing item that will hold the finalized .docx file (string, e.g. 'data'). If equal to the input property name, the original binary is overwritten on the outgoing item.",
     displayOptions: {
       show: {
         resource: ["document"],
@@ -49,24 +49,26 @@ export const finalizeDocumentDescription: INodeProperties[] = [
     name: "sanitizeMode",
     type: "options",
     default: "full",
+    description:
+      "How aggressively to sanitize the document before distribution. One of: 'baseline' (minimal metadata cleanup only), 'full' (strip metadata AND require all tracked changes resolved or auto-accepted), 'keep-markup' (strip metadata but preserve visible tracked changes and comments, optionally with author rewrite).",
     options: [
       {
         name: "Baseline",
         value: "baseline",
         description:
-          "Minimal sanitization (strip rsid, paraIds, proof errors only)",
+          "Minimal sanitization: strip RSID attributes, paragraph IDs, and proof errors only. Leaves tracked changes, comments, authors, and other metadata untouched.",
       },
       {
         name: "Full",
         value: "full",
         description:
-          "Strip metadata and require all tracked changes/comments to be resolved or auto-accepted",
+          "Strip metadata (authors, RSIDs, paragraph IDs, proof errors) and require all tracked changes and comments to be resolved. If pending tracked changes exist and 'Accept All Tracked Changes' is false, the operation is blocked and an error is thrown.",
       },
       {
         name: "Keep Markup",
         value: "keep-markup",
         description:
-          "Strip metadata but preserve visible tracked changes and comments",
+          "Strip metadata but preserve all visible tracked changes and comments. Use 'Author Override' to rewrite the author name on every preserved redline and comment (e.g. replace 'AI Reviewer' with your firm name).",
       },
     ],
     displayOptions: {
@@ -82,7 +84,7 @@ export const finalizeDocumentDescription: INodeProperties[] = [
     type: "boolean",
     default: false,
     description:
-      "Whether to auto-accept all pending tracked changes during Full sanitization. If false and tracked changes exist, the operation is blocked.",
+      "Boolean. Only applies when Sanitize Mode is 'full'. When true, auto-accepts all pending tracked changes before sanitization. When false (default), the operation throws an error if any pending tracked changes exist, forcing the caller to resolve them first. If multiple distinct authors are detected in pending changes, a warning is included in the report to alert you of potential silent smuggles.",
     displayOptions: {
       show: {
         resource: ["document"],
@@ -98,7 +100,7 @@ export const finalizeDocumentDescription: INodeProperties[] = [
     default: "",
     placeholder: "e.g. My Firm",
     description:
-      "When using Keep Markup, replace all visible authors on tracked changes and comments with this name. Leave empty to keep original authors.",
+      "Only applies when Sanitize Mode is 'keep-markup'. Optional string. When set, replaces the author name on every preserved tracked change and comment with this value (e.g. 'My Law Firm'). Leave empty to keep original authors intact.",
     displayOptions: {
       show: {
         resource: ["document"],
@@ -113,7 +115,7 @@ export const finalizeDocumentDescription: INodeProperties[] = [
     type: "options",
     default: "none",
     description:
-      "Optionally lock the finalized document. Encryption (AES) is not supported in this engine — falls back to read-only.",
+      "Optionally lock the finalized document. 'none' (default) leaves the document unlocked. 'read_only' injects a native Word read-only enforcement flag into settings.xml — Word users see a read-only banner and cannot edit without explicitly unlocking. AES encryption is not supported in this engine.",
     options: [
       { name: "None", value: "none" },
       { name: "Read Only", value: "read_only" },

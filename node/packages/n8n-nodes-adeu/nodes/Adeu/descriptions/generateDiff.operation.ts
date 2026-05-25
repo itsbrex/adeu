@@ -16,7 +16,7 @@ export const generateDiffDescription: INodeProperties[] = [
     required: true,
     placeholder: "e.g. data",
     description:
-      "Name of the binary property on the incoming item that holds the original .docx file",
+      "Name of the binary property on the incoming item holding the original (baseline) .docx file (string, e.g. 'data'). Both files must be on the same input item.",
     displayOptions: {
       show: {
         resource: ["document"],
@@ -32,7 +32,7 @@ export const generateDiffDescription: INodeProperties[] = [
     required: true,
     placeholder: "e.g. data2",
     description:
-      "Name of the binary property on the incoming item that holds the modified .docx file",
+      "Name of the binary property on the incoming item holding the modified (compared-to) .docx file (string, e.g. 'data2'). Must be different from the original binary property name.",
     displayOptions: {
       show: {
         resource: ["document"],
@@ -46,7 +46,7 @@ export const generateDiffDescription: INodeProperties[] = [
     type: "boolean",
     default: true,
     description:
-      'Whether to compare the "Accept All" clean view of both documents (recommended). Disable to diff raw CriticMarkup-projected text.',
+      "Boolean. When true (default, recommended), compares the Accept All clean view of both documents — diffs reflect the final content as if all tracked changes were accepted. When false, diffs the raw CriticMarkup-projected text including pending change markers — useful for auditing tracked-change differences themselves.",
     displayOptions: {
       show: {
         resource: ["document"],

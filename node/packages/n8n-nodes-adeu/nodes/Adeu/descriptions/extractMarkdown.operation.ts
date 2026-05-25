@@ -16,7 +16,7 @@ export const extractMarkdownDescription: INodeProperties[] = [
     required: true,
     placeholder: "e.g. data",
     description:
-      "Name of the binary property on the incoming item that holds the .docx file",
+      "Name of the binary property on the incoming item that holds the .docx file. Must reference an existing binary attachment (string, e.g. 'data'). The file must be a valid .docx (not .doc, .pdf, or another format).",
     displayOptions: {
       show: {
         resource: ["document"],
@@ -30,7 +30,7 @@ export const extractMarkdownDescription: INodeProperties[] = [
     type: "boolean",
     default: false,
     description:
-      'Whether to project the document as if all tracked changes were accepted (simulates the "Accept All" state)',
+      "Boolean. When true, projects the document as if all pending tracked changes were accepted (simulates Accept All). When false (default), all tracked changes are surfaced inline as CriticMarkup ({++ins++}, {--del--}, {>>comment<<}) so an AI can review and resolve them. Use false to review counterparty edits; use true to generate net-new redlines against a clean baseline.",
     displayOptions: {
       show: {
         resource: ["document"],

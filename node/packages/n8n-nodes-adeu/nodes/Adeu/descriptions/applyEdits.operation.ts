@@ -28,7 +28,7 @@ export const applyEditsDescription: INodeProperties[] = [
     required: true,
     placeholder: "e.g. data",
     description:
-      "Name of the binary property on the incoming item that holds the .docx file",
+      "Name of the binary property on the incoming item that holds the .docx file (string, e.g. 'data'). The file must be a valid .docx.",
     displayOptions: {
       show: {
         resource: ["document"],
@@ -44,7 +44,7 @@ export const applyEditsDescription: INodeProperties[] = [
     required: true,
     placeholder: "e.g. data",
     description:
-      "Name of the binary property on the outgoing item that will hold the redlined .docx file",
+      "Name of the binary property on the outgoing item that will hold the redlined .docx file (string, e.g. 'data'). If equal to the input property name, the original binary is overwritten on the outgoing item.",
     displayOptions: {
       show: {
         resource: ["document"],
@@ -59,7 +59,7 @@ export const applyEditsDescription: INodeProperties[] = [
     default: "Adeu AI",
     placeholder: "e.g. AI Reviewer",
     description:
-      "Author name attached to all tracked changes and comments produced by this operation",
+      "Author name attached to all tracked changes and comments produced by this operation (string, e.g. 'AI Reviewer'). Shows up in Word's review pane as the author of every redline and comment created in this batch.",
     displayOptions: {
       show: {
         resource: ["document"],
@@ -73,7 +73,8 @@ export const applyEditsDescription: INodeProperties[] = [
     type: "options",
     noDataExpression: true,
     default: "fromInputJson",
-    description: "Where to read the list of changes from",
+    description:
+      "Where to read the list of DocumentChange objects from. Use 'From Input JSON' to read an array from an upstream node (typical for AI Agent workflows). Use 'Define Below' to paste a literal JSON array directly in this node.",
     options: [
       {
         name: "Define Below",
@@ -101,7 +102,7 @@ export const applyEditsDescription: INodeProperties[] = [
     required: true,
     placeholder: "e.g. data.changes",
     description:
-      "Property path (dot-notation supported) on the input item JSON whose value is the array of DocumentChange objects",
+      "Property path on the input item JSON whose value is the array of DocumentChange objects (string, dot-notation supported, e.g. 'changes' or 'data.changes'). Must resolve to an array; throws an error otherwise.",
     displayOptions: {
       show: {
         resource: ["document"],
@@ -113,18 +114,21 @@ export const applyEditsDescription: INodeProperties[] = [
   {
     displayName: "Changes (JSON)",
     name: "editsJson",
-    type: "json",
+    type: "string",
     default:
       '[\n  {\n    "type": "modify",\n    "target_text": "State of New York",\n    "new_text": "State of Delaware",\n    "comment": "Standardizing governing law."\n  }\n]',
     required: true,
     description:
-      "Array of DocumentChange objects. Valid object schemas:\n" +
-      "- type: 'modify' | Required: 'target_text' (string, copy exactly from source), 'new_text' (string) | Optional: 'comment'\n" +
-      "- type: 'accept' | Required: 'target_id' (string, e.g. 'Chg:12') | Optional: 'comment'\n" +
-      "- type: 'reject' | Required: 'target_id' (string, e.g. 'Chg:12') | Optional: 'comment'\n" +
-      "- type: 'reply' | Required: 'target_id' (string, e.g. 'Com:45'), 'text' (string)\n" +
-      "- type: 'insert_row' | Required: 'target_text' (string), 'position' ('above' | 'below'), 'cells' (array of strings)\n" +
-      "- type: 'delete_row' | Required: 'target_text' (string)",
+      "JSON-encoded string containing an array of DocumentChange objects. Each object has a 'type' field discriminator and type-specific fields. " +
+      "type='modify': requires target_text (string, copied EXACTLY from the source including punctuation, spacing, and case) and new_text (string); optional comment (string). Never include CriticMarkup tags like {++ ++} or {-- --} in new_text — the engine applies tracking automatically. Never target text already inside another author's pending tracked change. " +
+      "type='accept': requires target_id (string like 'Chg:12' from the Markdown projection); optional comment. " +
+      "type='reject': requires target_id (string like 'Chg:12'); optional comment. " +
+      "type='reply': requires target_id (string like 'Com:45') and text (string). " +
+      "type='insert_row': requires target_text (string anchoring a table cell), position ('above' or 'below'), and cells (array of strings, one per column). " +
+      "type='delete_row': requires target_text (string anchoring the row to delete). " +
+      "The whole batch is validated atomically: if any single edit fails (target text not found, ambiguous match, read-only target, overlapping another author's change), the entire batch is rejected and the document is left untouched. " +
+      'Example: \'[{"type":"modify","target_text":"within thirty (30) days","new_text":"within forty-five (45) days","comment":"Per playbook."}]\'. ' +
+      "Markdown code fences (```json ... ```) wrapping the value are stripped automatically.",
     typeOptions: {
       rows: 10,
     },
@@ -142,7 +146,7 @@ export const applyEditsDescription: INodeProperties[] = [
     type: "boolean",
     default: true,
     description:
-      "Whether to auto-extract the updated document text as Markdown and include it in the JSON output. Useful for downstream AI context.",
+      "Boolean. When true (default), auto-extracts the post-edit document as Markdown (with CriticMarkup) and includes it in the outgoing JSON under the 'markdown' field. Useful for feeding the updated state back into a downstream AI Agent for review or further edits. Adds extraction overhead per call.",
     displayOptions: {
       show: {
         resource: ["document"],
