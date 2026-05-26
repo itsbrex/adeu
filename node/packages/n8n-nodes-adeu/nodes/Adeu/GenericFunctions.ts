@@ -66,6 +66,7 @@ export type BinarySource =
       mode: "fromNode";
       sourceNodeName: string;
       binaryPropertyName: string;
+      sourceBinaryId?: string;
     };
 
 /**
@@ -84,6 +85,30 @@ export async function getDocxBufferFromSource(
 
   // --- fromNode branch ---
   const { sourceNodeName, binaryPropertyName } = source;
+  const sourceBinaryId =
+    "sourceBinaryId" in source ? source.sourceBinaryId : undefined;
+
+  // If a Source Binary ID is explicitly provided (such as in consecutive tool calls),
+  // skip evaluation of upstream node names and pull directly from binary storage.
+  if (sourceBinaryId && sourceBinaryId.trim() !== "") {
+    try {
+      const stream = await this.helpers.getBinaryStream(sourceBinaryId);
+      const buffer = await this.helpers.binaryToBuffer(stream);
+      return { buffer, fileName: "document.docx" };
+    } catch (err) {
+      throw new NodeApiError(
+        this.getNode(),
+        { message: (err as Error).message } as JsonObject,
+        {
+          message: `Failed to load document from Binary ID '${sourceBinaryId}'.`,
+          description:
+            `The binary with ID '${sourceBinaryId}' could not be loaded. ` +
+            "This usually means the binary has expired, been garbage-collected, or the ID is incorrect.",
+          itemIndex,
+        },
+      );
+    }
+  }
 
   // Pre-validate: empty source node name is the #1 expected mistake for AI Agents
   // that haven't been told to set the source node correctly.

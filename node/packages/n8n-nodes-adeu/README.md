@@ -80,6 +80,11 @@ Prepares a document for signature or external distribution.
   - `Baseline`: Only strips background noise (RSIDs, proof errors) without touching metadata.
 - **Protection**: Can inject a native Word "Read-Only" lock into the document settings.
 
+### 5. Hydrate Tool Output (The "Hydration" Note)
+Because n8n's AI Agent tool wrapper intercepts and **strips all binary data** from tool outputs, files generated inside an AI loop cannot reach downstream nodes directly. 
+- **What it does**: This operation is placed immediately downstream of the AI Agent on the main workflow execution line. It reads the stashed metadata pointer left by the last execution of `apply_edits`, retrieves the raw file stream directly from n8n's secure binary storage, and attaches a fresh binary buffer onto the outgoing item.
+- **Output Path Construction**: It supports an optional output path template (e.g., `C:\path\to\folder\{baseName}_{timestamp}.docx`) to resolve path strings inside TypeScript. This avoids expression-parsing and escape issues when configuring downstream Write File nodes on Windows.
+
 ---
 
 ## 🧠 The `DocumentChange` Schema
@@ -111,6 +116,17 @@ To use the **Apply Edits** operation, your LLM must output a JSON array of objec
   }
 ]
 ```
+
+---
+
+## 🔄 Handling Cumulative & Multi-Turn Edits (The Binary ID Pattern)
+
+When an AI Agent applies edits, receives feedback, and needs to make *another* round of changes, loading from the original node name (e.g., `'Read Binary File'`) would discard the modifications just made. To allow the model to chain consecutive edits seamlessly, the node utilizes an **explicit state pointer pipeline**:
+
+1. **First Tool Call**: The LLM loads from the baseline. It sets `Source_Node_Name` to the canvas node (e.g., `'Read Binary File'`) and leaves `Source_Binary_Id` blank.
+2. **Intermediate Output**: The `apply_edits` tool applies changes and returns a unique `redlinedBinaryId` (representing the immutable state of that edit) back in the JSON payload to the LLM.
+3. **Subsequent Tool Calls**: If the LLM needs to make further changes on top of its prior work, it must set `Source_Binary_Id` to the ID string returned by the previous call. The node's backend dynamically detects this ID, bypasses the upstream node name, and pulls the intermediate document directly from storage to apply the new changes cumulatively.
+4. **Handoff**: On every successful execution, the node overwrites a global static pointer (`adeu_last_redlined`) with the newest ID. When the AI Agent finishes its entire chat turn, the downstream `Hydrate Tool Output` node reads this pointer to output the final, fully-cumulative document.
 
 ---
 
@@ -177,7 +193,12 @@ AI Agents cannot pass binary `.docx` data through JSON arguments anyway — that
 
 **Source Node Name** (when `Document Source` is `From Another Node`):
 ```
-={{ $fromAI('Source_Node_Name', `Exact name of the workflow node that produced the .docx binary (string, case-sensitive, e.g. 'Read Binary File' or 'Gmail Trigger'). Must match the node label in the canvas exactly. If your system prompt specifies which node holds the document, always use that name.`, 'string') }}
+={{ $fromAI('Source_Node_Name', `Exact name of the workflow node that produced the .docx binary (string, case-sensitive, e.g. 'Read Binary File' or 'Gmail Trigger'). Must match the node label in the canvas exactly. If your system prompt specifies which node holds the document, always use that name.`, 'string', 'Read Binary File') }}
+```
+
+**Source Binary ID** (when `Document Source` is `From Another Node`):
+```
+={{ $fromAI('Source_Binary_Id', `Optional string. If you are inspecting a document that you have already modified during this conversation, pass the 'redlinedBinaryId' from the previous tool output here to view the updated draft. Leave empty on the first call to load from the baseline node name.`, 'string', '') }}
 ```
 
 **Clean View:**
@@ -191,7 +212,12 @@ AI Agents cannot pass binary `.docx` data through JSON arguments anyway — that
 
 **Source Node Name** (when `Document Source` is `From Another Node`):
 ```
-={{ $fromAI('Source_Node_Name', `Exact name of the workflow node that produced the .docx binary (string, case-sensitive). Must match the node label in the canvas exactly. If your system prompt specifies which node holds the document, always use that name.`, 'string') }}
+={{ $fromAI('Source_Node_Name', `Exact name of the workflow node that produced the .docx binary (string, case-sensitive). Must match the node label in the canvas exactly. If your system prompt specifies which node holds the document, always use that name.`, 'string', 'Read Binary File') }}
+```
+
+**Source Binary ID** (when `Document Source` is `From Another Node`):
+```
+={{ $fromAI('Source_Binary_Id', `Optional string. If you are doing consecutive edits on the same document during this conversation, pass the 'redlinedBinaryId' from the previous tool output here to continue editing the updated draft. Leave blank on your first tool call.`, 'string', '') }}
 ```
 
 ```
@@ -237,10 +263,13 @@ AI Agents cannot pass binary `.docx` data through JSON arguments anyway — that
 
 **Source Node Name** (when `Document Source` is `From Another Node`):
 ```
-={{ $fromAI('Source_Node_Name', `Exact name of the workflow node that produced the .docx binary (string, case-sensitive). Must match the node label exactly.`, 'string') }}
+={{ $fromAI('Source_Node_Name', `Exact name of the workflow node that produced the .docx binary (string, case-sensitive). Must match the node label exactly.`, 'string', 'Read Binary File') }}
 ```
 
-
+**Source Binary ID** (when `Document Source` is `From Another Node`):
+```
+={{ $fromAI('Source_Binary_Id', `Optional string. If you are finalizing a document that has been consecutively edited during this loop, pass the 'redlinedBinaryId' from your last tool execution here. Leave blank to sanitize the original baseline file.`, 'string', '') }}
+```
 
 **Sanitize Mode:**
 ```

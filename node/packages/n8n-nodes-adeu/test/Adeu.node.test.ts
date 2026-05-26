@@ -371,6 +371,70 @@ describe("Test Adeu n8n Node", () => {
         /Source Node Name is required/i,
       );
     });
+
+    it("should resolve binary directly from sourceBinaryId when provided, bypassing expression evaluation", async () => {
+      (
+        mockExecuteFunctions.getNodeParameter as ReturnType<typeof vi.fn>
+      ).mockImplementation((paramName: string, _itemIndex, fallback?) => {
+        if (paramName === "resource") return "document";
+        if (paramName === "operation") return "extractMarkdown";
+        if (paramName === "binaryPropertyName") return "data";
+        if (paramName === "cleanView") return false;
+        if (paramName === "documentSource") return "fromNode";
+        if (paramName === "sourceNodeName") return "Trigger";
+        if (paramName === "sourceBinaryId")
+          return "filesystem-v2:test-stash-id";
+        return fallback;
+      });
+
+      (
+        mockExecuteFunctions.helpers.getBinaryStream as ReturnType<typeof vi.fn>
+      ).mockResolvedValue("test-stream");
+      (
+        mockExecuteFunctions.helpers.binaryToBuffer as ReturnType<typeof vi.fn>
+      ).mockResolvedValue(goldenBuffer);
+
+      const result = await node.execute.call(mockExecuteFunctions);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toHaveLength(1);
+      expect(result[0][0].json).toHaveProperty("fileName", "document.docx");
+      expect(result[0][0].json).toHaveProperty("markdown");
+      expect(typeof result[0][0].json.markdown).toBe("string");
+
+      // Verify that evaluateExpression was NEVER called to parse a sibling node,
+      // confirming the direct storage bypass is working.
+      expect(mockExecuteFunctions.evaluateExpression).not.toHaveBeenCalledWith(
+        expect.stringContaining(".binary."),
+        expect.any(Number),
+      );
+      expect(mockExecuteFunctions.helpers.getBinaryStream).toHaveBeenCalledWith(
+        "filesystem-v2:test-stash-id",
+      );
+    });
+
+    it("should throw a clear NodeApiError when loading binary content from sourceBinaryId fails", async () => {
+      (
+        mockExecuteFunctions.getNodeParameter as ReturnType<typeof vi.fn>
+      ).mockImplementation((paramName: string, _itemIndex, fallback?) => {
+        if (paramName === "resource") return "document";
+        if (paramName === "operation") return "extractMarkdown";
+        if (paramName === "binaryPropertyName") return "data";
+        if (paramName === "cleanView") return false;
+        if (paramName === "documentSource") return "fromNode";
+        if (paramName === "sourceNodeName") return "Trigger";
+        if (paramName === "sourceBinaryId") return "filesystem-v2:corrupted-id";
+        return fallback;
+      });
+
+      (
+        mockExecuteFunctions.helpers.getBinaryStream as ReturnType<typeof vi.fn>
+      ).mockRejectedValue(new Error("Storage unavailable"));
+
+      await expect(node.execute.call(mockExecuteFunctions)).rejects.toThrow(
+        /Failed to load document from Binary ID 'filesystem-v2:corrupted-id'/i,
+      );
+    });
   });
 
   describe("Operation: Hydrate Tool Output", () => {

@@ -216,6 +216,11 @@ export async function executeApplyEdits(
             "",
           ) as string,
           binaryPropertyName: inputBinaryPropertyName,
+          sourceBinaryId: this.getNodeParameter(
+            "sourceBinaryId",
+            itemIndex,
+            "",
+          ) as string,
         }
       : { mode: "fromInput", binaryPropertyName: inputBinaryPropertyName };
 

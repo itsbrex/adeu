@@ -68,6 +68,11 @@ export async function executeExtractMarkdown(
             "",
           ) as string,
           binaryPropertyName,
+          sourceBinaryId: this.getNodeParameter(
+            "sourceBinaryId",
+            itemIndex,
+            "",
+          ) as string,
         }
       : { mode: "fromInput", binaryPropertyName };
 

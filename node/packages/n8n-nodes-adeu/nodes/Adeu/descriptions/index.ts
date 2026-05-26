@@ -103,6 +103,22 @@ export const documentDescription: INodeProperties[] = [
       },
     },
   },
+  {
+    displayName: "Source Binary ID",
+    name: "sourceBinaryId",
+    type: "string",
+    default: "",
+    placeholder: "e.g. filesystem-v2:...",
+    description:
+      "Optional. When set (such as by an AI Agent during a multi-turn conversation), the node will load the document directly from this binary storage ID instead of reading from the source node. Leave empty on the first call to default to the baseline source node.",
+    displayOptions: {
+      show: {
+        resource: ["document"],
+        operation: ["applyEdits", "extractMarkdown", "finalizeDocument"],
+        documentSource: ["fromNode"],
+      },
+    },
+  },
   ...extractMarkdownDescription,
   ...applyEditsDescription,
   ...generateDiffDescription,
