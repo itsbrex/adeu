@@ -123,7 +123,7 @@ export const generateDiffDescription: INodeProperties[] = [
     type: "boolean",
     default: true,
     description:
-      "Boolean. When true (default, recommended), compares the Accept All clean view of both documents — diffs reflect the final content as if all tracked changes were accepted. When false, diffs the raw CriticMarkup-projected text including pending change markers — useful for auditing tracked-change differences themselves.",
+      "Whether to compare the Accept All clean view of both documents. When true (default, recommended), diffs reflect the final content as if all tracked changes were accepted. When false, diffs the raw CriticMarkup-projected text including pending change markers — useful for auditing tracked-change differences themselves.",
     displayOptions: {
       show: {
         resource: ["document"],

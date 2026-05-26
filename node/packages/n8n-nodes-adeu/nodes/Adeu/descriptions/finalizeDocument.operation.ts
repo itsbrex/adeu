@@ -85,7 +85,7 @@ export const finalizeDocumentDescription: INodeProperties[] = [
     type: "boolean",
     default: false,
     description:
-      "Boolean. Only applies when Sanitize Mode is 'full'. When true, auto-accepts all pending tracked changes before sanitization. When false (default), the operation throws an error if any pending tracked changes exist, forcing the caller to resolve them first. If multiple distinct authors are detected in pending changes, a warning is included in the report to alert you of potential silent smuggles.",
+      "Whether to auto-accept all pending tracked changes before sanitization. Only applies when Sanitize Mode is 'full'. When false (default), the operation throws an error if any pending tracked changes exist, forcing the caller to resolve them first. If multiple distinct authors are detected in pending changes, a warning is included in the report to alert you of potential silent smuggles.",
     displayOptions: {
       show: {
         resource: ["document"],

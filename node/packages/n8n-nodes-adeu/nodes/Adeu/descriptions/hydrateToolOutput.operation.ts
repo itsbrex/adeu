@@ -107,8 +107,7 @@ export const hydrateToolOutputDescription: INodeProperties[] = [
     type: "boolean",
     default: true,
     description:
-      "Boolean. When true (default), the static data entry is deleted after a successful hydration so it does not leak across workflow runs. " +
-      "Set false if you want to inspect or re-read the entry from a later node in the same run.",
+      "Whether to delete the static data entry after a successful hydration so it does not leak across workflow runs. Set false if you want to inspect or re-read the entry from a later node in the same run.",
     displayOptions: {
       show: {
         resource: ["document"],

@@ -149,7 +149,7 @@ export const applyEditsDescription: INodeProperties[] = [
     type: "boolean",
     default: true,
     description:
-      "Boolean. When true (default), auto-extracts the post-edit document as Markdown (with CriticMarkup) and includes it in the outgoing JSON under the 'markdown' field. Useful for feeding the updated state back into a downstream AI Agent for review or further edits. Adds extraction overhead per call.",
+      "Whether to auto-extract the post-edit document as Markdown (with CriticMarkup) and include it in the outgoing JSON under the 'markdown' field. Useful for feeding the updated state back into a downstream AI Agent for review or further edits. Adds extraction overhead per call.",
     displayOptions: {
       show: {
         resource: ["document"],
