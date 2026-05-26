@@ -131,39 +131,74 @@ export async function getDocxBufferFromSource(
     resolvedBinaryBag === null ||
     typeof resolvedBinaryBag !== "object"
   ) {
-    const typeofValue = typeof resolvedBinaryBag;
-    const stringifiedValue =
-      resolvedBinaryBag !== undefined
-        ? JSON.stringify(resolvedBinaryBag)
-        : "undefined";
+    // The leaf `.binary.<prop>` lookup returned nothing. n8n collapses two
+    // distinct failure modes into the same `undefined` result here:
+    //   (a) the source node produced no output at all, or
+    //   (b) the source node ran but does not have the requested binary
+    //       property on its output item.
+    // Probe `.first().json` to disambiguate: it returns `undefined` only when
+    // the node truly has no output, but returns an object (possibly empty)
+    // whenever the node ran. This probe only fires on the error path, so it
+    // costs nothing in the hot path.
+    const probeExpression = `{{ $('${escapedNodeName}').first().json }}`;
+    let nodeRanProbe: unknown;
+    try {
+      nodeRanProbe = this.evaluateExpression(probeExpression, itemIndex);
+    } catch {
+      nodeRanProbe = undefined;
+    }
+
+    if (nodeRanProbe === undefined || nodeRanProbe === null) {
+      throw new NodeApiError(
+        this.getNode(),
+        { message: "Source node produced no output" } as JsonObject,
+        {
+          message: `Source node '${sourceNodeName}' has no output.`,
+          description:
+            `The expression '${expression}' resolved to undefined and the node appears not to have executed in this run. ` +
+            `Verify that '${sourceNodeName}' is upstream of this Adeu node, that its name matches exactly (case-sensitive), and that it has run successfully.`,
+          itemIndex,
+        },
+      );
+    }
+
+    // The node ran but the requested binary property is missing.
+    // Best-effort: try to list which binary properties exist. n8n's expression
+    // engine restricts direct access to the parent `.binary` proxy, so this
+    // probe may itself return undefined — in which case we omit the listing.
+    let availableHint = "";
+    try {
+      const binaryBagProbe = this.evaluateExpression(
+        `{{ Object.keys($('${escapedNodeName}').first().binary || {}) }}`,
+        itemIndex,
+      );
+      if (Array.isArray(binaryBagProbe) && binaryBagProbe.length > 0) {
+        availableHint =
+          ` Available binary properties on '${sourceNodeName}': ` +
+          binaryBagProbe.map((p) => `'${p}'`).join(", ") +
+          ".";
+      } else if (Array.isArray(binaryBagProbe) && binaryBagProbe.length === 0) {
+        availableHint = ` Source node '${sourceNodeName}' has no binary properties at all.`;
+      }
+    } catch {
+      // Probe failed — n8n's proxy restrictions block parent `.binary` access.
+      // Fall through with no hint.
+    }
+
     throw new NodeApiError(
       this.getNode(),
       { message: "Binary property not found" } as JsonObject,
       {
         message: `Source node '${sourceNodeName}' has no binary on property '${binaryPropertyName}'.`,
-        description: `Verify that the source node outputs the .docx on the expected property '${binaryPropertyName}'. (Resolved Type: ${typeofValue}, Resolved Value: ${stringifiedValue})`,
+        description:
+          `The expression '${expression}' resolved to undefined.${availableHint} ` +
+          `Update 'Binary Property Name' to match an existing property, or change the source node so it outputs the .docx on the expected property.`,
         itemIndex,
       },
     );
   }
 
   const binaryData = resolvedBinaryBag;
-  if (!binaryData) {
-    const availableProps = Object.keys(resolvedBinaryBag);
-    const availableList =
-      availableProps.length > 0
-        ? `Available binary properties on '${sourceNodeName}': ${availableProps.map((p) => `'${p}'`).join(", ")}.`
-        : `Source node '${sourceNodeName}' has no binary properties at all.`;
-    throw new NodeApiError(
-      this.getNode(),
-      { message: "Binary property not found" } as JsonObject,
-      {
-        message: `Source node '${sourceNodeName}' has no binary on property '${binaryPropertyName}'.`,
-        description: `${availableList} Update 'Binary Property Name' to one of the available property names, or change the source node so it outputs the .docx on the expected property.`,
-        itemIndex,
-      },
-    );
-  }
 
   // Decode the binary. n8n supports two storage modes:
   // - External storage (S3/filesystem): `id` is set, `data` is empty.

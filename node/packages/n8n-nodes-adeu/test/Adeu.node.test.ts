@@ -271,17 +271,16 @@ describe("Test Adeu n8n Node", () => {
         mockExecuteFunctions.getInputData as ReturnType<typeof vi.fn>
       ).mockReturnValue([{ json: {} }]);
 
-      // Mock evaluateExpression to return an inline binary metadata object
-      // pointing at the golden buffer.
+      // Mock evaluateExpression to return the leaf IBinaryData object directly
+      // (matching what `{{ $('Node').first().binary.data }}` returns under
+      // n8n's leaf-property proxy semantics — not the parent .binary bag).
       (
         mockExecuteFunctions.evaluateExpression as ReturnType<typeof vi.fn>
       ).mockReturnValue({
-        data: {
-          data: goldenBuffer.toString("base64"),
-          mimeType:
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-          fileName: "from-trigger.docx",
-        },
+        data: goldenBuffer.toString("base64"),
+        mimeType:
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        fileName: "from-trigger.docx",
       });
 
       (
@@ -313,6 +312,8 @@ describe("Test Adeu n8n Node", () => {
       );
     });
     it("should throw a clear NodeApiError when the source node has no output", async () => {
+      // Both the binary leaf probe and the `.json` disambiguation probe
+      // return undefined — i.e., the source node truly did not execute.
       (
         mockExecuteFunctions.evaluateExpression as ReturnType<typeof vi.fn>
       ).mockReturnValue(undefined);
@@ -323,16 +324,24 @@ describe("Test Adeu n8n Node", () => {
     });
 
     it("should throw a clear NodeApiError when the binary property is missing on the source node", async () => {
+      // Model what n8n returns under leaf-property access when the requested
+      // binary property is missing: the binary leaf is undefined, but the
+      // node DID run, so the .json disambiguation probe returns an object.
+      // The Object.keys(...) probe also returns a list of available binary
+      // property names so the error message can hint at alternatives.
       (
         mockExecuteFunctions.evaluateExpression as ReturnType<typeof vi.fn>
-      ).mockReturnValue({
-        // 'data' is missing; only 'attachment_0' is present
-        attachment_0: {
-          data: goldenBuffer.toString("base64"),
-          mimeType:
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-          fileName: "from-trigger.docx",
-        },
+      ).mockImplementation((expression: string) => {
+        if (expression.includes(".binary.data")) {
+          return undefined; // ← requested property is missing
+        }
+        if (expression.includes(".first().json")) {
+          return {}; // ← node ran, so .json resolves to an object
+        }
+        if (expression.includes("Object.keys")) {
+          return ["attachment_0"]; // ← list of present binary properties
+        }
+        return undefined;
       });
 
       await expect(node.execute.call(mockExecuteFunctions)).rejects.toThrow(
