@@ -51,7 +51,7 @@ Restart your n8n instance after installation.
 
 ## ⚙️ Operations
 
-The node exposes one resource (**Document**) with four operations:
+The node exposes one resource (**Document**) with five operations:
 
 ### 1. Extract Markdown
 Projects a `.docx` file into LLM-friendly Markdown.
@@ -187,6 +187,7 @@ Some fields are **plumbing** — they configure which input/output port the node
 - **`Edits Source`** (Apply Edits) — controls whether the node reads the changes array from the `Changes (JSON)` field on the node itself (`defineBelow`) or from a property on the upstream item (`fromInputJson`). For AI Agent workflows, **set this to `Define Below` in the editor**. This is what activates the `Changes (JSON)` field as the LLM's entry point — the recipe in the Apply Edits section below populates that field via `$fromAI`, and the LLM hands its generated `Changes_JSON` string directly to the tool as a call argument. The `fromInputJson` branch is only for deterministic pipelines where an upstream non-AI node has pre-populated a `changes` property on the item.
 
 AI Agents cannot pass binary `.docx` data through JSON arguments anyway — that's why `fromNode` exists: it resolves the binary from a named upstream node (e.g. `Read Binary File`, `Gmail Trigger`) at execution time. The trigger source is `$fromAI`-bindable below because a system prompt can legitimately offer the LLM a choice between multiple binary-producing nodes.
+
 ---
 
 ### Extract Markdown
@@ -220,13 +221,10 @@ AI Agents cannot pass binary `.docx` data through JSON arguments anyway — that
 ={{ $fromAI('Source_Binary_Id', `Optional string. If you are doing consecutive edits on the same document during this conversation, pass the 'redlinedBinaryId' from the previous tool output here to continue editing the updated draft. Leave blank on your first tool call.`, 'string', '') }}
 ```
 
-```
-
 **Author:**
 ```
 ={{ $fromAI('Author', `Author name attached to every tracked change and comment produced by this batch (string, e.g. 'AI Reviewer' or 'Acme Legal AI'). Appears in Word's review pane as the author of every redline. Choose a name your end users will recognize as the AI reviewer.`, 'string', 'Adeu AI') }}
 ```
-
 
 **Changes (JSON):**
 ```
