@@ -164,7 +164,10 @@ export async function search_and_fetch_emails(args: any): Promise<ToolResult> {
     lines.push(
       "⚠️ **ACTION REQUIRED**: To read the full body of an email and download its attachments, call this tool again and provide the exact `email_id`.",
     );
-    return { content: [{ type: "text", text: lines.join("\n") }] };
+    return {
+      content: [{ type: "text", text: lines.join("\n") }],
+      structuredContent: data,
+    };
   }
 
   if (data.type === "full_email") {
@@ -238,7 +241,10 @@ export async function search_and_fetch_emails(args: any): Promise<ToolResult> {
         );
       }
     }
-    return { content: [{ type: "text", text: lines.join("\n") }] };
+    return {
+      content: [{ type: "text", text: lines.join("\n") }],
+      structuredContent: data,
+    };
   }
 
   return {

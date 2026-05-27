@@ -216,4 +216,6 @@ AI_SESSION.md
 node_modules/
 dist/
 
-desktop-extension/index.js
+desktop-extension/*.js
+desktop-extension/assets/
+desktop-extension/templates/

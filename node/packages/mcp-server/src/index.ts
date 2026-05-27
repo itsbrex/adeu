@@ -1,11 +1,15 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+// FILE: node/packages/mcp-server/src/index.ts
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { readFileSync, existsSync } from "node:fs";
+import { basename, resolve, extname, dirname, join } from "node:path";
+import { z } from "zod";
 import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
-import { readFileSync } from "node:fs";
-import { basename, resolve, extname, dirname } from "node:path";
+  registerAppTool,
+  registerAppResource,
+  RESOURCE_MIME_TYPE,
+} from "@modelcontextprotocol/ext-apps/server";
+import fs from "node:fs";
 import {
   identifyEngine,
   extractTextFromBuffer,
@@ -15,13 +19,17 @@ import {
   create_word_patch_diff,
   finalize_document,
 } from "@adeu/core";
+
 import {
   build_paginated_response,
   build_outline_response,
   build_appendix_response,
 } from "./response-builders.js";
+
 import { login_to_adeu_cloud, logout_of_adeu_cloud } from "./tools/auth.js";
 import { search_and_fetch_emails, create_email_draft } from "./tools/email.js";
+import { MARKDOWN_UI_URI, EMAIL_UI_URI } from "./shared.js";
+
 function readFileBytesOrThrow(filePath: string): Buffer {
   try {
     return readFileSync(filePath);
@@ -32,7 +40,23 @@ function readFileBytesOrThrow(filePath: string): Buffer {
     throw err;
   }
 }
-// --- Tool Description Constants (Parity with Python) ---
+
+// --- Asset Loaders for UI ---
+const DIST_DIR = import.meta.dirname;
+
+function getAssetContent(
+  folder: "templates" | "assets",
+  filename: string,
+  fallbackMessage: string,
+): string {
+  const filePath = join(DIST_DIR, folder, filename);
+  if (existsSync(filePath)) {
+    return readFileSync(filePath, "utf-8");
+  }
+  return fallbackMessage;
+}
+
+// --- Tool Description Constants ---
 const READ_DOCX_COMMON_DESC =
   "Reads a DOCX file. Returns text with inline CriticMarkup for Tracked Changes and Comments: {++inserted++}, {--deleted--}, {==highlighted==}{>>comment<<}. Set clean_view=True for the finalized 'Accepted' text without markup.\n\n";
 const READ_DOCX_TAIL =
@@ -47,447 +71,487 @@ const DIFF_DOCX_DESC =
   "Compares two DOCX files and returns a unified diff of their text content. Useful for analyzing differences between versions before editing.";
 
 // --- Server Setup ---
-const server = new Server(
-  {
-    name: "adeu-redlining-service",
-    version: "1.0.0",
-  },
-  {
-    capabilities: {
-      tools: {},
-    },
+const server = new McpServer({
+  name: "adeu-redlining-service",
+  version: "1.0.0",
+});
+
+// Common CSP allowing Google Fonts used by Adeu UI templates
+const UI_CSP = {
+  connectDomains: ["https://fonts.googleapis.com", "https://fonts.gstatic.com"],
+  resourceDomains: [
+    "https://fonts.googleapis.com",
+    "https://fonts.gstatic.com",
+  ],
+};
+
+// ==========================================
+// 1. UI RESOURCES
+// ==========================================
+
+registerAppResource(
+  server,
+  MARKDOWN_UI_URI,
+  MARKDOWN_UI_URI,
+  { mimeType: RESOURCE_MIME_TYPE, description: "Adeu Markdown Viewer UI" },
+  async () => {
+    let html = getAssetContent(
+      "templates",
+      "markdown_ui.html",
+      "<html><body>UI Template Not Found</body></html>",
+    );
+    const markedJs = getAssetContent(
+      "assets",
+      "marked.min.js",
+      "window.__MARKED_ERROR = 'marked.min.js not found';",
+    );
+    const svg = getAssetContent("assets", "adeu.svg", "");
+
+    html = html
+      .replace("[[marked_js_code | safe]]", markedJs)
+      .replace("[[ adeu_svg_code ]]", svg);
+
+    return {
+      contents: [
+        {
+          uri: MARKDOWN_UI_URI,
+          mimeType: RESOURCE_MIME_TYPE,
+          text: html,
+          _meta: { ui: { csp: UI_CSP } },
+        },
+      ],
+    };
   },
 );
 
-// --- Tool Registration ---
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: [
-      {
-        name: "read_docx",
-        description: READ_DOCX_COMMON_DESC + READ_DOCX_TAIL,
-        inputSchema: {
-          type: "object",
-          properties: {
-            file_path: {
-              type: "string",
-              description: "Absolute path to the DOCX file.",
-            },
-            clean_view: {
-              type: "boolean",
-              description:
-                "If False (default), returns the 'Raw' text with inline CriticMarkup. If True, returns 'Accepted' text.",
-              default: false,
-            },
-            mode: {
-              type: "string",
-              enum: ["full", "outline", "appendix"],
-              description:
-                "'full' returns body content. 'outline' returns a structural heading map. 'appendix' returns defined terms.",
-              default: "full",
-            },
-            page: {
-              type: "number",
-              description:
-                "Page number (1-indexed) for mode='full'. Defaults to 1.",
-              default: 1,
-            },
-            outline_max_level: {
-              type: "number",
-              description: "For mode='outline' only: cap on heading depth.",
-              default: 2,
-            },
-            outline_verbose: {
-              type: "boolean",
-              description: "For mode='outline' only: includes metadata.",
-              default: false,
-            },
-          },
-          required: ["file_path"],
-        },
-      },
-      {
-        name: "process_document_batch",
-        description: PROCESS_BATCH_COMMON_DESC + PROCESS_BATCH_OPERATIONS_DESC,
-        inputSchema: {
-          type: "object",
-          properties: {
-            original_docx_path: {
-              type: "string",
-              description: "Absolute path to the source file.",
-            },
-            author_name: {
-              type: "string",
-              description:
-                "Name to appear in Track Changes (e.g., 'Reviewer AI').",
-            },
-            changes: {
-              type: "array",
-              description:
-                "List of changes to apply. Each change must specify 'type'.",
-              items: { type: "object" },
-            },
-            output_path: {
-              type: "string",
-              description: "Optional output path.",
-            },
-          },
-          required: ["original_docx_path", "author_name", "changes"],
-        },
-      },
-      {
-        name: "accept_all_changes",
-        description:
-          "Accepts all tracked changes and removes all comments in a single operation, producing a finalized clean document. Use this when a document review is entirely complete and you want to clear all redlines.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            docx_path: {
-              type: "string",
-              description: "Absolute path to the DOCX file.",
-            },
-            output_path: {
-              type: "string",
-              description: "Optional output path.",
-            },
-          },
-          required: ["docx_path"],
-        },
-      },
-      {
-        name: "diff_docx_files",
-        description: DIFF_DOCX_DESC,
-        inputSchema: {
-          type: "object",
-          properties: {
-            original_path: {
-              type: "string",
-              description: "Absolute path to the baseline DOCX file.",
-            },
-            modified_path: {
-              type: "string",
-              description: "Absolute path to the modified DOCX file.",
-            },
-            compare_clean: {
-              type: "boolean",
-              description:
-                "If True, compares 'Accepted' state. If False, compares raw text.",
-              default: true,
-            },
-          },
-          required: ["original_path", "modified_path"],
-        },
-      },
-      {
-        name: "finalize_document",
-        description:
-          "Prepares a document for external distribution or e-signature. This tool combines metadata sanitization, document locking (protection), and markup resolution into a single step. NOTE: PDF export and AES encryption are disabled in this environment.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            file_path: {
-              type: "string",
-              description: "Absolute path to the DOCX file.",
-            },
-            output_path: {
-              type: "string",
-              description: "Optional output path.",
-            },
-            sanitize_mode: {
-              type: "string",
-              enum: ["full", "keep-markup"],
-              description:
-                "full removes all markup, keep-markup redacts metadata but keeps comments/redlines.",
-            },
-            accept_all: {
-              type: "boolean",
-              description:
-                "If true, auto-accepts all unresolved track changes before finalizing.",
-            },
-            protection_mode: {
-              type: "string",
-              enum: ["read_only", "encrypt"],
-              description:
-                "Native OOXML document locking. encrypt falls back to read_only in this environment.",
-            },
-            password: {
-              type: "string",
-              description: "Ignored in this environment.",
-            },
-            author: {
-              type: "string",
-              description:
-                "Replace all remaining markup authorship with this name.",
-            },
-            export_pdf: {
-              type: "boolean",
-              description: "Ignored in this environment.",
-            },
-          },
-          required: ["file_path"],
-        },
-      },
-      {
-        name: "login_to_adeu_cloud",
-        description:
-          "Logs the user into the Adeu Cloud backend. Securely opens a browser window for authentication.",
-        inputSchema: { type: "object", properties: {} },
-      },
-      {
-        name: "logout_of_adeu_cloud",
-        description:
-          "Logs out of the Adeu Cloud backend by clearing the local API key.",
-        inputSchema: { type: "object", properties: {} },
-      },
-      {
-        name: "search_and_fetch_emails",
-        description:
-          "Searches the user's live email inbox. By default, searches only the Inbox folder. Returns a list of lightweight previews. Call again with `email_id` to fetch the full body and download attachments.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            sender: { type: "string" },
-            subject: { type: "string" },
-            has_attachments: { type: "boolean" },
-            attachment_name: { type: "string" },
-            is_unread: { type: "boolean" },
-            days_ago: { type: "number" },
-            folder: { type: "string", enum: ["inbox", "sent", "all"] },
-            limit: { type: "number", default: 10 },
-            offset: { type: "number", default: 0 },
-            email_id: { type: "string" },
-            working_directory: { type: "string" },
-          },
-        },
-      },
-      {
-        name: "create_email_draft",
-        description:
-          "Creates an email draft in the user's native draft box. Provide `reply_to_email_id` to reply, or `subject` and `to_recipients` for a new email.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            body_markdown: { type: "string" },
-            reply_to_email_id: { type: "string" },
-            subject: { type: "string" },
-            to_recipients: { type: "array", items: { type: "string" } },
-            attachment_paths: { type: "array", items: { type: "string" } },
-          },
-          required: ["body_markdown"],
-        },
-      },
-    ],
-  };
-});
+registerAppResource(
+  server,
+  EMAIL_UI_URI,
+  EMAIL_UI_URI,
+  { mimeType: RESOURCE_MIME_TYPE, description: "Adeu Email Viewer UI" },
+  async () => {
+    let html = getAssetContent(
+      "templates",
+      "email_ui.html",
+      "<html><body>UI Template Not Found</body></html>",
+    );
+    const svg = getAssetContent("assets", "adeu.svg", "");
 
-// --- Tool Execution ---
-server.setRequestHandler(
-  CallToolRequestSchema,
-  async (request): Promise<any> => {
-    const { name, arguments: args } = request.params;
+    html = html.replace("[[ adeu_svg_code ]]", svg);
 
+    return {
+      contents: [
+        {
+          uri: EMAIL_UI_URI,
+          mimeType: RESOURCE_MIME_TYPE,
+          text: html,
+          _meta: { ui: { csp: UI_CSP } },
+        },
+      ],
+    };
+  },
+);
+
+// ==========================================
+// 2. UI-ENABLED TOOLS
+// ==========================================
+
+registerAppTool(
+  server,
+  "read_docx",
+  {
+    title: "Read DOCX",
+    description: READ_DOCX_COMMON_DESC + READ_DOCX_TAIL,
+    inputSchema: z.object({
+      file_path: z.string().describe("Absolute path to the DOCX file."),
+      clean_view: z
+        .boolean()
+        .default(false)
+        .describe(
+          "If False (default), returns the 'Raw' text with inline CriticMarkup. If True, returns 'Accepted' text.",
+        ),
+      mode: z
+        .enum(["full", "outline", "appendix"])
+        .default("full")
+        .describe(
+          "'full' returns body content. 'outline' returns a structural heading map. 'appendix' returns defined terms.",
+        ),
+      page: z
+        .number()
+        .default(1)
+        .describe("Page number (1-indexed) for mode='full'. Defaults to 1."),
+      outline_max_level: z
+        .number()
+        .default(2)
+        .describe("For mode='outline' only: cap on heading depth."),
+      outline_verbose: z
+        .boolean()
+        .default(false)
+        .describe("For mode='outline' only: includes metadata."),
+    }),
+    _meta: { ui: { resourceUri: MARKDOWN_UI_URI } },
+  },
+  async ({
+    file_path,
+    clean_view,
+    mode,
+    page,
+    outline_max_level,
+    outline_verbose,
+  }) => {
     try {
-      if (name === "read_docx") {
-        const filePath = args?.file_path as string;
-        const cleanView = (args?.clean_view as boolean) ?? false;
-        const mode = (args?.mode as string) ?? "full";
-        const page = (args?.page as number) ?? 1;
-        const outline_max_level = (args?.outline_max_level as number) ?? 2;
-        const outline_verbose = (args?.outline_verbose as boolean) ?? false;
+      const buf = readFileBytesOrThrow(file_path);
+      const text = await extractTextFromBuffer(buf, clean_view);
 
-        const buf = readFileBytesOrThrow(filePath);
-        const text = await extractTextFromBuffer(buf, cleanView);
-
-        if (mode === "outline") {
-          const doc = await DocumentObject.load(buf);
-          return build_outline_response(
-            doc,
-            text,
-            filePath,
-            outline_max_level,
-            outline_verbose,
-          );
-        }
-        if (mode === "appendix") {
-          return build_appendix_response(text, page, filePath);
-        }
-        return build_paginated_response(text, page, filePath);
+      if (mode === "outline") {
+        const doc = await DocumentObject.load(buf);
+        return build_outline_response(
+          doc,
+          text,
+          file_path,
+          outline_max_level,
+          outline_verbose,
+        ) as any;
       }
-      if (name === "process_document_batch") {
-        const origPath = args?.original_docx_path as string;
-        const authorName = args?.author_name as string;
-        const changes = args?.changes as any[];
-        let outPath = args?.output_path as string;
+      if (mode === "appendix") {
+        return build_appendix_response(text, page, file_path) as any;
+      }
+      return build_paginated_response(text, page, file_path) as any;
+    } catch (e: any) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `Error executing tool read_docx: ${e.message}`,
+          },
+        ],
+      };
+    }
+  },
+);
 
-        if (!authorName || !authorName.trim()) {
+registerAppTool(
+  server,
+  "search_and_fetch_emails",
+  {
+    title: "Search & Fetch Emails",
+    description:
+      "Searches the user's live email inbox. Returns previews. Call again with `email_id` to fetch the full body.",
+    inputSchema: z.object({
+      sender: z.string().optional(),
+      subject: z.string().optional(),
+      has_attachments: z.boolean().optional(),
+      attachment_name: z.string().optional(),
+      is_unread: z.boolean().optional(),
+      days_ago: z.number().optional(),
+      folder: z.enum(["inbox", "sent", "all"]).optional(),
+      limit: z.number().default(10),
+      offset: z.number().default(0),
+      email_id: z.string().optional(),
+      working_directory: z.string().optional(),
+    }),
+    _meta: { ui: { resourceUri: EMAIL_UI_URI } },
+  },
+  async (args) => {
+    try {
+      return (await search_and_fetch_emails(args)) as any;
+    } catch (e: any) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `Error executing tool search_and_fetch_emails: ${e.message}`,
+          },
+        ],
+      };
+    }
+  },
+);
+
+// ==========================================
+// 3. HEADLESS TOOLS (No UI)
+// ==========================================
+
+server.tool(
+  "process_document_batch",
+  PROCESS_BATCH_COMMON_DESC + PROCESS_BATCH_OPERATIONS_DESC,
+  {
+    original_docx_path: z
+      .string()
+      .describe("Absolute path to the source file."),
+    author_name: z
+      .string()
+      .describe("Name to appear in Track Changes (e.g., 'Reviewer AI')."),
+    changes: z
+      .array(z.any())
+      .describe("List of changes to apply. Each change must specify 'type'."),
+    output_path: z.string().optional().describe("Optional output path."),
+  },
+  async ({ original_docx_path, author_name, changes, output_path }) => {
+    try {
+      if (!author_name || !author_name.trim())
+        return {
+          content: [
+            { type: "text", text: "Error: author_name cannot be empty." },
+          ],
+        };
+      if (!changes || changes.length === 0)
+        return {
+          content: [{ type: "text", text: "Error: No changes provided." }],
+        };
+
+      let outPath = output_path;
+      if (!outPath) {
+        const ext = extname(original_docx_path);
+        const base = basename(original_docx_path, ext);
+        const dir = dirname(original_docx_path);
+        outPath = resolve(dir, `${base}_processed${ext}`);
+      }
+
+      const buf = readFileBytesOrThrow(original_docx_path);
+      const doc = await DocumentObject.load(buf);
+      const engine = new RedlineEngine(doc, author_name);
+
+      let stats;
+      try {
+        stats = engine.process_batch(changes);
+      } catch (e: any) {
+        if (e instanceof BatchValidationError) {
           return {
+            isError: true,
             content: [
-              { type: "text", text: "Error: author_name cannot be empty." },
+              {
+                type: "text",
+                text: `Batch rejected. Some edits failed validation:\n\n${e.errors.join("\n\n")}`,
+              },
             ],
           };
         }
-
-        if (!changes || changes.length === 0) {
-          return {
-            content: [{ type: "text", text: "Error: No changes provided." }],
-          };
-        }
-        if (!outPath) {
-          const ext = extname(origPath);
-          const base = basename(origPath, ext);
-          const dir = dirname(origPath);
-          outPath = resolve(dir, `${base}_processed${ext}`);
-        }
-
-        const buf = readFileBytesOrThrow(origPath);
-        const doc = await DocumentObject.load(buf);
-        const engine = new RedlineEngine(doc, authorName);
-
-        let stats;
-        try {
-          stats = engine.process_batch(changes);
-        } catch (e) {
-          if (e instanceof BatchValidationError) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Batch rejected. Some edits failed validation:\n\n${(e as BatchValidationError).errors.join("\n\n")}`,
-                },
-              ],
-              isError: true,
-            };
-          }
-          throw e;
-        }
-
-        const outBuf = await doc.save();
-        // Using dynamic import of fs/promises or just sync write
-        const fs = await import("node:fs");
-        fs.writeFileSync(outPath, outBuf);
-
-        let res = `Batch complete. Saved to: ${outPath}\nActions: ${stats.actions_applied} applied, ${stats.actions_skipped} skipped.\nEdits: ${stats.edits_applied} applied, ${stats.edits_skipped} skipped.`;
-        if (stats.skipped_details?.length > 0) {
-          res += `\n\nSkipped Details:\n${stats.skipped_details.join("\n")}`;
-        }
-
-        return {
-          content: [{ type: "text", text: res }],
-        };
+        throw e;
       }
 
-      if (name === "accept_all_changes") {
-        const docxPath = args?.docx_path as string;
-        let outPath = args?.output_path as string;
+      const outBuf = await doc.save();
 
-        if (!outPath) {
-          const ext = extname(docxPath);
-          const base = basename(docxPath, ext);
-          const dir = dirname(docxPath);
-          outPath = resolve(dir, `${base}_clean${ext}`);
-        }
+      fs.writeFileSync(outPath, outBuf);
 
-        const buf = readFileBytesOrThrow(docxPath);
-        const doc = await DocumentObject.load(buf);
-        const engine = new RedlineEngine(doc);
-
-        // We implement the public facing accept_all wrapper from python
-        engine.accept_all_revisions();
-
-        const outBuf = await doc.save();
-        const fs = await import("node:fs");
-        fs.writeFileSync(outPath, outBuf);
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Accepted all changes. Saved to: ${outPath}`,
-            },
-          ],
-        };
+      let res = `Batch complete. Saved to: ${outPath}\nActions: ${stats.actions_applied} applied, ${stats.actions_skipped} skipped.\nEdits: ${stats.edits_applied} applied, ${stats.edits_skipped} skipped.`;
+      if (stats.skipped_details?.length > 0) {
+        res += `\n\nSkipped Details:\n${stats.skipped_details.join("\n")}`;
       }
-      if (name === "diff_docx_files") {
-        const origPath = args?.original_path as string;
-        const modPath = args?.modified_path as string;
-        const compareClean = (args?.compare_clean as boolean) ?? true;
-        const origBuf = readFileBytesOrThrow(origPath);
-        const modBuf = readFileBytesOrThrow(modPath);
+      return { content: [{ type: "text", text: res }] };
+    } catch (e: any) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `Error: ${e.message}` }],
+      };
+    }
+  },
+);
 
-        // Pass compareClean flag into extraction
-        const origText = await extractTextFromBuffer(origBuf, compareClean);
-        const modText = await extractTextFromBuffer(modBuf, compareClean);
-
-        const diff = create_word_patch_diff(
-          origText,
-          modText,
-          basename(origPath),
-          basename(modPath),
-        );
-
-        return {
-          content: [{ type: "text", text: diff || "No differences found." }],
-        };
+server.tool(
+  "accept_all_changes",
+  "Accepts all tracked changes and removes all comments in a single operation.",
+  {
+    docx_path: z.string().describe("Absolute path to the DOCX file."),
+    output_path: z.string().optional().describe("Optional output path."),
+  },
+  async ({ docx_path, output_path }) => {
+    try {
+      let outPath = output_path;
+      if (!outPath) {
+        const ext = extname(docx_path);
+        const base = basename(docx_path, ext);
+        const dir = dirname(docx_path);
+        outPath = resolve(dir, `${base}_clean${ext}`);
       }
 
-      if (name === "finalize_document") {
-        const filePath = args?.file_path as string;
-        let outPath = args?.output_path as string;
+      const buf = readFileBytesOrThrow(docx_path);
+      const doc = await DocumentObject.load(buf);
+      const engine = new RedlineEngine(doc);
 
-        if (!outPath) {
-          const ext = extname(filePath);
-          const base = basename(filePath, ext);
-          const dir = dirname(filePath);
-          outPath = resolve(dir, `${base}_final${ext}`);
-        }
+      engine.accept_all_revisions();
 
-        const buf = readFileBytesOrThrow(filePath);
-        const doc = await DocumentObject.load(buf);
+      const outBuf = await doc.save();
 
-        const result = await finalize_document(doc, {
-          filename: basename(filePath),
-          sanitize_mode: (args?.sanitize_mode as any) || "full",
-          accept_all: args?.accept_all as boolean,
-          protection_mode: args?.protection_mode as any,
-          author: args?.author as string,
-          export_pdf: args?.export_pdf as boolean,
-        });
+      fs.writeFileSync(outPath, outBuf);
 
-        const fs = await import("node:fs");
-        fs.writeFileSync(outPath, result.outBuffer!);
+      return {
+        content: [
+          { type: "text", text: `Accepted all changes. Saved to: ${outPath}` },
+        ],
+      };
+    } catch (e: any) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `Error: ${e.message}` }],
+      };
+    }
+  },
+);
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Saved to: ${outPath}\n\n${result.reportText}`,
-            },
-          ],
-        };
+server.tool(
+  "diff_docx_files",
+  DIFF_DOCX_DESC,
+  {
+    original_path: z
+      .string()
+      .describe("Absolute path to the baseline DOCX file."),
+    modified_path: z
+      .string()
+      .describe("Absolute path to the modified DOCX file."),
+    compare_clean: z
+      .boolean()
+      .default(true)
+      .describe(
+        "If True, compares 'Accepted' state. If False, compares raw text.",
+      ),
+  },
+  async ({ original_path, modified_path, compare_clean }) => {
+    try {
+      const origBuf = readFileBytesOrThrow(original_path);
+      const modBuf = readFileBytesOrThrow(modified_path);
+
+      const origText = await extractTextFromBuffer(origBuf, compare_clean);
+      const modText = await extractTextFromBuffer(modBuf, compare_clean);
+
+      const diff = create_word_patch_diff(
+        origText,
+        modText,
+        basename(original_path),
+        basename(modified_path),
+      );
+
+      return {
+        content: [{ type: "text", text: diff || "No differences found." }],
+      };
+    } catch (e: any) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `Error: ${e.message}` }],
+      };
+    }
+  },
+);
+
+server.tool(
+  "finalize_document",
+  "Prepares a document for external distribution or e-signature.",
+  {
+    file_path: z.string().describe("Absolute path to the DOCX file."),
+    output_path: z.string().optional().describe("Optional output path."),
+    sanitize_mode: z
+      .enum(["full", "keep-markup"])
+      .optional()
+      .describe("full removes all markup, keep-markup redacts metadata."),
+    accept_all: z
+      .boolean()
+      .optional()
+      .describe(
+        "If true, auto-accepts all unresolved track changes before finalizing.",
+      ),
+    protection_mode: z
+      .enum(["read_only", "encrypt"])
+      .optional()
+      .describe("Native OOXML document locking."),
+    password: z.string().optional().describe("Ignored in this environment."),
+    author: z
+      .string()
+      .optional()
+      .describe("Replace all remaining markup authorship with this name."),
+    export_pdf: z.boolean().optional().describe("Ignored in this environment."),
+  },
+  async ({
+    file_path,
+    output_path,
+    sanitize_mode,
+    accept_all,
+    protection_mode,
+    author,
+    export_pdf,
+  }) => {
+    try {
+      let outPath = output_path;
+      if (!outPath) {
+        const ext = extname(file_path);
+        const base = basename(file_path, ext);
+        const dir = dirname(file_path);
+        outPath = resolve(dir, `${base}_final${ext}`);
       }
-      if (name === "login_to_adeu_cloud") {
-        return await login_to_adeu_cloud();
-      }
-      if (name === "logout_of_adeu_cloud") {
-        return await logout_of_adeu_cloud();
-      }
-      if (name === "search_and_fetch_emails") {
-        return await search_and_fetch_emails(args || {});
-      }
-      if (name === "create_email_draft") {
-        return await create_email_draft(args || {});
-      }
-      throw new Error(`Unknown tool: ${name}`);
-    } catch (error: any) {
+
+      const buf = readFileBytesOrThrow(file_path);
+      const doc = await DocumentObject.load(buf);
+
+      const result = await finalize_document(doc, {
+        filename: basename(file_path),
+        sanitize_mode: (sanitize_mode as any) || "full",
+        accept_all: accept_all as boolean,
+        protection_mode: protection_mode as any,
+        author: author as string,
+        export_pdf: export_pdf as boolean,
+      });
+
+      fs.writeFileSync(outPath, result.outBuffer!);
+
       return {
         content: [
           {
             type: "text",
-            text: `Error executing tool ${name}: ${error.message}`,
+            text: `Saved to: ${outPath}\n\n${result.reportText}`,
           },
         ],
-        isError: true,
       };
+    } catch (e: any) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `Error: ${e.message}` }],
+      };
+    }
+  },
+);
+
+server.tool(
+  "login_to_adeu_cloud",
+  "Logs the user into the Adeu Cloud backend.",
+  {},
+  async () => {
+    try {
+      return (await login_to_adeu_cloud()) as any;
+    } catch (e: any) {
+      return { isError: true, content: [{ type: "text", text: e.message }] };
+    }
+  },
+);
+
+server.tool(
+  "logout_of_adeu_cloud",
+  "Logs out of the Adeu Cloud backend.",
+  {},
+  async () => {
+    try {
+      return (await logout_of_adeu_cloud()) as any;
+    } catch (e: any) {
+      return { isError: true, content: [{ type: "text", text: e.message }] };
+    }
+  },
+);
+
+server.tool(
+  "create_email_draft",
+  "Creates an email draft in the user's native draft box.",
+  {
+    body_markdown: z.string(),
+    reply_to_email_id: z.string().optional(),
+    subject: z.string().optional(),
+    to_recipients: z.array(z.string()).optional(),
+    attachment_paths: z.array(z.string()).optional(),
+  },
+  async (args) => {
+    try {
+      return (await create_email_draft(args)) as any;
+    } catch (e: any) {
+      return { isError: true, content: [{ type: "text", text: e.message }] };
     }
   },
 );
