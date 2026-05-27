@@ -274,20 +274,22 @@ registerAppTool(
 // 3. HEADLESS TOOLS (No UI)
 // ==========================================
 
-server.tool(
+server.registerTool(
   "process_document_batch",
-  PROCESS_BATCH_COMMON_DESC + PROCESS_BATCH_OPERATIONS_DESC,
   {
-    original_docx_path: z
-      .string()
-      .describe("Absolute path to the source file."),
-    author_name: z
-      .string()
-      .describe("Name to appear in Track Changes (e.g., 'Reviewer AI')."),
-    changes: z
-      .array(z.any())
-      .describe("List of changes to apply. Each change must specify 'type'."),
-    output_path: z.string().optional().describe("Optional output path."),
+    description: PROCESS_BATCH_COMMON_DESC + PROCESS_BATCH_OPERATIONS_DESC,
+    inputSchema: {
+      original_docx_path: z
+        .string()
+        .describe("Absolute path to the source file."),
+      author_name: z
+        .string()
+        .describe("Name to appear in Track Changes (e.g., 'Reviewer AI')."),
+      changes: z
+        .array(z.any())
+        .describe("List of changes to apply. Each change must specify 'type'."),
+      output_path: z.string().optional().describe("Optional output path."),
+    },
   },
   async ({ original_docx_path, author_name, changes, output_path }) => {
     try {
@@ -350,12 +352,15 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "accept_all_changes",
-  "Accepts all tracked changes and removes all comments in a single operation.",
   {
-    docx_path: z.string().describe("Absolute path to the DOCX file."),
-    output_path: z.string().optional().describe("Optional output path."),
+    description:
+      "Accepts all tracked changes and removes all comments in a single operation.",
+    inputSchema: {
+      docx_path: z.string().describe("Absolute path to the DOCX file."),
+      output_path: z.string().optional().describe("Optional output path."),
+    },
   },
   async ({ docx_path, output_path }) => {
     try {
@@ -391,22 +396,24 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "diff_docx_files",
-  DIFF_DOCX_DESC,
   {
-    original_path: z
-      .string()
-      .describe("Absolute path to the baseline DOCX file."),
-    modified_path: z
-      .string()
-      .describe("Absolute path to the modified DOCX file."),
-    compare_clean: z
-      .boolean()
-      .default(true)
-      .describe(
-        "If True, compares 'Accepted' state. If False, compares raw text.",
-      ),
+    description: DIFF_DOCX_DESC,
+    inputSchema: {
+      original_path: z
+        .string()
+        .describe("Absolute path to the baseline DOCX file."),
+      modified_path: z
+        .string()
+        .describe("Absolute path to the modified DOCX file."),
+      compare_clean: z
+        .boolean()
+        .default(true)
+        .describe(
+          "If True, compares 'Accepted' state. If False, compares raw text.",
+        ),
+    },
   },
   async ({ original_path, modified_path, compare_clean }) => {
     try {
@@ -435,32 +442,38 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "finalize_document",
-  "Prepares a document for external distribution or e-signature.",
   {
-    file_path: z.string().describe("Absolute path to the DOCX file."),
-    output_path: z.string().optional().describe("Optional output path."),
-    sanitize_mode: z
-      .enum(["full", "keep-markup"])
-      .optional()
-      .describe("full removes all markup, keep-markup redacts metadata."),
-    accept_all: z
-      .boolean()
-      .optional()
-      .describe(
-        "If true, auto-accepts all unresolved track changes before finalizing.",
-      ),
-    protection_mode: z
-      .enum(["read_only", "encrypt"])
-      .optional()
-      .describe("Native OOXML document locking."),
-    password: z.string().optional().describe("Ignored in this environment."),
-    author: z
-      .string()
-      .optional()
-      .describe("Replace all remaining markup authorship with this name."),
-    export_pdf: z.boolean().optional().describe("Ignored in this environment."),
+    description:
+      "Prepares a document for external distribution or e-signature.",
+    inputSchema: {
+      file_path: z.string().describe("Absolute path to the DOCX file."),
+      output_path: z.string().optional().describe("Optional output path."),
+      sanitize_mode: z
+        .enum(["full", "keep-markup"])
+        .optional()
+        .describe("full removes all markup, keep-markup redacts metadata."),
+      accept_all: z
+        .boolean()
+        .optional()
+        .describe(
+          "If true, auto-accepts all unresolved track changes before finalizing.",
+        ),
+      protection_mode: z
+        .enum(["read_only", "encrypt"])
+        .optional()
+        .describe("Native OOXML document locking."),
+      password: z.string().optional().describe("Ignored in this environment."),
+      author: z
+        .string()
+        .optional()
+        .describe("Replace all remaining markup authorship with this name."),
+      export_pdf: z
+        .boolean()
+        .optional()
+        .describe("Ignored in this environment."),
+    },
   },
   async ({
     file_path,
@@ -510,11 +523,9 @@ server.tool(
     }
   },
 );
-
-server.tool(
+server.registerTool(
   "login_to_adeu_cloud",
-  "Logs the user into the Adeu Cloud backend.",
-  {},
+  { description: "Logs the user into the Adeu Cloud backend." },
   async () => {
     try {
       return (await login_to_adeu_cloud()) as any;
@@ -524,10 +535,9 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "logout_of_adeu_cloud",
-  "Logs out of the Adeu Cloud backend.",
-  {},
+  { description: "Logs out of the Adeu Cloud backend." },
   async () => {
     try {
       return (await logout_of_adeu_cloud()) as any;
@@ -536,16 +546,17 @@ server.tool(
     }
   },
 );
-
-server.tool(
+server.registerTool(
   "create_email_draft",
-  "Creates an email draft in the user's native draft box.",
   {
-    body_markdown: z.string(),
-    reply_to_email_id: z.string().optional(),
-    subject: z.string().optional(),
-    to_recipients: z.array(z.string()).optional(),
-    attachment_paths: z.array(z.string()).optional(),
+    description: "Creates an email draft in the user's native draft box.",
+    inputSchema: {
+      body_markdown: z.string(),
+      reply_to_email_id: z.string().optional(),
+      subject: z.string().optional(),
+      to_recipients: z.array(z.string()).optional(),
+      attachment_paths: z.array(z.string()).optional(),
+    },
   },
   async (args) => {
     try {
@@ -555,7 +566,6 @@ server.tool(
     }
   },
 );
-
 // --- Startup ---
 async function main() {
   const transport = new StdioServerTransport();
