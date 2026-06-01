@@ -134,6 +134,12 @@ describe("Resolved Bugs Core Engine Verification", () => {
     // Direct string equality so Vitest prints the exact diff if they mismatch!
     expect(serialized).toBe(expected);
   });
+
+  it("BUG-BOM-1: parseXml successfully strips leading UTF-8 BOM (\\uFEFF)", () => {
+    const rawXml = `\uFEFF<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"></w:document>`;
+    const docXml = parseXml(rawXml);
+    expect(docXml.documentElement.tagName).toBe("w:document");
+  });
   it("BUG-11b: Sweeps orphaned comment anchors when accepting tracked changes", async () => {
     const doc = await createTestDocument();
     addParagraph(doc, "Confidential Information");
@@ -235,7 +241,7 @@ describe("Resolved Bugs Core Engine Verification", () => {
       "",
       null,
       "123",
-      doc.element.ownerDocument!
+      doc.element.ownerDocument!,
     );
     expect(ins).toBeNull();
   });
@@ -245,7 +251,7 @@ describe("Resolved Bugs Core Engine Verification", () => {
     const p = addParagraph(doc, "Short heading");
 
     const fakeCache = {
-      "CustomHeading": { name: "Custom Heading", outline_level: 2, bold: true }
+      CustomHeading: { name: "Custom Heading", outline_level: 2, bold: true },
     };
     (doc.pkg as any)._adeu_style_cache = [fakeCache, "Normal"];
 
@@ -259,7 +265,7 @@ describe("Resolved Bugs Core Engine Verification", () => {
     const buf = await doc.save();
     const body = await extractTextFromBuffer(buf, false);
     const pages = paginate(body, "");
-    
+
     const outlineNodes = extract_outline(
       doc,
       body,
@@ -295,7 +301,7 @@ describe("Resolved Bugs Core Engine Verification", () => {
     const end = xmlDoc.createElement("w:commentRangeEnd");
     end.setAttribute("w:id", c_id);
     p.appendChild(end);
-    
+
     const ref_run = xmlDoc.createElement("w:r");
     const ref = xmlDoc.createElement("w:commentReference");
     ref.setAttribute("w:id", c_id);
@@ -428,10 +434,18 @@ describe("Resolved Bugs Core Engine Verification", () => {
 
     // Author B tries to modify Author A's pending insertion
     const engineB = new RedlineEngine(doc, "Author B");
-    
+
     expect(() => {
-      engineB.process_batch([{ type: "modify", target_text: "Inserted by A.", new_text: "Modified by B." }]);
-    }).toThrowError(/Accept that change first or scope your edit outside of it/);
+      engineB.process_batch([
+        {
+          type: "modify",
+          target_text: "Inserted by A.",
+          new_text: "Modified by B.",
+        },
+      ]);
+    }).toThrowError(
+      /Accept that change first or scope your edit outside of it/,
+    );
   });
 
   it("BUG-CROSS-PARA-1: Cross-paragraph modify coalesces paragraphs and tracks para-mark deletion", async () => {
@@ -452,7 +466,7 @@ describe("Resolved Bugs Core Engine Verification", () => {
 
     const buf = await doc.save();
     const cleanText = await extractTextFromBuffer(buf, true);
-    
+
     expect(cleanText).not.toContain("ends here.\n\n");
     expect(cleanText).toContain("Clause 1 ends here. MERGED here.");
   });
@@ -467,14 +481,15 @@ describe("Resolved Bugs Core Engine Verification", () => {
     engine.process_batch([
       {
         type: "modify",
-        target_text: "ends here.\n\nParagraph 2 is in the middle.\n\nParagraph 3 begins",
+        target_text:
+          "ends here.\n\nParagraph 2 is in the middle.\n\nParagraph 3 begins",
         new_text: "ends here. MERGED",
       },
     ]);
 
     engine.accept_all_revisions();
     const cleanText = await extractTextFromBuffer(await doc.save(), true);
-    
+
     expect(cleanText).not.toContain("Paragraph 2");
     expect(cleanText).toContain("Paragraph 1 ends here. MERGED here.");
   });

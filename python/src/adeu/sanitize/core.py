@@ -5,6 +5,7 @@ Coordinates the transform pipeline based on mode (full / keep-markup / baseline)
 and produces the sanitized DOCX + report.
 """
 
+from adeu.utils.docx import strip_bom_from_docx_bytes
 import enum
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -63,21 +64,6 @@ def sanitize_docx(
 ) -> SanitizeResult:
     """
     Sanitize a DOCX file.
-
-    Args:
-        input_path: Path to the input DOCX file.
-        output_path: Path for the output file. Defaults to <stem>_sanitized.docx.
-        keep_markup: Keep existing track changes and open comments.
-        baseline_path: Path to baseline document for delta recomputation.
-        author: Replace all author names with this value.
-        accept_all: Accept unresolved track changes (full sanitize only).
-
-    Returns:
-        SanitizeResult with status, counts, and report text.
-
-    Raises:
-        SanitizeError: If blocked (unresolved changes without --accept-all).
-        FileNotFoundError: If input or baseline file not found.
     """
     input_p = Path(input_path)
     if not input_p.exists():
@@ -106,7 +92,9 @@ def sanitize_docx(
 
     # Load document
     with open(input_p, "rb") as f:
-        doc = Document(BytesIO(f.read()))
+
+        sanitized_bytes = strip_bom_from_docx_bytes(f.read())
+        doc = Document(BytesIO(sanitized_bytes))
 
     # --- Mode-specific logic ---
 
@@ -226,16 +214,25 @@ def _sanitize_keep_markup(doc, report: SanitizeReport, *, author: Optional[str])
     remaining = transforms.get_comments_summary(doc)
     for c in remaining["comments"]:
         if not c["resolved"]:
-            report.kept_comment_lines.append(f'"{transforms._truncate(c["text"], 60)}" ({c["author"]})')
+            report.kept_comment_lines.append(
+                f'"{transforms._truncate(c["text"], 60)}" ({c["author"]})'
+            )
 
 
-def _sanitize_baseline(doc, input_path: str, baseline_path: str, report: SanitizeReport, *, author: Optional[str]):
+def _sanitize_baseline(
+    doc,
+    input_path: str,
+    baseline_path: str,
+    report: SanitizeReport,
+    *,
+    author: Optional[str],
+):
     """Recompute delta against baseline document."""
     # Step 1: Extract text from both documents
     with open(input_path, "rb") as f:
-        working_stream = BytesIO(f.read())
+        working_stream = BytesIO(strip_bom_from_docx_bytes(f.read()))
     with open(baseline_path, "rb") as f:
-        baseline_stream = BytesIO(f.read())
+        baseline_stream = BytesIO(strip_bom_from_docx_bytes(f.read()))
 
     working_text = extract_text_from_stream(
         BytesIO(working_stream.getvalue()),
@@ -254,7 +251,9 @@ def _sanitize_baseline(doc, input_path: str, baseline_path: str, report: Sanitiz
         longer = max(len(baseline_text), len(working_text))
         if longer > 0:
             # Count matching characters at same positions
-            matches = sum(1 for a, b in zip(baseline_text, working_text, strict=False) if a == b)
+            matches = sum(
+                1 for a, b in zip(baseline_text, working_text, strict=False) if a == b
+            )
             similarity = matches / longer
             if similarity < 0.5:
                 divergence_pct = int((1 - similarity) * 100)
@@ -302,20 +301,28 @@ def _sanitize_baseline(doc, input_path: str, baseline_path: str, report: Sanitiz
     # Identify comments unique to working doc
     baseline_texts = {info["text"] for info in baseline_comments.values()}
     new_comments = [
-        info for info in working_comments.values() if info["text"] not in baseline_texts and not info.get("resolved")
+        info
+        for info in working_comments.values()
+        if info["text"] not in baseline_texts and not info.get("resolved")
     ]
     removed_comments = [
-        info for info in working_comments.values() if info["text"] in baseline_texts or info.get("resolved")
+        info
+        for info in working_comments.values()
+        if info["text"] in baseline_texts or info.get("resolved")
     ]
 
     report.comments_kept = len(new_comments)
     report.comments_removed = len(removed_comments)
 
     for c in new_comments:
-        report.kept_comment_lines.append(f'"{transforms._truncate(c["text"], 60)}" ({c["author"]})')
+        report.kept_comment_lines.append(
+            f'"{transforms._truncate(c["text"], 60)}" ({c["author"]})'
+        )
     for c in removed_comments:
         status = "[Resolved]" if c.get("resolved") else "[Baseline]"
-        report.removed_comment_lines.append(f'{status} "{transforms._truncate(c["text"], 60)}" ({c["author"]})')
+        report.removed_comment_lines.append(
+            f'{status} "{transforms._truncate(c["text"], 60)}" ({c["author"]})'
+        )
 
     # We need to replace the doc object. Since we can't reassign it in the caller,
     # we'll modify the approach: return the stream and let caller handle it.

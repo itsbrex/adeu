@@ -12,7 +12,13 @@ def abstract_docx_xml(xml_str: str, filename: str) -> str:
     if "comments" in filename and filename.endswith(".xml"):
         # Matches <w:comments ...> or <w16cid:commentsIds ...>
         # Replaces with just the tag name <w:comments>
-        xml_str = re.sub(r"^(<[\w:]+)(\s+.*?)(\/?>)", r"\1\3", xml_str, count=1, flags=re.DOTALL | re.MULTILINE)
+        xml_str = re.sub(
+            r"^(<[\w:]+)(\s+.*?)(\/?>)",
+            r"\1\3",
+            xml_str,
+            count=1,
+            flags=re.DOTALL | re.MULTILINE,
+        )
 
     # 1. RSIDs - Remove completely (pure noise)
     xml_str = re.sub(r' w:rsid\w*="[^"]+"', "", xml_str)
@@ -60,6 +66,8 @@ def format_and_sort_xml(xml_bytes: bytes, filename: str) -> str:
     """
     Parses XML, Sorts Relationships if applicable, and Pretty Prints.
     """
+    if xml_bytes.startswith(b"\xef\xbb\xbf"):
+        xml_bytes = xml_bytes[3:]
     try:
         dom = parseString(xml_bytes)
 
@@ -80,20 +88,28 @@ def format_and_sort_xml(xml_bytes: bytes, filename: str) -> str:
         # Sort Relationships for deterministic diffing
         if filename.endswith(".rels"):
             rels_node = None
-            if dom.documentElement is not None and dom.documentElement.tagName == "Relationships":
+            if (
+                dom.documentElement is not None
+                and dom.documentElement.tagName == "Relationships"
+            ):
                 rels_node = dom.documentElement
 
             if rels_node:
                 children = []
                 for child in rels_node.childNodes:
-                    if child.nodeType == child.ELEMENT_NODE and child.tagName == "Relationship":
+                    if (
+                        child.nodeType == child.ELEMENT_NODE
+                        and child.tagName == "Relationship"
+                    ):
                         children.append(child)
 
                 for child in children:
                     rels_node.removeChild(child)
 
                 # Sort by Target first, then Type
-                children.sort(key=lambda x: (x.getAttribute("Target"), x.getAttribute("Type")))
+                children.sort(
+                    key=lambda x: (x.getAttribute("Target"), x.getAttribute("Type"))
+                )
 
                 for child in children:
                     rels_node.appendChild(child)
@@ -138,7 +154,9 @@ def get_abstracted_xml_snapshot(docx_path: str) -> str:
 
             # Normalize filename (comments1.xml -> comments.xml)
             display_name = re.sub(r"(comments.*?)\d+(\.xml)", r"\1\2", fname)
-            display_name = re.sub(r"(comments.*?)\d+(\.xml\.rels)", r"\1\2", display_name)
+            display_name = re.sub(
+                r"(comments.*?)\d+(\.xml\.rels)", r"\1\2", display_name
+            )
 
             snapshot_lines.append(f"=== FILE: {display_name} ===")
             snapshot_lines.append(abstracted)

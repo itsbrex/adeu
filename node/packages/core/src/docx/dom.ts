@@ -49,6 +49,10 @@ export function findAllDescendants(
  * Parses raw XML strings into xmldom Documents.
  */
 export function parseXml(xmlString: string): Document {
+  // Strip UTF-8 BOM if present
+  if (xmlString.startsWith("\uFEFF")) {
+    xmlString = xmlString.slice(1);
+  }
   return new DOMParser().parseFromString(xmlString, "text/xml");
 }
 
