@@ -27,6 +27,7 @@ from adeu.redline.engine import RedlineEngine
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_clean_docx(*paragraphs: str) -> io.BytesIO:
     """Returns a fresh DOCX BytesIO stream with no pre-existing comments part."""
     doc = Document()
@@ -78,15 +79,14 @@ def _extract_comments_xml(engine: RedlineEngine) -> bytes:
     buf.seek(0)
     with zipfile.ZipFile(buf) as z:
         name = _find_comments_part_name(z.namelist())
-        assert name is not None, (
-            f"No word/comments*.xml found in output. Parts: {z.namelist()}"
-        )
+        assert name is not None, f"No word/comments*.xml found in output. Parts: {z.namelist()}"
         return z.read(name)
 
 
 # ===========================================================================
 # Bug #1 (primary) — comments.xml missing xmlns:w14 on freshly created part
 # ===========================================================================
+
 
 class TestCommentsXmlNamespace:
     """
@@ -105,11 +105,15 @@ class TestCommentsXmlNamespace:
     def test_comments_xml_declares_w14_on_fresh_doc(self, tmp_path):
         buf = _make_clean_docx("The only paragraph in this document.")
         engine = RedlineEngine(buf, author="Test Author")
-        engine.apply_edits([ModifyText(
-            target_text="only",
-            new_text="only",
-            comment="Forces creation of comments.xml from scratch",
-        )])
+        engine.apply_edits(
+            [
+                ModifyText(
+                    target_text="only",
+                    new_text="only",
+                    comment="Forces creation of comments.xml from scratch",
+                )
+            ]
+        )
 
         comments_xml = _extract_comments_xml(engine)
 
@@ -121,11 +125,15 @@ class TestCommentsXmlNamespace:
     def test_comments_xml_passes_xmllint_on_fresh_doc(self, tmp_path):
         buf = _make_clean_docx("The only paragraph in this document.")
         engine = RedlineEngine(buf, author="Test Author")
-        engine.apply_edits([ModifyText(
-            target_text="only",
-            new_text="only",
-            comment="Forces creation of comments.xml from scratch",
-        )])
+        engine.apply_edits(
+            [
+                ModifyText(
+                    target_text="only",
+                    new_text="only",
+                    comment="Forces creation of comments.xml from scratch",
+                )
+            ]
+        )
 
         comments_xml = _extract_comments_xml(engine)
         result = _xmllint(comments_xml, tmp_path, "comments_fresh.xml")
@@ -140,11 +148,15 @@ class TestCommentsXmlNamespace:
         """
         buf = _make_clean_docx("Hello world, this is a roundtrip test.")
         engine = RedlineEngine(buf, author="Test Author")
-        engine.apply_edits([ModifyText(
-            target_text="Hello",
-            new_text="Hello",
-            comment="Roundtrip comment",
-        )])
+        engine.apply_edits(
+            [
+                ModifyText(
+                    target_text="Hello",
+                    new_text="Hello",
+                    comment="Roundtrip comment",
+                )
+            ]
+        )
 
         saved = engine.save_to_stream()
         saved.seek(0)
@@ -171,11 +183,7 @@ class TestCommentsXmlNamespace:
         doc_obj.add_paragraph("Anchor text for the legacy-part test.")
 
         # Inject a bare comments.xml that deliberately omits xmlns:w14
-        bare_xml = (
-            b'<w:comments'
-            b' xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-            b"</w:comments>"
-        )
+        bare_xml = b'<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"></w:comments>'
         pkg = doc_obj.part.package
         pn = pkg.next_partname("/word/comments%d.xml")
         part = XmlPart(pn, CT.WML_COMMENTS, parse_xml(bare_xml), pkg)
@@ -187,11 +195,15 @@ class TestCommentsXmlNamespace:
         buf.seek(0)
 
         engine = RedlineEngine(buf, author="Test Author")
-        engine.apply_edits([ModifyText(
-            target_text="Anchor",
-            new_text="Anchor",
-            comment="Comment added to doc with legacy bare comments part",
-        )])
+        engine.apply_edits(
+            [
+                ModifyText(
+                    target_text="Anchor",
+                    new_text="Anchor",
+                    comment="Comment added to doc with legacy bare comments part",
+                )
+            ]
+        )
 
         comments_xml = _extract_comments_xml(engine)
 
@@ -203,14 +215,14 @@ class TestCommentsXmlNamespace:
 
         result = _xmllint(comments_xml, tmp_path, "comments_legacy.xml")
         assert result.returncode == 0, (
-            f"BUG-23-1 (Python, legacy-part, xmllint): comments.xml fails XML "
-            f"validation:\n{result.stderr}"
+            f"BUG-23-1 (Python, legacy-part, xmllint): comments.xml fails XML validation:\n{result.stderr}"
         )
 
 
 # ===========================================================================
 # Bug #2 — Inserted runs inherit anchor paragraph's character formatting
 # ===========================================================================
+
 
 class TestInsertedRunFormatting:
     """
@@ -234,10 +246,14 @@ class TestInsertedRunFormatting:
         buf.seek(0)
 
         engine = RedlineEngine(buf, author="Test Author")
-        engine.apply_edits([ModifyText(
-            target_text="anchor",
-            new_text="plain",
-        )])
+        engine.apply_edits(
+            [
+                ModifyText(
+                    target_text="anchor",
+                    new_text="plain",
+                )
+            ]
+        )
 
         saved = engine.save_to_stream()
         saved.seek(0)
@@ -266,6 +282,7 @@ class TestInsertedRunFormatting:
 # ===========================================================================
 # Bug #3 — modify diff placement ignores new_text ordering
 # ===========================================================================
+
 
 class TestDiffPlacement:
     """
@@ -300,10 +317,7 @@ class TestDiffPlacement:
 
         # The inserted prefix must appear somewhere in the text
         inserted = re.search(r"\{\+\+red\s*\+\+\}", text)
-        assert inserted is not None, (
-            "BUG-23-3: Expected insertion of 'red' not found in output.\n"
-            f"Full text: {text!r}"
-        )
+        assert inserted is not None, f"BUG-23-3: Expected insertion of 'red' not found in output.\nFull text: {text!r}"
 
         # And it must appear BEFORE "fox" — guard that fox was not silently deleted
         fox_pos = text.find("fox")
@@ -331,25 +345,25 @@ class TestDiffPlacement:
         """
         buf = _make_clean_docx("Introduction paragraph.", "Conclusion paragraph.")
         engine = RedlineEngine(buf, author="Test Author")
-        engine.apply_edits([ModifyText(
-            target_text="Conclusion",
-            new_text="Summary\n\nConclusion",
-        )])
+        engine.apply_edits(
+            [
+                ModifyText(
+                    target_text="Conclusion",
+                    new_text="Summary\n\nConclusion",
+                )
+            ]
+        )
 
         saved = engine.save_to_stream()
         saved.seek(0)
         text = extract_text_from_stream(saved)
 
-        assert "Summary" in text, (
-            "BUG-23-3b: The inserted 'Summary' paragraph was lost entirely.\n"
-            f"Full text: {text!r}"
-        )
+        assert "Summary" in text, f"BUG-23-3b: The inserted 'Summary' paragraph was lost entirely.\nFull text: {text!r}"
 
         summary_pos = text.find("Summary")
         conclusion_pos = text.find("Conclusion")
         assert summary_pos < conclusion_pos, (
-            "BUG-23-3b: 'Summary' appears after 'Conclusion' in the output.\n"
-            f"Full text: {text!r}"
+            f"BUG-23-3b: 'Summary' appears after 'Conclusion' in the output.\nFull text: {text!r}"
         )
 
         between = text[summary_pos:conclusion_pos]
@@ -363,6 +377,7 @@ class TestDiffPlacement:
 # ===========================================================================
 # Bug #4 — Multi-paragraph target_text is silently corrupt or opaque error
 # ===========================================================================
+
 
 class TestMultiParagraphTarget:
     """
@@ -384,10 +399,14 @@ class TestMultiParagraphTarget:
 
         raised = None
         try:
-            engine.apply_edits([ModifyText(
-                target_text="First paragraph content.\n\nSecond paragraph content.",
-                new_text="Single replacement paragraph.",
-            )])
+            engine.apply_edits(
+                [
+                    ModifyText(
+                        target_text="First paragraph content.\n\nSecond paragraph content.",
+                        new_text="Single replacement paragraph.",
+                    )
+                ]
+            )
         except Exception as e:
             raised = e
 
@@ -430,6 +449,7 @@ class TestMultiParagraphTarget:
 # Bug #5 — Ambiguous-match check counts text inside w:del (tracked deletions)
 # ===========================================================================
 
+
 class TestAmbiguousMatchDel:
     """
     BUG-23-5: The ambiguity check counts occurrences of text inside w:del
@@ -449,29 +469,35 @@ class TestAmbiguousMatchDel:
 
         # Batch 1: uniquely delete the first occurrence
         engine1 = RedlineEngine(buf, author="Test Author")
-        engine1.apply_edits([ModifyText(
-            target_text="Context A: Dupe",
-            new_text="",
-        )])
+        engine1.apply_edits(
+            [
+                ModifyText(
+                    target_text="Context A: Dupe",
+                    new_text="",
+                )
+            ]
+        )
 
         saved1 = engine1.save_to_stream()
         saved1.seek(0)
 
         # Sanity: the first copy is inside a w:del
         text1 = extract_text_from_stream(saved1)
-        assert "{--Context A: Dupe--}" in text1, (
-            f"Test setup: expected tracked deletion, got: {text1!r}"
-        )
+        assert "{--Context A: Dupe--}" in text1, f"Test setup: expected tracked deletion, got: {text1!r}"
 
         saved1.seek(0)
         engine2 = RedlineEngine(saved1, author="Test Author")
 
         # Batch 2: only "Context B: Dupe" is live — this must NOT raise ambiguous-match
         try:
-            engine2.apply_edits([ModifyText(
-                target_text="Dupe",
-                new_text="Unique",
-            )])
+            engine2.apply_edits(
+                [
+                    ModifyText(
+                        target_text="Dupe",
+                        new_text="Unique",
+                    )
+                ]
+            )
         except Exception as e:
             pytest.fail(
                 "BUG-23-5: Modifying the only live 'Dupe' raised an error.\n"

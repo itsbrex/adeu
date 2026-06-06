@@ -57,6 +57,7 @@ MODEL_MAP = {
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _normalize_timestamps(text: str) -> str:
     return re.sub(r"@ \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", "@ DATE", text)
 
@@ -73,17 +74,11 @@ def _xmllint_check(xml_bytes: bytes, label: str, tmp_path: Path) -> None:
         )
     out = tmp_path / label
     out.write_bytes(xml_bytes)
-    result = subprocess.run(
-        ["xmllint", "--noout", str(out)], capture_output=True, text=True
-    )
-    assert result.returncode == 0, (
-        f"xmllint validation failed for {label}:\n{result.stderr}"
-    )
+    result = subprocess.run(["xmllint", "--noout", str(out)], capture_output=True, text=True)
+    assert result.returncode == 0, f"xmllint validation failed for {label}:\n{result.stderr}"
 
 
-def _validate_comments_xml_namespaces(
-    output_bytes: bytes, folder_name: str, tmp_path: Path
-) -> None:
+def _validate_comments_xml_namespaces(output_bytes: bytes, folder_name: str, tmp_path: Path) -> None:
     """
     For test scenarios with validate_comments_xml_namespaces=true:
     - Asserts that every comments-family XML part inside the output DOCX
@@ -108,15 +103,21 @@ def _validate_comments_xml_namespaces(
     with zipfile.ZipFile(io.BytesIO(output_bytes)) as z:
         for part_name in COMMENTS_PARTS:
             # Find potentially numbered variants, e.g. word/comments1.xml
-            matches = [n for n in z.namelist() if re.fullmatch(
-                part_name.replace("comments", "comments\\d*"), n
-            ) or n == part_name]
+            matches = [
+                n
+                for n in z.namelist()
+                if re.fullmatch(part_name.replace("comments", "comments\\d*"), n) or n == part_name
+            ]
             for match in matches:
                 xml_bytes = z.read(match)
 
                 # Only comments.xml carries w14:paraId / w14:textId — check it strictly.
-                if "comments.xml" in match and "Extended" not in match \
-                        and "Ids" not in match and "Extensible" not in match:
+                if (
+                    "comments.xml" in match
+                    and "Extended" not in match
+                    and "Ids" not in match
+                    and "Extensible" not in match
+                ):
                     for attr_bytes, uri in EXPECTED_NS.items():
                         assert attr_bytes in xml_bytes, (
                             f"[{folder_name}] {match}: {attr_bytes.decode()} not declared.\n"
@@ -132,6 +133,7 @@ def _validate_comments_xml_namespaces(
 # ---------------------------------------------------------------------------
 # Dynamic test generation from corpus
 # ---------------------------------------------------------------------------
+
 
 def _collect_test_cases():
     if not CORPUS_DIR.exists():
@@ -186,9 +188,7 @@ def test_corpus_scenario(test_dir: Path, tmp_path: Path):
         actual_xml = get_abstracted_xml_snapshot(str(tmp_path / "output.docx"))
         actual_xml = actual_xml.replace("\r\n", "\n")
         expected_xml = golden_xml_path.read_text(encoding="utf-8").replace("\r\n", "\n")
-        assert actual_xml == expected_xml, (
-            f"[{test_dir.name}] abstract XML does not match golden_abstract.xml"
-        )
+        assert actual_xml == expected_xml, f"[{test_dir.name}] abstract XML does not match golden_abstract.xml"
 
     # --- Raw markdown extraction golden comparison (optional) ---
     golden_raw = test_dir / "golden_raw.md"
@@ -197,9 +197,7 @@ def test_corpus_scenario(test_dir: Path, tmp_path: Path):
             extract_text_from_stream(io.BytesIO(output_bytes), clean_view=False)
         ).replace("\r\n", "\n")
         expected_raw = golden_raw.read_text(encoding="utf-8").replace("\r\n", "\n")
-        assert actual_raw == expected_raw, (
-            f"[{test_dir.name}] raw markdown does not match golden_raw.md"
-        )
+        assert actual_raw == expected_raw, f"[{test_dir.name}] raw markdown does not match golden_raw.md"
 
     # --- Clean markdown extraction golden comparison (optional) ---
     golden_clean = test_dir / "golden_clean.md"
@@ -208,6 +206,4 @@ def test_corpus_scenario(test_dir: Path, tmp_path: Path):
             extract_text_from_stream(io.BytesIO(output_bytes), clean_view=True)
         ).replace("\r\n", "\n")
         expected_clean = golden_clean.read_text(encoding="utf-8").replace("\r\n", "\n")
-        assert actual_clean == expected_clean, (
-            f"[{test_dir.name}] clean markdown does not match golden_clean.md"
-        )
+        assert actual_clean == expected_clean, f"[{test_dir.name}] clean markdown does not match golden_clean.md"
