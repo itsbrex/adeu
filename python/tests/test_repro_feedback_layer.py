@@ -93,9 +93,10 @@ def test_dry_run_does_not_mutate_and_reports_safely():
 
 
 def test_mcp_tool_feedback_formatting():
-    import tempfile
     import asyncio
+    import tempfile
     from unittest.mock import AsyncMock
+
     from adeu.mcp_components.tools.document import _process_document_batch_disk
 
     class DummyContext:
@@ -112,16 +113,18 @@ def test_mcp_tool_feedback_formatting():
 
     ctx = DummyContext()
     changes = [ModifyText(target_text="quick brown fox", new_text="fast red fox")]
-    
-    res = asyncio.run(_process_document_batch_disk(
-        original_docx_path=tmp_path,
-        author_name="Reviewer AI",
-        ctx=ctx,
-        changes=changes,
-        output_path=None,
-        dry_run=True
-    ))
-    
+
+    res = asyncio.run(
+        _process_document_batch_disk(
+            original_docx_path=tmp_path,
+            author_name="Reviewer AI",
+            ctx=ctx,
+            changes=changes,
+            output_path=None,
+            dry_run=True,
+        )
+    )
+
     assert "Dry-run simulation complete." in res
     assert "Detailed Edit Reports:" in res
     assert "✅ [applied]" in res
@@ -138,18 +141,20 @@ def test_preview_self_consistency():
     """
     stream = _build_simple_doc("ANCHOR_LINE governs the interpretation of this Agreement.")
     engine = RedlineEngine(stream, author="Reviewer AI")
-    
-    stats = engine.process_batch([
-        ModifyText(
-            target_text="ANCHOR_LINE governs the interpretation of this Agreement.",
-            new_text="NEW_PARA inserted before.\n\nANCHOR_LINE governs the interpretation of this Agreement."
-        )
-    ])
-    
+
+    stats = engine.process_batch(
+        [
+            ModifyText(
+                target_text="ANCHOR_LINE governs the interpretation of this Agreement.",
+                new_text="NEW_PARA inserted before.\n\nANCHOR_LINE governs the interpretation of this Agreement.",
+            )
+        ]
+    )
+
     out_doc = Document(engine.save_to_stream())
     clean_mapper = DocumentMapper(out_doc, clean_view=True)
     clean_doc_text = clean_mapper.full_text
-    
+
     preview_clean = stats["edits"][0]["clean_text"]
     assert preview_clean is not None
     preview_clean_stripped = preview_clean.strip(".")
@@ -164,42 +169,44 @@ def test_preview_no_garbling_duplicates():
     doc = Document()
     # Paragraph 1
     doc.add_paragraph("Payment Terms")
-    
+
     # Paragraph 2 (Deleted copy via raw w:delText)
     p2 = doc.add_paragraph()
     p2_xml = parse_xml(
         r'<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
         r'<w:del w:id="900" w:author="Reviewer" w:date="2026-06-01T00:00:00Z">'
-        r'<w:r>'
+        r"<w:r>"
         r'<w:delText xml:space="preserve">DUP_PHRASE shall be paid within thirty days of invoice.</w:delText>'
-        r'</w:r>'
-        r'</w:del>'
-        r'</w:p>'
+        r"</w:r>"
+        r"</w:del>"
+        r"</w:p>"
     )
     p2._element.getparent().replace(p2._element, p2_xml)
-    
+
     # Paragraph 3 (Live copy)
     doc.add_paragraph("DUP_PHRASE shall be paid within thirty days of invoice.")
-    
+
     # Paragraph 4 (Immediate neighbor)
     doc.add_paragraph("Late payments accrue interest at the statutory rate.")
-    
+
     stream = io.BytesIO()
     doc.save(stream)
     stream.seek(0)
-    
+
     engine = RedlineEngine(stream, author="Reviewer AI")
-    stats = engine.process_batch([
-        ModifyText(
-            target_text="DUP_PHRASE shall be paid within thirty days of invoice.",
-            new_text="DUP_PHRASE shall be paid within sixty days of invoice."
-        )
-    ])
-    
+    stats = engine.process_batch(
+        [
+            ModifyText(
+                target_text="DUP_PHRASE shall be paid within thirty days of invoice.",
+                new_text="DUP_PHRASE shall be paid within sixty days of invoice.",
+            )
+        ]
+    )
+
     out_doc = Document(engine.save_to_stream())
     clean_mapper = DocumentMapper(out_doc, clean_view=True)
     clean_doc_text = clean_mapper.full_text
-    
+
     preview_clean = stats["edits"][0]["clean_text"]
     assert preview_clean is not None
     preview_clean_stripped = preview_clean.strip(".")
