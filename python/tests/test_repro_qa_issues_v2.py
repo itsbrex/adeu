@@ -68,7 +68,7 @@ class TestQaIssuesV2:
 
         assert len(engine.comments_manager.extract_comments_data()) == 1
 
-        engine.accept_all_revisions()
+        engine.accept_all_revisions(remove_comments=True)
 
         assert len(engine.comments_manager.extract_comments_data()) == 0, (
             "Comments should be removed by accept_all_revisions"

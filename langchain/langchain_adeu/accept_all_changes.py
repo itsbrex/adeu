@@ -81,7 +81,7 @@ class AdeuAcceptAllChanges(BaseTool):
             stream = BytesIO(f.read())
 
         engine = RedlineEngine(stream)
-        engine.accept_all_revisions()
+        engine.accept_all_revisions(remove_comments=True)
 
         result_stream = engine.save_to_stream()
         target.parent.mkdir(parents=True, exist_ok=True)

@@ -14,16 +14,16 @@ class MockContext:
     """Mock FastMCP Context to absorb async logging calls during tests."""
 
     async def info(self, msg, **kwargs):
-        pass
+        print(f"INFO: {msg} {kwargs}")
 
     async def debug(self, msg, **kwargs):
-        pass
+        print(f"DEBUG: {msg} {kwargs}")
 
     async def warning(self, msg, **kwargs):
-        pass
+        print(f"WARNING: {msg} {kwargs}")
 
     async def error(self, msg, **kwargs):
-        pass
+        print(f"ERROR: {msg} {kwargs}")
 
 
 def test_repro_accept_all_changes_comment_leak(tmp_path):

@@ -44,6 +44,7 @@ export async function finalize_document(doc: DocumentObject, options: FinalizeOp
     const commentsSummary = transforms.get_comments_summary(doc);
     report.comments_removed = commentsSummary.total;
     report.add_transform_lines(transforms.remove_all_comments(doc));
+    transforms.eject_comment_parts(doc);
   } else if (options.sanitize_mode === 'keep-markup') {
     // Basic support for keep-markup in TS
     const counts = transforms.count_tracked_changes(doc);

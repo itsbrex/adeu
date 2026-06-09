@@ -271,15 +271,102 @@ export function remove_all_comments(doc: DocumentObject): string[] {
     cm.deleteComment(cId);
   }
 
-  for (const tag of ['w:commentRangeStart', 'w:commentRangeEnd', 'w:commentReference']) {
+  for (const tag of ['w:commentRangeStart', 'w:commentRangeEnd']) {
     for (const el of findAllDescendants(doc.element, tag)) {
       el.parentNode?.removeChild(el);
+    }
+  }
+
+  const refs = findAllDescendants(doc.element, 'w:commentReference');
+  for (const ref of refs) {
+    const parent = ref.parentNode as Element | null;
+    if (parent) {
+      if (parent.tagName === 'w:r' || parent.tagName.endsWith(':r')) {
+        const nonRprChildren = Array.from(parent.childNodes).filter(
+          (c) => c.nodeType === 1 && (c as Element).tagName !== 'w:rPr' && (c as Element).tagName !== 'rPr'
+        );
+        if (nonRprChildren.length <= 1) {
+          parent.parentNode?.removeChild(parent);
+        } else {
+          parent.removeChild(ref);
+        }
+      } else {
+        parent.removeChild(ref);
+      }
     }
   }
 
   const resolvedCount = Object.values(data).filter(c => c.resolved).length;
   const openCount = Object.values(data).filter(c => !c.resolved).length;
   return [`Comments removed: ${keys.length} (${resolvedCount} resolved, ${openCount} open)`].concat(lines);
+}
+
+export function eject_comment_parts(doc: DocumentObject) {
+  const pkg = doc.pkg;
+  
+  // 1. Find all comment-related partnames
+  const comment_partnames = new Set<string>();
+  for (const part of pkg.parts) {
+    if (part.partname.toLowerCase().includes("comments")) {
+      comment_partnames.add(part.partname);
+      const withSlash = part.partname.startsWith("/") ? part.partname : "/" + part.partname;
+      const withoutSlash = part.partname.startsWith("/") ? part.partname.substring(1) : part.partname;
+      comment_partnames.add(withSlash);
+      comment_partnames.add(withoutSlash);
+    }
+  }
+
+  if (comment_partnames.size === 0) return;
+
+  // 2. Sever relationships referencing these parts from all parts in the package
+  for (const part of pkg.parts) {
+    if (part.partname.endsWith(".rels")) {
+      const rels = findAllDescendants(part._element, "Relationship");
+      const toRemove: Element[] = [];
+      for (const rel of rels) {
+        const target = rel.getAttribute("Target") || "";
+        if (target.toLowerCase().includes("comments")) {
+          toRemove.push(rel);
+          
+          const sourcePath = part.partname.replace("/_rels/", "/").replace(".rels", "");
+          const sourcePart = pkg.getPartByPath(sourcePath);
+          if (sourcePart) {
+            const relId = rel.getAttribute("Id");
+            if (relId) sourcePart.rels.delete(relId);
+          }
+        }
+      }
+      for (const relEl of toRemove) {
+        relEl.parentNode?.removeChild(relEl);
+      }
+    }
+  }
+
+  // 3. Remove overrides from [Content_Types].xml
+  const ctPart = pkg.getPartByPath("[Content_Types].xml");
+  if (ctPart) {
+    const overrides = findAllDescendants(ctPart._element, "Override");
+    const toRemove: Element[] = [];
+    for (const override of overrides) {
+      const partName = override.getAttribute("PartName") || "";
+      if (comment_partnames.has(partName) || partName.toLowerCase().includes("comments")) {
+        toRemove.push(override);
+      }
+    }
+    for (const overrideEl of toRemove) {
+      overrideEl.parentNode?.removeChild(overrideEl);
+    }
+  }
+
+  // 4. Remove comment parts from pkg.parts
+  pkg.parts = pkg.parts.filter(p => !p.partname.toLowerCase().includes("comments"));
+
+  // 5. Remove comment files from pkg.unzipped as well
+  for (const key of Object.keys(pkg.unzipped)) {
+    if (key.toLowerCase().includes("comments")) {
+      delete pkg.unzipped[key];
+    }
+  }
 }
 
 export function replace_comment_authors(doc: DocumentObject, newAuthor: string): string[] {

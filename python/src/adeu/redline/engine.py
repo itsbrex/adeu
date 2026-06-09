@@ -2684,7 +2684,7 @@ class RedlineEngine:
         new_end.addnext(ref_run)
 
     # FILE: src/adeu/redline/engine.py
-    def accept_all_revisions(self):
+    def accept_all_revisions(self, remove_comments: bool = False):
         parts_to_process = [self.doc.element]
 
         for part in self.doc.part.package.parts:
@@ -2761,38 +2761,64 @@ class RedlineEngine:
                     else:
                         parent.remove(d)
 
-        # Final pass: remove any comments that survived the tracked-change
-        # sweeps. accept_all_revisions semantically means "produce a finalized
-        # clean document" (per the tool docstring), so free-standing comments
-        # — those not tightly wrapping an accepted/rejected revision — must
-        # also be removed.
-        #
-        # We discover comment IDs by scanning the main document body for
-        # commentRangeStart / commentRangeEnd / commentReference anchors. The
-        # comments part itself is the source of truth for what exists, so we
-        # also harvest any remaining <w:comment w:id="..."> entries directly
-        # to handle the (rare) case where a comment exists in comments.xml
-        # without a body anchor.
-        comment_ids: set[str] = set()
-        body_root = self.doc.element
-        for tag in ("w:commentRangeStart", "w:commentRangeEnd", "w:commentReference"):
-            for node in body_root.findall(f".//{qn(tag)}"):
-                cid = node.get(qn("w:id"))
-                if cid:
-                    comment_ids.add(cid)
+        # Final pass: remove all comments and eject the comment parts/relationships.
+        # accept_all_revisions semantically means "produce a finalized clean document"
+        # (per the tool docstring), so all comments (including free-standing ones)
+        # must be removed completely when remove_comments is True.
+        if remove_comments:
+            # 1. Strip all in-body comment anchors and reference runs from all parts to process
+            for root_element in parts_to_process:
+                for tag in ("w:commentRangeStart", "w:commentRangeEnd"):
+                    for el in root_element.findall(f".//{qn(tag)}"):
+                        parent = el.getparent()
+                        if parent is not None:
+                            parent.remove(el)
 
-        comments_part = self.comments_manager._get_existing_part_by_type(
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"
-        )
-        if comments_part is not None:
-            if hasattr(comments_part, "element"):
-                comments_root = comments_part.element
-            else:
-                comments_root = parse_xml(comments_part.blob)
-            for c in comments_root.findall(qn("w:comment")):
-                cid = c.get(qn("w:id"))
-                if cid:
-                    comment_ids.add(cid)
+                for ref in list(root_element.findall(f".//{qn('w:commentReference')}")):
+                    parent = ref.getparent()
+                    if parent is not None:
+                        if parent.tag == qn("w:r"):
+                            grandparent = parent.getparent()
+                            if grandparent is not None:
+                                non_rpr_children = [c for c in list(parent) if c.tag != qn("w:rPr")]
+                                if len(non_rpr_children) <= 1:
+                                    grandparent.remove(parent)
+                                else:
+                                    parent.remove(ref)
+                            else:
+                                parent.remove(ref)
+                        else:
+                            parent.remove(ref)
 
-        for cid in comment_ids:
-            self.comments_manager.delete_comment(cid)
+            # 2. Completely eject all comment XML parts and relationships from the package
+            pkg = self.doc.part.package
+            comment_partnames = set()
+            for part in pkg.parts:
+                if str(part.partname).startswith("/word/comments"):
+                    comment_partnames.add(part.partname)
+
+            if comment_partnames:
+                # Sever relationships from package root rels
+                root_rels_to_remove = [
+                    rId
+                    for rId, rel in pkg.rels.items()
+                    if not rel.is_external and getattr(rel.target_part, "partname", None) in comment_partnames
+                ]
+                for rId in root_rels_to_remove:
+                    del pkg.rels[rId]
+
+                # Sever relationships from all other parts (including main document part)
+                for part in pkg.parts:
+                    part_rels_to_remove = [
+                        rId
+                        for rId, rel in part.rels.items()
+                        if not rel.is_external and getattr(rel.target_part, "partname", None) in comment_partnames
+                    ]
+                    for rId in part_rels_to_remove:
+                        del part.rels[rId]
+
+                # Remove from package parts list in-place
+                if hasattr(pkg, "_parts") and isinstance(pkg._parts, list):
+                    pkg._parts[:] = [p for p in pkg._parts if p.partname not in comment_partnames]
+                elif hasattr(pkg, "parts") and isinstance(pkg.parts, list):
+                    pkg.parts[:] = [p for p in pkg.parts if p.partname not in comment_partnames]

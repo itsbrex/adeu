@@ -333,7 +333,7 @@ async def accept_all_changes(
         engine = RedlineEngine(stream)
 
         await ctx.debug("Engine loaded, executing accept_all_revisions()")
-        engine.accept_all_revisions()
+        engine.accept_all_revisions(remove_comments=True)
 
         if not output_path:
             p = Path(docx_path)

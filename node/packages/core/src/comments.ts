@@ -292,7 +292,7 @@ export class CommentsManager {
   }
 
   public deleteComment(commentId: string) {
-    if (!this._commentsPart) return;
+    if (!this.commentsPart) return;
 
     let commentEl: Element | null = null;
     for (const c of findAllDescendants(this._commentsPart._element, 'w:comment')) {
