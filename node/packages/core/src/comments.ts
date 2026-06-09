@@ -33,27 +33,27 @@ export class CommentsManager {
 
   constructor(public doc: DocumentObject) {}
 
-  public get commentsPart() {
+  public get commentsPart(): Part {
     if (!this._commentsPart) {
       this._commentsPart = this._getOrCreateCommentsPart();
       this._ensureNamespaces();
     }
-    return this._commentsPart;
+    return this._commentsPart!;
   }
 
-  public get extendedPart() {
+  public get extendedPart(): Part {
     if (!this._extendedPart) this._extendedPart = this._getOrCreateExtendedPart();
-    return this._extendedPart;
+    return this._extendedPart!;
   }
 
-  public get idsPart() {
+  public get idsPart(): Part {
     if (!this._idsPart) this._idsPart = this._getOrCreateIdsPart();
-    return this._idsPart;
+    return this._idsPart!;
   }
 
-  public get extensiblePart() {
+  public get extensiblePart(): Part {
     if (!this._extensiblePart) this._extensiblePart = this._getOrCreateExtensiblePart();
-    return this._extensiblePart;
+    return this._extensiblePart!;
   }
 
   public get nextId(): number {
@@ -295,7 +295,7 @@ export class CommentsManager {
     if (!this.commentsPart) return;
 
     let commentEl: Element | null = null;
-    for (const c of findAllDescendants(this._commentsPart._element, 'w:comment')) {
+    for (const c of findAllDescendants(this.commentsPart._element, 'w:comment')) {
       if (c.getAttribute('w:id') === commentId) {
         commentEl = c;
         break;
@@ -323,7 +323,7 @@ export class CommentsManager {
           if (child.getAttribute('w15:paraIdParent') === paraId) {
             const childParaId = child.getAttribute('w15:paraId');
             if (childParaId) {
-              for (const c of findAllDescendants(this._commentsPart._element, 'w:comment')) {
+              for (const c of findAllDescendants(this.commentsPart._element, 'w:comment')) {
                 for (const p of findAllDescendants(c, 'w:p')) {
                   if (p.getAttribute('w14:paraId') === childParaId) {
                     const cid = c.getAttribute('w:id');

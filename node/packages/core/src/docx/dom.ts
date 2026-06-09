@@ -53,7 +53,7 @@ export function parseXml(xmlString: string): Document {
   if (xmlString.startsWith("\uFEFF")) {
     xmlString = xmlString.slice(1);
   }
-  return new DOMParser().parseFromString(xmlString, "text/xml");
+  return new DOMParser().parseFromString(xmlString, "text/xml") as unknown as Document;
 }
 
 /**
@@ -61,7 +61,7 @@ export function parseXml(xmlString: string): Document {
  * enforcing deterministic attribute ordering on the root element.
  */
 export function serializeXml(node: Node): string {
-  let xml = new XMLSerializer().serializeToString(node);
+  let xml = new XMLSerializer().serializeToString(node as any);
 
   // BUG-11: Deterministic namespace ordering on root elements.
   const rootTagRegex = /<([a-zA-Z0-9_:]+)(\s+[^>]+?)(>|\/>)/;

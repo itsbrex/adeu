@@ -20,7 +20,7 @@ function createMockDoc(bodyXml: string): DocumentObject {
   const part = new Part(
     "/word/document.xml",
     fullXml,
-    doc.documentElement,
+    doc.documentElement! as unknown as Element,
     "application/xml",
   );
   pkg.parts.push(part);
@@ -93,11 +93,11 @@ describe("Sanitize Transforms", () => {
     const appEl = new DOMParser().parseFromString(
       appXml,
       "text/xml",
-    ).documentElement;
+    ).documentElement!;
     const appPart = new Part(
       "/docProps/app.xml",
       appXml,
-      appEl,
+      appEl as unknown as Element,
       "application/xml",
     );
     doc.pkg.parts.push(appPart);
@@ -124,7 +124,7 @@ describe("Sanitize Transforms", () => {
     const customPart = new Part(
       "/customXml/item1.xml",
       "<t/>",
-      new DOMParser().parseFromString("<t/>", "text/xml").documentElement,
+      new DOMParser().parseFromString("<t/>", "text/xml").documentElement! as unknown as Element,
       "application/xml",
     );
     doc.pkg.parts.push(customPart);
@@ -176,11 +176,11 @@ describe("Finalize Document (Core)", () => {
     const settingsEl = new DOMParser().parseFromString(
       settingsXml,
       "text/xml",
-    ).documentElement;
+    ).documentElement!;
     const settingsPart = new Part(
       "/word/settings.xml",
       settingsXml,
-      settingsEl,
+      settingsEl as unknown as Element,
       "application/xml",
     );
     doc.pkg.parts.push(settingsPart);
