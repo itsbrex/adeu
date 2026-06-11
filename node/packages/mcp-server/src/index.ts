@@ -312,10 +312,18 @@ server.registerTool(
         .boolean()
         .optional()
         .default(false)
-        .describe("If True, simulates the changes and returns a detailed preview report without modifying any files."),
+        .describe(
+          "If True, simulates the changes and returns a detailed preview report without modifying any files.",
+        ),
     },
   },
-  async ({ original_docx_path, author_name, changes, output_path, dry_run }) => {
+  async ({
+    original_docx_path,
+    author_name,
+    changes,
+    output_path,
+    dry_run,
+  }) => {
     try {
       if (!author_name || !author_name.trim())
         return {
@@ -547,7 +555,15 @@ server.registerTool(
 );
 server.registerTool(
   "login_to_adeu_cloud",
-  { description: "Logs the user into the Adeu Cloud backend." },
+  {
+    description:
+      "Logs the user into Adeu Cloud. Opens a browser window for SSO authentication.\n\n" +
+      "IMPORTANT — login is user-level, not account-level:\n" +
+      "- An Adeu user can have multiple linked provider accounts (Microsoft, Google) and multiple mailboxes (personal + shared/delegated). One linked account is marked primary.\n" +
+      "- Signing in through ANY of the user's linked accounts authenticates the same Adeu user. Once logged in, the session can read from and draft in ALL of that user's linked accounts and ALL of their mailboxes — not just the one used to sign in.\n" +
+      "- The choice of which provider account to sign in through is purely an SSO mechanism; it does not select a 'current account' for the session.\n\n" +
+      "When the user asks which accounts or mailboxes are available, call `list_available_mailboxes` rather than naming a single account from the login response.",
+  },
   async () => {
     try {
       return (await login_to_adeu_cloud()) as any;
@@ -605,9 +621,9 @@ server.registerTool(
   "list_available_mailboxes",
   {
     description:
-      "Lists all personal and shared delegated mailboxes the authenticated user has access to. Returns each mailbox's `email_address`, `display_name`, auto-processing settings, and write-back preference.\n\n" +
-      "Call this FIRST when the user mentions a specific mailbox or shared inbox by name, to resolve the canonical `email_address`. Then pass that address as `mailbox_address` to `search_and_fetch_emails` or `create_email_draft` to scope the operation.\n\n" +
-      "Omitting `mailbox_address` on those tools targets the user's primary personal mailbox.",
+      "Lists all personal and shared/delegated mailboxes the authenticated Adeu user has access to, across ALL of their linked provider accounts. Returns each mailbox's `email_address`, `display_name`, auto-processing settings, and write-back preference.\n\n" +
+      "This is the right tool to answer 'which accounts/mailboxes am I logged into?' — Adeu login is user-level, so a single MCP session can see every mailbox listed here regardless of which provider account was used for SSO.\n\n" +
+      "Call this FIRST when the user names a specific mailbox or shared inbox, to resolve the canonical `email_address`. Then pass that address as `mailbox_address` to `search_and_fetch_emails` or `create_email_draft` to scope the operation. Omitting `mailbox_address` on those tools targets the user's primary personal mailbox.",
     inputSchema: {},
   },
   async () => {
@@ -637,7 +653,8 @@ export function formatBatchResult(
     res += "\nDetailed Edit Reports:\n";
     for (let i = 0; i < stats.edits.length; i++) {
       const report = stats.edits[i];
-      const status_indicator = report.status === "applied" ? "✅ [applied]" : "❌ [failed]";
+      const status_indicator =
+        report.status === "applied" ? "✅ [applied]" : "❌ [failed]";
       res += `Edit ${i + 1} ${status_indicator}:\n`;
       res += `  Target: '${report.target_text}'\n`;
       res += `  New text: '${report.new_text}'\n`;

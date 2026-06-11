@@ -12,7 +12,19 @@ from adeu.mcp_components.shared import BACKEND_URL
 
 
 @tool(
-    description="Logs the user into the Adeu Cloud backend. Securely opens a browser window for authentication.",
+    description=(
+        "Logs the user into Adeu Cloud. Opens a browser window for SSO authentication.\n\n"
+        "IMPORTANT — login is user-level, not account-level:\n"
+        "- An Adeu user can have multiple linked provider accounts (Microsoft, Google) and "
+        "multiple mailboxes (personal + shared/delegated). One linked account is marked primary.\n"
+        "- Signing in through ANY of the user's linked accounts authenticates the same Adeu user. "
+        "Once logged in, the session can read from and draft in ALL of that user's linked accounts "
+        "and ALL of their mailboxes — not just the one used to sign in.\n"
+        "- The choice of which provider account to sign in through is purely an SSO mechanism; it "
+        "does not select a 'current account' for the session.\n\n"
+        "When the user asks which accounts or mailboxes are available, call `list_available_mailboxes` "
+        "rather than naming a single account from the login response."
+    ),
     annotations={"openWorldHint": True},
 )
 async def login_to_adeu_cloud(ctx: Context) -> str:
@@ -43,7 +55,14 @@ async def login_to_adeu_cloud(ctx: Context) -> str:
                     "Login successful",
                     extra={"email": email},
                 )
-                return f"Login successful! Connected to Adeu Cloud as: {email}."
+                return (
+                    f"Login successful. You are now authenticated to Adeu Cloud as the user "
+                    f"who owns the provider account `{email}` (the account used for SSO).\n\n"
+                    f"This single login grants access to ALL of this user's linked provider "
+                    f"accounts and ALL of their mailboxes for the duration of this session — "
+                    f"not just `{email}`. Call `list_available_mailboxes` to see every mailbox "
+                    f"that can be queried or drafted from."
+                )
 
         except urllib.error.HTTPError as e:
             if e.code == 401:

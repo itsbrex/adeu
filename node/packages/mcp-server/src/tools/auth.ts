@@ -24,11 +24,18 @@ export async function login_to_adeu_cloud(): Promise<ToolResult> {
     if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
 
     const data: any = await res.json();
+    const email = data.email || "Unknown Email";
     return {
       content: [
         {
           type: "text",
-          text: `Login successful! Connected to Adeu Cloud as: ${data.email || "Unknown Email"}.`,
+          text:
+            `Login successful. You are now authenticated to Adeu Cloud as the user ` +
+            `who owns the provider account \`${email}\` (the account used for SSO).\n\n` +
+            `This single login grants access to ALL of this user's linked provider ` +
+            `accounts and ALL of their mailboxes for the duration of this session — ` +
+            `not just \`${email}\`. Call \`list_available_mailboxes\` to see every mailbox ` +
+            `that can be queried or drafted from.`,
         },
       ],
     };

@@ -324,12 +324,16 @@ def _get_unique_filepath(save_dir: Path, filename: str) -> Path:
 
 @tool(
     description=(
-        "Lists all personal and shared delegated mailboxes the authenticated user has access to. "
-        "Returns each mailbox's email_address, display_name, auto-processing settings, and write-back preference.\n\n"
-        "Call this FIRST when the user mentions a specific mailbox or shared inbox by name, to resolve "
-        "the canonical email_address. Then pass that address as `mailbox_address` to "
-        "`search_and_fetch_emails` or `create_email_draft` to scope the operation.\n\n"
-        "Omitting `mailbox_address` on those tools targets the user's primary personal mailbox."
+        "Lists all personal and shared/delegated mailboxes the authenticated Adeu user has access to, "
+        "across ALL of their linked provider accounts. Returns each mailbox's email_address, "
+        "display_name, auto-processing settings, and write-back preference.\n\n"
+        "This is the right tool to answer 'which accounts/mailboxes am I logged into?' — Adeu login "
+        "is user-level, so a single MCP session can see every mailbox listed here regardless of which "
+        "provider account was used for SSO.\n\n"
+        "Call this FIRST when the user names a specific mailbox or shared inbox, to resolve the "
+        "canonical email_address. Then pass that address as `mailbox_address` to "
+        "`search_and_fetch_emails` or `create_email_draft` to scope the operation. Omitting "
+        "`mailbox_address` on those tools targets the user's primary personal mailbox."
     ),
     annotations={"readOnlyHint": True},
 )
