@@ -25,7 +25,7 @@ export class Adeu implements INodeType {
       "Operate on Microsoft Word (.docx) files: extract LLM-friendly Markdown with CriticMarkup, apply tracked changes and comments, generate sub-word diffs, and sanitize/finalize documents. " +
       "Four operations on the Document resource: " +
       "(1) Extract Markdown — project a .docx into Markdown plus a Semantic Appendix (defined terms, cross-references, typos); toggle Clean View to simulate Accept All. " +
-      "(2) Apply Edits — apply a JSON array of DocumentChange objects as native Word tracked changes; the entire batch is pre-validated atomically and rejected if any single edit is invalid. " +
+      "(2) Apply Edits — apply a JSON array of DocumentChange objects as native Word tracked changes; the entire batch is pre-validated atomically and rejected if any single edit is invalid. Supports a Dry Run flag that previews edits without committing them, returning a per-edit report with CriticMarkup context snippets so an AI Agent can self-correct anchor mistakes before issuing a real call. " +
       "(3) Generate Diff — produce a @@ Word Patch @@ sub-word level diff between two .docx files. " +
       "(4) Finalize Document — strip metadata, optionally accept all pending markup, and optionally lock the file read-only. " +
       "DocumentChange schema (used by Apply Edits): each object has a 'type' field discriminator. " +

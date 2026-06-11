@@ -23,7 +23,7 @@ export const documentDescription: INodeProperties[] = [
         value: "applyEdits",
         action: "Apply a batch of tracked changes to the document",
         description:
-          "Apply a JSON array of DocumentChange objects (modify, accept, reject, reply, insert_row, delete_row) as native Word tracked changes and comments. The whole batch is pre-validated atomically: if any single edit is invalid, the entire batch is rejected and the document is left untouched.",
+          "Apply a JSON array of DocumentChange objects (modify, accept, reject, reply, insert_row, delete_row) as native Word tracked changes and comments. The whole batch is pre-validated atomically: if any single edit is invalid, the entire batch is rejected and the document is left untouched. Supports a Dry Run mode for previewing edits — when enabled, the engine returns a per-edit report (status, CriticMarkup preview, errors, warnings) without modifying the document or producing a redlined binary.",
       },
       {
         name: "Extract Markdown",
