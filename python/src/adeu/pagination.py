@@ -412,7 +412,7 @@ def build_appendix_pointer(file_path: str, has_appendix: bool, is_cli: bool = Fa
             "\n\n---\n\n"
             "> **Appendix available.** This document has structural metadata "
             "(defined terms, cross-references, bookmarks, diagnostics) that may "
-            "be relevant when editing. Run `{cmd}` "
+            f"be relevant when editing. Run `{cmd}` "
             "to load it before submitting edits."
         )
     return (

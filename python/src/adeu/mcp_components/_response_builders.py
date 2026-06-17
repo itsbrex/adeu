@@ -117,6 +117,7 @@ def render_outline_tree(
             lines.append(f"{prefix} {node.text} ({meta})")
         else:
             lines.append(f"{prefix} {node.text} (p{node.page})")
+    return "\n".join(lines)
 
 
 def build_paginated_response(text: str, page: int, file_path: str, is_cli: bool = False) -> ToolResult:
@@ -283,7 +284,8 @@ def build_appendix_response(text: str, page: int, file_path: str, is_cli: bool =
             cmd = f"adeu extract {file_path} --mode appendix --page {selected.page + 1}"
             footer = (
                 (
-                    f"\n\n---\n\n> **Continues on appendix page {selected.page + 1} of {selected.total_pages}.** Run `{cmd}` for the next page."
+                    f"\n\n---\n\n> **Continues on appendix page {selected.page + 1} "
+                    f"of {selected.total_pages}.** Run `{cmd}` for the next page."
                 )
                 if selected.has_next
                 else ""
