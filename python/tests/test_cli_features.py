@@ -431,6 +431,7 @@ def test_cli_version(capsys):
     from unittest.mock import patch
 
     from adeu.cli import main
+    from adeu.mcp_components.shared import get_build_info
 
     test_args = ["adeu", "--version"]
     with patch.object(sys, "argv", test_args):
@@ -441,6 +442,9 @@ def test_cli_version(capsys):
     captured = capsys.readouterr()
     output = captured.out or captured.err
     assert "adeu" in output
-    assert "1.10.1" in output
+
+    # Assert against the dynamically resolved version to avoid hardcoding stale versions
+    version, _, _ = get_build_info()
+    assert version in output
     assert "+" in output
     assert "unknown" not in output
