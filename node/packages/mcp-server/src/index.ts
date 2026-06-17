@@ -226,16 +226,16 @@ registerAppTool(
           outline_verbose,
           extract_res.paragraph_offsets,
         );
-        return appendBuildStamp(res) as any;
+        return res as any;
       }
 
       const text = await extractTextFromBuffer(buf, clean_view);
       if (mode === "appendix") {
         const res = build_appendix_response(text, page, file_path);
-        return appendBuildStamp(res) as any;
+        return res as any;
       }
       const res = build_paginated_response(text, page, file_path);
-      return appendBuildStamp(res) as any;
+      return res as any;
     } catch (e: any) {
       return {
         isError: true,
@@ -250,24 +250,6 @@ registerAppTool(
   },
 );
 
-function appendBuildStamp(result: any): any {
-  const gitSha = process.env.GIT_SHA || "unknown";
-  const buildTs = process.env.BUILD_TIMESTAMP || "unknown";
-  const debugFooter = `\n\n[Debug] build=${gitSha}@${buildTs}`;
-  if (result && result.content && Array.isArray(result.content)) {
-    for (const item of result.content) {
-      if (item.type === "text") {
-        item.text += debugFooter;
-      }
-    }
-  }
-  if (result && result.structuredContent && typeof result.structuredContent === "object") {
-    if (typeof result.structuredContent.markdown === "string") {
-      result.structuredContent.markdown += debugFooter;
-    }
-  }
-  return result;
-}
 
 server.registerTool(
   "server_info",

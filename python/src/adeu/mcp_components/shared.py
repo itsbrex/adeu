@@ -27,24 +27,27 @@ def read_file_bytes(path: str) -> BytesIO:
 
 
 def add_timing_if_debug(start_time: float, result: Any) -> Any:
-    """Appends execution time to the tool result if ADEU_ENABLE_TEST_TOOLS is active."""
+    """Appends execution time and build stamp to the tool result if ADEU_ENABLE_TEST_TOOLS is active."""
     if os.getenv("ADEU_ENABLE_TEST_TOOLS") not in ("1", "true", "True", "yes"):
         return result
 
     elapsed = time.perf_counter() - start_time
-    timing_msg = f"\n\n[Debug] Tool execution time: {elapsed:.3f}s"
+    git_sha = os.getenv("GIT_SHA", "unknown")
+    build_ts = os.getenv("BUILD_TIMESTAMP", "unknown")
+
+    debug_msg = f"\n\n[Debug] Tool execution time: {elapsed:.3f}s\n\n[Debug] build={git_sha}@{build_ts}"
 
     if isinstance(result, str):
-        return result + timing_msg
+        return result + debug_msg
     elif hasattr(result, "content") and hasattr(result, "structured_content"):
         # Handle ToolResult via duck typing to avoid circular imports
         if isinstance(result.content, str):
-            result.content += timing_msg
+            result.content += debug_msg
         if isinstance(result.structured_content, dict) and "markdown" in result.structured_content:
-            result.structured_content["markdown"] += timing_msg
+            result.structured_content["markdown"] += debug_msg
     elif isinstance(result, dict) and "report_text" in result:
         # Handle dicts from tools like sanitize
-        result["report_text"] += timing_msg
+        result["report_text"] += debug_msg
 
     return result
 
