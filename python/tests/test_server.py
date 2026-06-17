@@ -72,13 +72,28 @@ def test_read_docx_debug_mode(sample_docx):
         result = asyncio.run(read_docx(file_path=sample_docx, ctx=ctx, clean_view=False))
         assert "[Debug]" not in result.structured_content["markdown"]
 
-    # 2. When ADEU_ENABLE_TEST_TOOLS is enabled, [Debug] timing string and build stamp should be appended
+    # 2. When ADEU_ENABLE_TEST_TOOLS is enabled, [Debug] timing string should be appended, but NOT [Debug] build stamp
     with patch.dict(
         os.environ, {"ADEU_ENABLE_TEST_TOOLS": "true", "GIT_SHA": "test_sha", "BUILD_TIMESTAMP": "test_ts"}
     ):
         result = asyncio.run(read_docx(file_path=sample_docx, ctx=ctx, clean_view=False))
         assert "[Debug] Tool execution time" in result.structured_content["markdown"]
-        assert "[Debug] build=test_sha@test_ts" in result.structured_content["markdown"]
+        assert "[Debug] build=" not in result.structured_content["markdown"]
+
+
+def test_python_server_version_and_descriptions():
+    import asyncio
+
+    from adeu.server import mcp
+
+    # 1. Verify mcp server version is loaded properly
+    assert mcp.version is not None
+    assert mcp.version != "unknown"
+
+    # 2. Verify tool descriptions contain the build/version tag
+    tools = asyncio.run(mcp.list_tools())
+    read_docx_tool = next(t for t in tools if t.name == "read_docx")
+    assert "[Adeu v" in read_docx_tool.description
 
 
 def test_read_docx_file_not_found():

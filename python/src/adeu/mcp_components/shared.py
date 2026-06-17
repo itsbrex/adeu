@@ -26,16 +26,91 @@ def read_file_bytes(path: str) -> BytesIO:
         return BytesIO(f.read())
 
 
+def get_build_info() -> tuple[str, str, str]:
+    """Retrieves version, git short SHA, and build timestamp dynamically."""
+    import subprocess
+
+    # 1. Resolve package version
+    version = "unknown"
+    # Try importlib.metadata first
+    try:
+        import importlib.metadata
+
+        version = importlib.metadata.version("adeu")
+    except Exception:
+        pass
+
+    # If unknown or in local dev, try reading pyproject.toml
+    if version == "unknown" or os.environ.get("ADEU_DEV_MODE") == "1":
+        try:
+            # Look for pyproject.toml up from __file__
+            current = Path(__file__).resolve()
+            for parent in [current] + list(current.parents):
+                pyproject = parent / "pyproject.toml"
+                if pyproject.exists():
+                    with open(pyproject, "r", encoding="utf-8") as f:
+                        for line in f:
+                            if line.strip().startswith("version ="):
+                                # Extract version
+                                version = line.split("=")[1].strip().strip('"').strip("'")
+                                break
+                    if version != "unknown":
+                        break
+        except Exception:
+            pass
+
+    # 2. Get git short SHA
+    git_sha = os.environ.get("GIT_SHA")
+    build_ts = os.environ.get("BUILD_TIMESTAMP")
+
+    # If not in env, check if pre-baked build_info.json exists (created during packaging)
+    if not git_sha or not build_ts:
+        try:
+            import json
+
+            build_info_path = Path(__file__).parent / "build_info.json"
+            if build_info_path.exists():
+                with open(build_info_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if not git_sha:
+                        git_sha = data.get("git_sha")
+                    if not build_ts:
+                        build_ts = data.get("build_timestamp")
+        except Exception:
+            pass
+
+    if not git_sha:
+        try:
+            git_sha = subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL, text=True
+            ).strip()
+        except Exception:
+            git_sha = "unknown"
+
+    if not build_ts:
+        try:
+            # Let's get the timestamp of the HEAD commit or the current time
+            build_ts_raw = subprocess.check_output(
+                ["git", "log", "-1", "--format=%ct"], stderr=subprocess.DEVNULL, text=True
+            ).strip()
+            import datetime
+
+            build_ts = datetime.datetime.fromtimestamp(int(build_ts_raw), datetime.timezone.utc).strftime(
+                "%Y%m%d%H%M%S"
+            )
+        except Exception:
+            build_ts = "unknown"
+
+    return version, git_sha, build_ts
+
+
 def add_timing_if_debug(start_time: float, result: Any) -> Any:
-    """Appends execution time and build stamp to the tool result if ADEU_ENABLE_TEST_TOOLS is active."""
+    """Appends execution time to the tool result if ADEU_ENABLE_TEST_TOOLS is active."""
     if os.getenv("ADEU_ENABLE_TEST_TOOLS") not in ("1", "true", "True", "yes"):
         return result
 
     elapsed = time.perf_counter() - start_time
-    git_sha = os.getenv("GIT_SHA", "unknown")
-    build_ts = os.getenv("BUILD_TIMESTAMP", "unknown")
-
-    debug_msg = f"\n\n[Debug] Tool execution time: {elapsed:.3f}s\n\n[Debug] build={git_sha}@{build_ts}"
+    debug_msg = f"\n\n[Debug] Tool execution time: {elapsed:.3f}s"
 
     if isinstance(result, str):
         return result + debug_msg

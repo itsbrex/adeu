@@ -58,16 +58,35 @@ describe("Parity Live Server Integration Verification", () => {
     });
   }
 
-  it("exposes the build stamp via the server_info tool", async () => {
-    const res = await sendRpc("tools/call", {
-      name: "server_info",
-      arguments: {},
-    }, 201);
-
-    expect(res.result).toBeDefined();
-    expect(res.result.content[0].text).toContain("Build: ");
-    expect(res.result.content[0].text).not.toContain("unknown@unknown");
+  it("does not expose the server_info tool anymore", async () => {
+    const listRes = await sendRpc("tools/list", {}, 200);
+    expect(listRes.result).toBeDefined();
+    const tools = listRes.result.tools || [];
+    const serverInfoTool = tools.find((t: any) => t.name === "server_info");
+    expect(serverInfoTool).toBeUndefined();
   });
+
+  it("exposes the build stamp via tool-call descriptions", async () => {
+    const listRes = await sendRpc("tools/list", {}, 201);
+    expect(listRes.result).toBeDefined();
+    const tools = listRes.result.tools || [];
+    const readDocx = tools.find((t: any) => t.name === "read_docx");
+    expect(readDocx).toBeDefined();
+    expect(readDocx.description).toContain("[Adeu v");
+  });
+
+  it("exposes the build stamp via serverInfo.version in initialize", async () => {
+    const initRes = await sendRpc("initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "test-client", version: "1.0.0" }
+    }, 202);
+    expect(initRes.result).toBeDefined();
+    expect(initRes.result.serverInfo).toBeDefined();
+    expect(initRes.result.serverInfo.version).not.toBe("1.0.0");
+    expect(initRes.result.serverInfo.version).not.toContain("unknown");
+  });
+
 
   it("read_docx appends [Debug] build stamp footer to mode=outline and mode=full", async () => {
     const res = await sendRpc("tools/call", {

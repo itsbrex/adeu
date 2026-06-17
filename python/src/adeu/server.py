@@ -8,6 +8,8 @@ from fastmcp.server.providers import FileSystemProvider
 from fastmcp.utilities.types import Image
 from mcp.types import Icon
 
+from adeu.mcp_components.shared import get_build_info
+
 logging.basicConfig(stream=sys.stderr, level=logging.INFO, force=True)
 
 structlog.configure(
@@ -34,12 +36,46 @@ if logo_path.exists():
 mcp_dir = Path(__file__).parent / "mcp_components"
 provider = FileSystemProvider(root=mcp_dir)
 
+version, git_sha, _ = get_build_info()
+
 # Initialize MCP Server with the provider
 mcp = FastMCP(
     "Adeu Redlining Service",
+    version=version,
     icons=server_icons if server_icons else None,
     providers=[provider],
 )
+
+# Dynamically append the build info to tool descriptions
+orig_list_tools = provider.list_tools
+
+
+async def wrapped_list_tools(*args, **kwargs):
+    tools = await orig_list_tools(*args, **kwargs)
+    build_tag = f" [Adeu v{version}+{git_sha}]"
+    for tool in tools:
+        if hasattr(tool, "description") and tool.description:
+            if build_tag not in tool.description:
+                tool.description = tool.description.strip() + build_tag
+    return tools
+
+
+provider.list_tools = wrapped_list_tools  # type: ignore[method-assign]
+
+orig_mcp_list_tools = mcp.list_tools
+
+
+async def wrapped_mcp_list_tools(*args, **kwargs):
+    tools = await orig_mcp_list_tools(*args, **kwargs)
+    build_tag = f" [Adeu v{version}+{git_sha}]"
+    for tool in tools:
+        if hasattr(tool, "description") and tool.description:
+            if build_tag not in tool.description:
+                tool.description = tool.description.strip() + build_tag
+    return tools
+
+
+mcp.list_tools = wrapped_mcp_list_tools  # type: ignore[method-assign]
 
 
 def main():

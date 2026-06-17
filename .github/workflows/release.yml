@@ -118,6 +118,13 @@ jobs:
           cp ../LICENSE ./LICENSE
           sed -i 's/\.\.\/LICENSE/LICENSE/g' pyproject.toml
           if grep -q "\.\./README.md" pyproject.toml; then cp ../README.md ./README.md; sed -i 's/\.\.\/README\.md/README.md/g' pyproject.toml; fi
+          
+          # Bake in release build metadata
+          git_sha=$(git rev-parse --short HEAD)
+          build_timestamp=$(git log -1 --format=%ct)
+          build_formatted_ts=$(date -u -d "@$build_timestamp" +'%Y%m%d%H%M%S' 2>/dev/null || date -u -r "$build_timestamp" +'%Y%m%d%H%M%S' 2>/dev/null || date -u +'%Y%m%d%H%M%S')
+          echo "{\"git_sha\": \"$git_sha\", \"build_timestamp\": \"$build_formatted_ts\"}" > src/adeu/mcp_components/build_info.json
+          
           uv build
 
       - name: Publish package distributions to PyPI

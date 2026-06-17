@@ -5,7 +5,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { basename, resolve, extname, dirname, join } from "node:path";
 import { z } from "zod";
 import {
-  registerAppTool,
+  registerAppTool as origRegisterAppTool,
   registerAppResource,
   RESOURCE_MIME_TYPE,
 } from "@modelcontextprotocol/ext-apps/server";
@@ -80,11 +80,37 @@ const PROCESS_BATCH_OPERATIONS_DESC =
 const DIFF_DOCX_DESC =
   "Compares two DOCX files and returns a unified diff of their text content. Useful for analyzing differences between versions before editing.";
 
+const gitSha = process.env.GIT_SHA || "unknown";
+const buildTs = process.env.BUILD_TIMESTAMP || "unknown";
+const packageVersion = process.env.PACKAGE_VERSION || "unknown";
+const buildTag = ` [Adeu v${packageVersion}+${gitSha}]`;
+
 // --- Server Setup ---
 const server = new McpServer({
   name: "adeu-redlining-service",
-  version: "1.0.0",
+  version: packageVersion,
 });
+
+// Wrap server.registerTool to inject buildTag into descriptions
+const originalRegisterTool = server.registerTool.bind(server);
+server.registerTool = (name: string, schema: any, handler?: any) => {
+  if (schema && typeof schema === "object") {
+    if (schema.description) {
+      schema.description = schema.description.trim() + buildTag;
+    }
+  }
+  return originalRegisterTool(name, schema, handler);
+};
+
+// Wrap registerAppTool to inject buildTag into descriptions
+const registerAppTool: typeof origRegisterAppTool = (mcpServer, name, schema, handler) => {
+  if (schema && typeof schema === "object") {
+    if (schema.description) {
+      schema.description = schema.description.trim() + buildTag;
+    }
+  }
+  return origRegisterAppTool(mcpServer, name, schema, handler);
+};
 
 // Common CSP allowing Google Fonts used by Adeu UI templates
 const UI_CSP = {
@@ -250,25 +276,6 @@ registerAppTool(
   },
 );
 
-
-server.registerTool(
-  "server_info",
-  {
-    description: "Get the MCP server build version, git short SHA, and build timestamp.",
-  },
-  async () => {
-    const gitSha = process.env.GIT_SHA || "unknown";
-    const buildTs = process.env.BUILD_TIMESTAMP || "unknown";
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Adeu MCP Server (Node.js Engine)\nBuild: ${gitSha}@${buildTs}`,
-        },
-      ],
-    };
-  },
-);
 
 
 registerAppTool(

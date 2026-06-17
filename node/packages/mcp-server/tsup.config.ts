@@ -18,6 +18,10 @@ function copyAssets(outDir: string) {
   }
 }
 
+import { readFileSync } from "node:fs";
+const packageJson = JSON.parse(readFileSync("package.json", "utf-8"));
+const packageVersion = packageJson.version;
+
 import { execSync } from "node:child_process";
 
 let gitSha = "unknown";
@@ -42,6 +46,7 @@ export default defineConfig([
     define: {
       "process.env.GIT_SHA": JSON.stringify(gitSha),
       "process.env.BUILD_TIMESTAMP": JSON.stringify(buildTimestamp),
+      "process.env.PACKAGE_VERSION": JSON.stringify(packageVersion),
     },
     onSuccess: async () => {
       copyAssets("dist");
@@ -60,6 +65,7 @@ export default defineConfig([
     define: {
       "process.env.GIT_SHA": JSON.stringify(gitSha),
       "process.env.BUILD_TIMESTAMP": JSON.stringify(buildTimestamp),
+      "process.env.PACKAGE_VERSION": JSON.stringify(packageVersion),
     },
     onSuccess: async () => {
       copyAssets("../../../desktop-extension");
