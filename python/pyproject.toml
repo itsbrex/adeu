@@ -61,6 +61,7 @@ artifacts = [
     "src/adeu/assets/*.png",
     "src/adeu/templates/*.html",
     "src/adeu/assets/*.svg",
+    "src/adeu/mcp_components/build_info.json",
 ]
 [tool.ruff]
 line-length = 120

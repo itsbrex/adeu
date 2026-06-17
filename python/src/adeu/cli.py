@@ -12,10 +12,10 @@ from typing import Any, Dict, List
 
 from pydantic import TypeAdapter
 
-from adeu import __version__
 from adeu.diff import generate_edits_from_text
 from adeu.ingest import extract_text_from_stream
 from adeu.markup import apply_edits_to_markdown
+from adeu.mcp_components.shared import get_build_info
 from adeu.models import DocumentChange, ModifyText
 from adeu.redline.engine import BatchValidationError, RedlineEngine
 from adeu.sanitize.core import SanitizeError, SanitizeResult, sanitize_docx
@@ -690,7 +690,9 @@ def handle_sanitize(args: argparse.Namespace):
 
 def main():
     parser = argparse.ArgumentParser(prog="adeu", description="Adeu: Agentic DOCX Redlining Engine")
-    parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
+    _version, _sha, _ = get_build_info()
+    _ver_str = f"{_version}+{_sha}" if _sha and _sha != "unknown" else _version
+    parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {_ver_str}")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     subparsers = parser.add_subparsers(dest="command", required=True, help="Subcommands")
 

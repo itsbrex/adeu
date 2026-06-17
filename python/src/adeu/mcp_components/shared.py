@@ -82,7 +82,10 @@ def get_build_info() -> tuple[str, str, str]:
     if not git_sha:
         try:
             git_sha = subprocess.check_output(
-                ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL, text=True
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=str(Path(__file__).parent),
+                stderr=subprocess.DEVNULL,
+                text=True
             ).strip()
         except Exception:
             git_sha = "unknown"
@@ -91,7 +94,10 @@ def get_build_info() -> tuple[str, str, str]:
         try:
             # Let's get the timestamp of the HEAD commit or the current time
             build_ts_raw = subprocess.check_output(
-                ["git", "log", "-1", "--format=%ct"], stderr=subprocess.DEVNULL, text=True
+                ["git", "log", "-1", "--format=%ct"],
+                cwd=str(Path(__file__).parent),
+                stderr=subprocess.DEVNULL,
+                text=True
             ).strip()
             import datetime
 

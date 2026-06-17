@@ -425,3 +425,23 @@ def test_cli_deeply_malformed_docx_errors(tmp_path, capsys):
         assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "is not a valid DOCX file (corrupted or invalid OOXML structure)" in captured.err
+
+
+def test_cli_version(capsys):
+    from unittest.mock import patch
+
+    from adeu.cli import main
+
+    test_args = ["adeu", "--version"]
+    with patch.object(sys, "argv", test_args):
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+
+    captured = capsys.readouterr()
+    output = captured.out or captured.err
+    assert "adeu" in output
+    assert "1.10.1" in output
+    assert "+" in output
+    assert "unknown" not in output
+
