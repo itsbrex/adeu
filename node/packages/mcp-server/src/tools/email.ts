@@ -1,4 +1,3 @@
-// FILE: node/packages/mcp-server/src/tools/email.ts
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
