@@ -311,6 +311,10 @@ registerAppTool(
         .string()
         .optional()
         .describe("Optional target mailbox email address to search within."),
+      task_id: z
+        .string()
+        .optional()
+        .describe("If resuming a pending check, provide the task ID here."),
       max_attachment_size_mb: z
         .number()
         .optional()

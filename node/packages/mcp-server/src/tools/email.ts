@@ -310,68 +310,155 @@ export async function search_and_fetch_emails(args: any): Promise<ToolResult> {
     args.max_attachment_size_mb > 0
       ? args.max_attachment_size_mb
       : 10;
-  let realEmailId: string | undefined;
-  try {
-    realEmailId = args.email_id ? resolveEmailId(args.email_id) : undefined;
-  } catch (err) {
-    if (err instanceof StaleShortIdError) {
+
+  let data: any;
+
+  if (args.task_id) {
+    // ==========================================
+    // PHASE 2: POLL (Wait for completion)
+    // ==========================================
+    const pollUrl = `${BACKEND_URL}/api/v1/emails/tasks/${args.task_id}`;
+    let completedData: any = null;
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      let res: Response;
+      try {
+        res = await fetch(pollUrl, {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            Accept: "application/json",
+          },
+          signal: AbortSignal.timeout(15_000),
+        });
+      } catch (err) {
+        if (isTimeoutError(err)) {
+          throw new Error("Checking task status timed out.");
+        }
+        throw err;
+      }
+
+      if (res.status === 401) {
+        DesktopAuthManager.clearApiKey();
+        throw new Error(
+          "Authentication expired. Please call `login_to_adeu_cloud` to re-authenticate.",
+        );
+      }
+      if (!res.ok) {
+        throw new Error(formatBackendError(res.status, await res.text()));
+      }
+
+      const taskData: any = await res.json();
+      const status = taskData.status;
+
+      if (status === "COMPLETED") {
+        completedData = taskData;
+        break;
+      }
+
+      if (status === "FAILED") {
+        const errorMsg = taskData.error || "Unknown internal error";
+        throw new Error(`Validation task failed on the server: ${errorMsg}`);
+      }
+
+      // Wait 5 seconds before next poll
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+
+    if (!completedData) {
+      const msg = `Task ${args.task_id} is still processing. Please call \`search_and_fetch_emails\` again with task_id=${args.task_id}.`;
       return {
-        isError: true,
-        content: [{ type: "text", text: err.message }],
+        content: [{ type: "text", text: msg }],
+        structuredContent: {
+          status: "pending",
+          task_id: args.task_id,
+          message: msg,
+        },
       };
     }
-    throw err;
-  }
 
-  const payload = {
-    email_id: realEmailId,
-    sender: args.sender,
-    subject: args.subject,
-    has_attachments: args.has_attachments,
-    attachment_name: args.attachment_name,
-    is_unread: args.is_unread,
-    days_ago: args.days_ago,
-    folder: args.folder,
-    limit: args.limit ?? 10,
-    offset: args.offset ?? 0,
-    mailbox_address: args.mailbox_address,
-  };
+    data = completedData;
 
-  // Remove undefined fields
-  Object.keys(payload).forEach(
-    (k) => (payload as any)[k] === undefined && delete (payload as any)[k],
-  );
+  } else {
+    // ==========================================
+    // PHASE 1: INIT / SEARCH (Search/Fetch standard)
+    // ==========================================
+    let realEmailId: string | undefined;
+    try {
+      realEmailId = args.email_id ? resolveEmailId(args.email_id) : undefined;
+    } catch (err) {
+      if (err instanceof StaleShortIdError) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: err.message }],
+        };
+      }
+      throw err;
+    }
 
-  let res: Response;
-  try {
-    res = await fetch(`${BACKEND_URL}/api/v1/emails/search`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(45_000),
-    });
-  } catch (err) {
-    if (isTimeoutError(err)) {
+    const payload = {
+      email_id: realEmailId,
+      sender: args.sender,
+      subject: args.subject,
+      has_attachments: args.has_attachments,
+      attachment_name: args.attachment_name,
+      is_unread: args.is_unread,
+      days_ago: args.days_ago,
+      folder: args.folder,
+      limit: args.limit ?? 10,
+      offset: args.offset ?? 0,
+      mailbox_address: args.mailbox_address,
+    };
+
+    // Remove undefined fields
+    Object.keys(payload).forEach(
+      (k) => (payload as any)[k] === undefined && delete (payload as any)[k],
+    );
+
+    let res: Response;
+    try {
+      res = await fetch(`${BACKEND_URL}/api/v1/emails/search`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(45_000),
+      });
+    } catch (err) {
+      if (isTimeoutError(err)) {
+        throw new Error(
+          "Email search timed out after 45s. The mail provider (Outlook/Gmail) may be slow. Try narrowing the search with more filters (sender, subject, days_ago), or retry shortly.",
+        );
+      }
+      throw err;
+    }
+
+    if (res.status === 401) {
+      DesktopAuthManager.clearApiKey();
       throw new Error(
-        "Email search timed out after 45s. The mail provider (Outlook/Gmail) may be slow. Try narrowing the search with more filters (sender, subject, days_ago), or retry shortly.",
+        "Authentication expired. Please call `login_to_adeu_cloud` to re-authenticate.",
       );
     }
-    throw err;
+    if (!res.ok)
+      throw new Error(formatBackendError(res.status, await res.text()));
+
+    data = await res.json();
+
+    if (res.status === 202 || (data && (data.status === "pending" || data.task_id) && data.type === undefined)) {
+      const newTaskId = data.task_id;
+      const msg = `Email processing task started successfully. Task ID: ${newTaskId}. Please call \`search_and_fetch_emails\` again immediately with task_id=${newTaskId} to monitor the progress.`;
+      return {
+        content: [{ type: "text", text: msg }],
+        structuredContent: {
+          status: "pending",
+          task_id: String(newTaskId),
+          message: msg,
+        },
+      };
+    }
   }
 
-  if (res.status === 401) {
-    DesktopAuthManager.clearApiKey();
-    throw new Error(
-      "Authentication expired. Please call `login_to_adeu_cloud` to re-authenticate.",
-    );
-  }
-  if (!res.ok)
-    throw new Error(formatBackendError(res.status, await res.text()));
-
-  const data: any = await res.json();
   const cache = loadIdCache();
 
   if (data.type === "previews") {

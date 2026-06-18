@@ -1,4 +1,4 @@
-# FILE: python/src/adeu/mcp_components/tools/email.py
+import asyncio
 import base64
 import hashlib
 import json
@@ -480,6 +480,10 @@ async def search_and_fetch_emails(
         "Maximum attachment size in MB to download (default 10). Attachments larger than this "
         "are listed in the response but not downloaded. Raise this to fetch large files.",
     ] = None,
+    task_id: Annotated[
+        Optional[str],
+        "If resuming a pending check, provide the task ID here.",
+    ] = None,
     api_key: str = Depends(get_cloud_auth_token),
 ) -> ToolResult:
     await ctx.info(
@@ -488,56 +492,121 @@ async def search_and_fetch_emails(
             "email_id": email_id,
             "subject": subject,
             "mailbox_address": mailbox_address,
+            "task_id": task_id,
         },
     )
-    real_email_id = resolve_email_id(email_id) if email_id else None
-    payload_dict = {
-        "email_id": real_email_id,
-        "sender": sender,
-        "subject": subject,
-        "has_attachments": has_attachments,
-        "attachment_name": attachment_name,
-        "is_unread": is_unread,
-        "days_ago": days_ago,
-        "folder": folder,
-        "limit": limit,
-        "offset": offset,
-        "mailbox_address": mailbox_address,
-    }
-    payload_dict = {k: v for k, v in payload_dict.items() if v is not None}
 
-    body = json.dumps(payload_dict).encode("utf-8")
-    url = f"{BACKEND_URL}/api/v1/emails/search"
+    data = None
 
-    req = urllib.request.Request(
-        url,
-        data=body,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-        method="POST",
-    )
+    if task_id:
+        # ==========================================
+        # PHASE 2: POLL (Wait for completion)
+        # ==========================================
+        poll_url = f"{BACKEND_URL}/api/v1/emails/tasks/{task_id}"
 
-    try:
-        await ctx.debug("Sending search request to Adeu Cloud", extra={"url": url})
-        with urllib.request.urlopen(req, timeout=45) as response:
+        for attempt in range(10):
+            req = urllib.request.Request(
+                poll_url,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Accept": "application/json",
+                },
+            )
+
+            try:
+                response = await asyncio.to_thread(urllib.request.urlopen, req)
+                task_data = json.loads(response.read().decode("utf-8"))
+                status = task_data.get("status")
+
+                if status == "COMPLETED":
+                    data = task_data
+                    break
+
+                if status == "FAILED":
+                    error_msg = task_data.get("error", "Unknown internal error")
+                    raise ToolError(f"Validation task failed on the server: {error_msg}")
+
+                await ctx.debug(f"Task {task_id} status is {status}. Attempt {attempt + 1}/10. Sleeping 5s.")
+
+            except urllib.error.HTTPError as e:
+                if e.code == 401:
+                    DesktopAuthManager.clear_api_key()
+                    raise ToolError("Your authentication expired. Please call `login_to_adeu_cloud` to re-authenticate.") from e
+                error_body = e.read().decode("utf-8")
+                raise ToolError(f"Failed to check task status (HTTP {e.code}): {error_body}") from e
+            except ToolError:
+                raise
+            except Exception as e:
+                raise ToolError(f"Unexpected error checking task status: {str(e)}") from e
+
+            await asyncio.sleep(5)
+        else:
+            msg = f"Task {task_id} is still processing. Please call `search_and_fetch_emails` again with task_id={task_id}."
+            return ToolResult(content=msg, structured_content={"status": "pending", "task_id": task_id, "message": msg})
+
+    else:
+        # ==========================================
+        # PHASE 1: INIT / SEARCH (Search/Fetch standard)
+        # ==========================================
+        real_email_id = resolve_email_id(email_id) if email_id else None
+        payload_dict = {
+            "email_id": real_email_id,
+            "sender": sender,
+            "subject": subject,
+            "has_attachments": has_attachments,
+            "attachment_name": attachment_name,
+            "is_unread": is_unread,
+            "days_ago": days_ago,
+            "folder": folder,
+            "limit": limit,
+            "offset": offset,
+            "mailbox_address": mailbox_address,
+        }
+        payload_dict = {k: v for k, v in payload_dict.items() if v is not None}
+
+        body = json.dumps(payload_dict).encode("utf-8")
+        url = f"{BACKEND_URL}/api/v1/emails/search"
+
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+
+        try:
+            await ctx.debug("Sending search request to Adeu Cloud", extra={"url": url})
+            response = await asyncio.to_thread(urllib.request.urlopen, req)
             data = json.loads(response.read().decode("utf-8"))
 
-    except urllib.error.HTTPError as e:
-        if e.code == 401:
-            DesktopAuthManager.clear_api_key()
-            raise ToolError("Authentication expired. Please call `login_to_adeu_cloud` to re-authenticate.") from e
-        error_body = e.read().decode("utf-8")
-        raise ToolError(_format_backend_error(e.code, error_body)) from e
-    except TimeoutError as e:
-        raise ToolError(
-            "Email search timed out after 45s. The mail provider (Outlook/Gmail) may be slow. "
-            "Try narrowing the search with more filters (sender, subject, days_ago), or retry shortly."
-        ) from e
-    except Exception as e:
-        raise ToolError(f"Failed to communicate with Adeu Cloud: {str(e)}") from e
+            status_code = getattr(response, "status", response.getcode())
+            if status_code == 202 or (isinstance(data, dict) and (data.get("status") == "pending" or "task_id" in data) and "type" not in data):
+                new_task_id = data.get("task_id")
+                msg = (
+                    f"Email processing task started successfully. Task ID: {new_task_id}. "
+                    f"Please call `search_and_fetch_emails` again immediately with "
+                    f"task_id={new_task_id} to monitor the progress."
+                )
+                await ctx.info(f"Task started: {new_task_id}")
+                return ToolResult(content=msg, structured_content={"status": "pending", "task_id": str(new_task_id), "message": msg})
+
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                DesktopAuthManager.clear_api_key()
+                raise ToolError("Authentication expired. Please call `login_to_adeu_cloud` to re-authenticate.") from e
+            error_body = e.read().decode("utf-8")
+            raise ToolError(_format_backend_error(e.code, error_body)) from e
+        except TimeoutError as e:
+            raise ToolError(
+                "Email search timed out after 45s. The mail provider (Outlook/Gmail) may be slow. "
+                "Try narrowing the search with more filters (sender, subject, days_ago), or retry shortly."
+            ) from e
+        except Exception as e:
+            raise ToolError(f"Failed to communicate with Adeu Cloud: {str(e)}") from e
 
     response_type = data.get("type")
 

@@ -130,7 +130,9 @@ describe("Parity Live Server Integration Verification", () => {
     // Run Python engine to assert cross-engine exact error parity
     const { execSync } = await import("node:child_process");
     const projectRoot = resolve(__dirname, "../../../..");
-    const pythonCli = join(projectRoot, "python/.venv/bin/adeu");
+    const pythonCli = process.platform === "win32"
+      ? join(projectRoot, "python/.venv/Scripts/adeu.exe")
+      : join(projectRoot, "python/.venv/bin/adeu");
     
     // Create temporary changes JSON for Python CLI
     const fs = await import("node:fs");
@@ -165,7 +167,9 @@ describe("Parity Live Server Integration Verification", () => {
     const gap1FixturePath = resolve(__dirname, "../tests/fixtures/gap1_deleted_row_repro.docx");
     const { execSync } = await import("node:child_process");
     const projectRoot = resolve(__dirname, "../../../..");
-    const pythonCli = join(projectRoot, "python/.venv/bin/adeu");
+    const pythonCli = process.platform === "win32"
+      ? join(projectRoot, "python/.venv/Scripts/adeu.exe")
+      : join(projectRoot, "python/.venv/bin/adeu");
 
     // 1. clean_view = true
     const nodeResClean = await sendRpc("tools/call", {
@@ -224,7 +228,9 @@ describe("Parity Live Server Integration Verification", () => {
     const gap1FixturePath = resolve(__dirname, "../tests/fixtures/gap1_minimal_repro.docx");
     const { execSync } = await import("node:child_process");
     const projectRoot = resolve(__dirname, "../../../..");
-    const pythonCli = join(projectRoot, "python/.venv/bin/adeu");
+    const pythonCli = process.platform === "win32"
+      ? join(projectRoot, "python/.venv/Scripts/adeu.exe")
+      : join(projectRoot, "python/.venv/bin/adeu");
 
     // 1. clean_view = true (both engines must return exactly 2 headings, excluding Subtitle)
     const nodeResClean = await sendRpc("tools/call", {

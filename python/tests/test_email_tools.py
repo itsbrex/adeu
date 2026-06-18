@@ -279,3 +279,94 @@ def test_findings_3_and_11_and_9_formatting_parity(mock_urlopen):
 
     attachments_text = _get_tool_text(res_attachments)
     assert "You can now use tools like `read_docx`, `diff_docx_files`, or `validate_documents`" in attachments_text
+
+
+@patch("urllib.request.urlopen")
+def test_async_task_initiation_on_search(mock_urlopen):
+    """Verify search_and_fetch_emails returns pending status when backend indicates task creation."""
+    ctx = AsyncMock()
+
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = json.dumps({
+        "status": "pending",
+        "task_id": "email_task_999",
+        "message": "Task queued"
+    }).encode("utf-8")
+    mock_resp.__enter__.return_value = mock_resp
+    mock_urlopen.return_value = mock_resp
+
+    res = asyncio.run(search_and_fetch_emails(ctx=ctx, subject="Heavy Search", api_key="test_api_key"))
+
+    text = _get_tool_text(res)
+    assert "Email processing task started successfully" in text
+    assert "task_id=email_task_999" in text
+    assert res.structured_content["status"] == "pending"
+    assert res.structured_content["task_id"] == "email_task_999"
+
+
+@patch("urllib.request.urlopen")
+@patch("asyncio.sleep", new_callable=AsyncMock)
+def test_polling_task_completed(mock_sleep, mock_urlopen):
+    """Verify that providing task_id polls the status endpoint and handles success."""
+    ctx = AsyncMock()
+
+    # Simulate two polls: first is pending, second is completed
+    mock_resp_pending = MagicMock()
+    mock_resp_pending.__enter__.return_value.read.return_value = json.dumps({"status": "PENDING"}).encode("utf-8")
+
+    mock_resp_completed = MagicMock()
+    mock_resp_completed.__enter__.return_value.read.return_value = json.dumps({
+        "status": "COMPLETED",
+        "type": "previews",
+        "previews": []
+    }).encode("utf-8")
+
+    mock_urlopen.side_effect = [
+        mock_resp_pending.__enter__.return_value,
+        mock_resp_completed.__enter__.return_value
+    ]
+
+    res = asyncio.run(search_and_fetch_emails(ctx=ctx, task_id="email_task_999", api_key="test_api_key"))
+
+    text = _get_tool_text(res)
+    assert "No emails found matching your search criteria." in text
+    assert mock_sleep.await_count == 1
+    mock_sleep.assert_awaited_with(5)
+
+
+@patch("urllib.request.urlopen")
+@patch("asyncio.sleep", new_callable=AsyncMock)
+def test_polling_task_failed(mock_sleep, mock_urlopen):
+    """Verify that polling a failed task raises a clear ToolError."""
+    ctx = AsyncMock()
+
+    mock_resp = MagicMock()
+    mock_resp.__enter__.return_value.read.return_value = json.dumps({
+        "status": "FAILED",
+        "error": "Outlook API rate limit reached."
+    }).encode("utf-8")
+    mock_urlopen.return_value = mock_resp.__enter__.return_value
+
+    with pytest.raises(ToolError) as exc_info:
+        asyncio.run(search_and_fetch_emails(ctx=ctx, task_id="email_task_999", api_key="test_api_key"))
+
+    assert "Validation task failed on the server: Outlook API rate limit reached." in str(exc_info.value)
+
+
+@patch("urllib.request.urlopen")
+@patch("asyncio.sleep", new_callable=AsyncMock)
+def test_polling_task_timeout(mock_sleep, mock_urlopen):
+    """Verify that a task remaining pending past the 50s limit returns gracefully."""
+    ctx = AsyncMock()
+
+    # Always return PENDING to trigger timeout
+    mock_resp = MagicMock()
+    mock_resp.__enter__.return_value.read.return_value = json.dumps({"status": "PENDING"}).encode("utf-8")
+    mock_urlopen.return_value = mock_resp.__enter__.return_value
+
+    res = asyncio.run(search_and_fetch_emails(ctx=ctx, task_id="email_task_999", api_key="test_api_key"))
+
+    text = _get_tool_text(res)
+    assert "is still processing" in text
+    assert "task_id=email_task_999" in text
+    assert mock_sleep.await_count == 10
