@@ -282,24 +282,64 @@ def test_findings_3_and_11_and_9_formatting_parity(mock_urlopen):
 
 
 @patch("urllib.request.urlopen")
-def test_async_task_initiation_on_search(mock_urlopen):
-    """Verify search_and_fetch_emails returns pending status when backend indicates task creation."""
+@patch("asyncio.sleep", new_callable=AsyncMock)
+def test_async_task_initiation_on_search_completed(mock_sleep, mock_urlopen):
+    """Verify search_and_fetch_emails returns completed status.
+
+    Triggered when backend indicates task creation but immediate poll succeeds.
+    """
     ctx = AsyncMock()
 
-    mock_resp = MagicMock()
-    mock_resp.read.return_value = json.dumps(
+    # 1. Search response (202 pending)
+    mock_resp_init = MagicMock()
+    mock_resp_init.__enter__.return_value.read.return_value = json.dumps(
         {"status": "pending", "task_id": "email_task_999", "message": "Task queued"}
     ).encode("utf-8")
-    mock_resp.__enter__.return_value = mock_resp
-    mock_urlopen.return_value = mock_resp
+
+    # 2. First poll (completed)
+    mock_resp_poll = MagicMock()
+    mock_resp_poll.__enter__.return_value.read.return_value = json.dumps(
+        {"status": "COMPLETED", "type": "previews", "previews": []}
+    ).encode("utf-8")
+
+    mock_urlopen.side_effect = [mock_resp_init.__enter__.return_value, mock_resp_poll.__enter__.return_value]
 
     res = asyncio.run(search_and_fetch_emails(ctx=ctx, subject="Heavy Search", api_key="test_api_key"))
 
     text = _get_tool_text(res)
-    assert "Email processing task started successfully" in text
+    assert "No emails found matching your search criteria." in text
+    assert mock_urlopen.call_count == 2
+
+
+@patch("urllib.request.urlopen")
+@patch("asyncio.sleep", new_callable=AsyncMock)
+def test_async_task_initiation_on_search_pending_timeout(mock_sleep, mock_urlopen):
+    """Verify search_and_fetch_emails returns pending status.
+
+    Triggered when backend indicates task creation and polling times out.
+    """
+    ctx = AsyncMock()
+
+    # 1. Search response (202 pending)
+    mock_resp_init = MagicMock()
+    mock_resp_init.__enter__.return_value.read.return_value = json.dumps(
+        {"status": "pending", "task_id": "email_task_999", "message": "Task queued"}
+    ).encode("utf-8")
+
+    # 2. Status polls (all return pending)
+    mock_resp_poll = MagicMock()
+    mock_resp_poll.__enter__.return_value.read.return_value = json.dumps({"status": "PENDING"}).encode("utf-8")
+
+    mock_urlopen.side_effect = [mock_resp_init.__enter__.return_value] + [mock_resp_poll.__enter__.return_value] * 10
+
+    res = asyncio.run(search_and_fetch_emails(ctx=ctx, subject="Heavy Search", api_key="test_api_key"))
+
+    text = _get_tool_text(res)
+    assert "is still processing" in text
     assert "task_id=email_task_999" in text
     assert res.structured_content["status"] == "pending"
     assert res.structured_content["task_id"] == "email_task_999"
+    assert mock_sleep.await_count == 10
 
 
 @patch("urllib.request.urlopen")

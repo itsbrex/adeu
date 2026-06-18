@@ -302,6 +302,55 @@ function getUniqueFilepath(saveDir: string, filename: string): string {
   // mean the same logical attachment.
   return join(saveDir, filename);
 }
+async function pollEmailTask(taskId: string, apiKey: string): Promise<any> {
+  const pollUrl = `${BACKEND_URL}/api/v1/emails/tasks/${taskId}`;
+
+  for (let attempt = 0; attempt < 10; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(pollUrl, {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          Accept: "application/json",
+        },
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch (err) {
+      if (isTimeoutError(err)) {
+        throw new Error("Checking task status timed out.");
+      }
+      throw err;
+    }
+
+    if (res.status === 401) {
+      DesktopAuthManager.clearApiKey();
+      throw new Error(
+        "Authentication expired. Please call `login_to_adeu_cloud` to re-authenticate.",
+      );
+    }
+    if (!res.ok) {
+      throw new Error(formatBackendError(res.status, await res.text()));
+    }
+
+    const taskData: any = await res.json();
+    const status = taskData.status;
+
+    if (status === "COMPLETED") {
+      return taskData;
+    }
+
+    if (status === "FAILED") {
+      const errorMsg = taskData.error || "Unknown internal error";
+      throw new Error(`Validation task failed on the server: ${errorMsg}`);
+    }
+
+    // Wait 5 seconds before next poll
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
+
+  return null;
+}
+
 export async function search_and_fetch_emails(args: any): Promise<ToolResult> {
   const apiKey = await getCloudAuthToken();
   const maxAttachmentSizeMb: number =
@@ -316,52 +365,7 @@ export async function search_and_fetch_emails(args: any): Promise<ToolResult> {
     // ==========================================
     // PHASE 2: POLL (Wait for completion)
     // ==========================================
-    const pollUrl = `${BACKEND_URL}/api/v1/emails/tasks/${args.task_id}`;
-    let completedData: any = null;
-
-    for (let attempt = 0; attempt < 10; attempt++) {
-      let res: Response;
-      try {
-        res = await fetch(pollUrl, {
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            Accept: "application/json",
-          },
-          signal: AbortSignal.timeout(15_000),
-        });
-      } catch (err) {
-        if (isTimeoutError(err)) {
-          throw new Error("Checking task status timed out.");
-        }
-        throw err;
-      }
-
-      if (res.status === 401) {
-        DesktopAuthManager.clearApiKey();
-        throw new Error(
-          "Authentication expired. Please call `login_to_adeu_cloud` to re-authenticate.",
-        );
-      }
-      if (!res.ok) {
-        throw new Error(formatBackendError(res.status, await res.text()));
-      }
-
-      const taskData: any = await res.json();
-      const status = taskData.status;
-
-      if (status === "COMPLETED") {
-        completedData = taskData;
-        break;
-      }
-
-      if (status === "FAILED") {
-        const errorMsg = taskData.error || "Unknown internal error";
-        throw new Error(`Validation task failed on the server: ${errorMsg}`);
-      }
-
-      // Wait 5 seconds before next poll
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-    }
+    const completedData = await pollEmailTask(args.task_id, apiKey);
 
     if (!completedData) {
       const msg = `Task ${args.task_id} is still processing. Please call \`search_and_fetch_emails\` again with task_id=${args.task_id}.`;
@@ -446,15 +450,20 @@ export async function search_and_fetch_emails(args: any): Promise<ToolResult> {
 
     if (res.status === 202 || (data && (data.status === "pending" || data.task_id) && data.type === undefined)) {
       const newTaskId = data.task_id;
-      const msg = `Email processing task started successfully. Task ID: ${newTaskId}. Please call \`search_and_fetch_emails\` again immediately with task_id=${newTaskId} to monitor the progress.`;
-      return {
-        content: [{ type: "text", text: msg }],
-        structuredContent: {
-          status: "pending",
-          task_id: String(newTaskId),
-          message: msg,
-        },
-      };
+      const completedData = await pollEmailTask(String(newTaskId), apiKey);
+
+      if (!completedData) {
+        const msg = `Task ${newTaskId} is still processing. Please call \`search_and_fetch_emails\` again immediately with task_id=${newTaskId} to monitor the progress.`;
+        return {
+          content: [{ type: "text", text: msg }],
+          structuredContent: {
+            status: "pending",
+            task_id: String(newTaskId),
+            message: msg,
+          },
+        };
+      }
+      data = completedData;
     }
   }
 

@@ -41,10 +41,18 @@ function readFileBytesOrThrow(filePath: string): Buffer {
   } catch (err: any) {
     if (err.code === "ENOENT") {
       throw new Error(
-        `File not found: ${filePath}. Note: If you are running in a sandboxed/containerized environment, ` +
-        `the host application or MCP server may not have access to your local workspace files. ` +
-        `You can resolve this by installing Adeu directly inside your sandboxed environment using ` +
-        `'uv tool install adeu' and executing the commands via the CLI.`
+        `File not found: ${filePath}.\n` +
+        `If you are running in a sandboxed/containerized environment (such as Claude Desktop or another containerized client), ` +
+        `the host application or MCP server may not have direct access to your local workspace files.\n` +
+        `You can resolve this by installing and running the local 'adeu' CLI tool directly within your environment.\n` +
+        `Here is how the MCP tools map to their CLI equivalents:\n` +
+        `- read_docx               -> adeu extract \${filePath}\n` +
+        `- process_document_batch  -> adeu apply \${filePath}\n` +
+        `- diff_docx_files         -> adeu diff \${originalPath} \${modifiedPath}\n` +
+        `- accept_all_changes      -> adeu accept-all \${filePath}\n\n` +
+        `To run the local tool, install it via:\n` +
+        `  uv tool install adeu\n` +
+        `and run the mapped CLI command directly in your terminal.`
       );
     }
     throw err;

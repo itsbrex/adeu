@@ -266,20 +266,76 @@ describe("Node Email Tools Finding #2 and Finding #6 tests", () => {
       vi.useRealTimers();
     });
 
-    it("should handle async task initiation upon searching", async () => {
-      global.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 202,
-        json: async () => ({
-          status: "pending",
-          task_id: "email_task_typescript_123",
-          message: "Queued"
-        }),
-      } as Response);
+    it("should handle async task initiation upon searching and resolve when the task completes successfully", async () => {
+      let callCount = 0;
+      global.fetch = vi.fn().mockImplementation(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return {
+            ok: true,
+            status: 202,
+            json: async () => ({
+              status: "pending",
+              task_id: "email_task_typescript_123",
+              message: "Queued",
+            }),
+          } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            status: "COMPLETED",
+            type: "previews",
+            previews: [],
+          }),
+        } as Response;
+      });
 
-      const result = await search_and_fetch_emails({ subject: "heavy search" });
+      const promise = search_and_fetch_emails({ subject: "heavy search" });
+      promise.catch(() => {});
+      await vi.runAllTimersAsync();
 
-      expect(result.content[0].text).toContain("Email processing task started successfully");
+      const result = await promise;
+
+      expect(callCount).toBe(2);
+      expect(result.content[0].text).toContain("No emails found matching your search criteria.");
+    });
+
+    it("should handle async task initiation upon searching and return pending status on polling timeout (50s)", async () => {
+      let callCount = 0;
+      global.fetch = vi.fn().mockImplementation(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return {
+            ok: true,
+            status: 202,
+            json: async () => ({
+              status: "pending",
+              task_id: "email_task_typescript_123",
+              message: "Queued",
+            }),
+          } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ status: "PENDING" }),
+        } as Response;
+      });
+
+      const promise = search_and_fetch_emails({ subject: "heavy search" });
+      promise.catch(() => {});
+
+      for (let i = 0; i < 10; i++) {
+        await vi.advanceTimersByTimeAsync(5000);
+      }
+      await vi.runAllTimersAsync();
+
+      const result = await promise;
+
+      expect(callCount).toBe(11);
+      expect(result.content[0].text).toContain("is still processing");
       expect(result.content[0].text).toContain("task_id=email_task_typescript_123");
       expect(result.structuredContent?.status).toBe("pending");
       expect(result.structuredContent?.task_id).toBe("email_task_typescript_123");

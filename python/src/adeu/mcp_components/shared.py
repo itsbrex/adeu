@@ -17,10 +17,20 @@ def read_file_bytes(path: str) -> BytesIO:
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(
-            f"File not found: {path}. Note: If you are running in a sandboxed/containerized environment, "
-            "the host application or MCP server may not have access to your local workspace files. "
-            "You can resolve this by installing Adeu directly inside your sandboxed environment using "
-            "'uv tool install adeu' and executing the commands via the CLI."
+            f"File not found: {path}.\n"
+            "If you are running in a sandboxed/containerized environment\n"
+            "(such as Claude Desktop or another containerized client),\n"
+            "the host application or MCP server may not have direct access to your local workspace files.\n"
+            "You can resolve this by installing and running the local 'adeu' CLI tool\n"
+            "directly within your environment.\n"
+            "Here is how the MCP tools map to their CLI equivalents:\n"
+            "- read_docx               -> adeu extract ${{filePath}}\n"
+            "- process_document_batch  -> adeu apply ${{filePath}}\n"
+            "- diff_docx_files         -> adeu diff ${{originalPath}} ${{modifiedPath}}\n"
+            "- accept_all_changes      -> adeu accept-all ${{filePath}}\n\n"
+            "To run the local tool, install it via:\n"
+            "  uv tool install adeu\n"
+            "and run the mapped CLI command directly in your terminal."
         )
     with open(p, "rb") as f:
         return BytesIO(f.read())

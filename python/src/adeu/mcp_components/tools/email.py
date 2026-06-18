@@ -403,6 +403,50 @@ async def list_available_mailboxes(
         raise ToolError(f"Failed to communicate with Adeu Cloud: {str(e)}") from e
 
 
+async def _poll_email_task(ctx: Context, task_id: str, api_key: str) -> Optional[dict]:
+    """Helper to poll an email processing task status."""
+    poll_url = f"{BACKEND_URL}/api/v1/emails/tasks/{task_id}"
+
+    for attempt in range(10):
+        req = urllib.request.Request(
+            poll_url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Accept": "application/json",
+            },
+        )
+
+        try:
+            response = await asyncio.to_thread(urllib.request.urlopen, req)
+            task_data = json.loads(response.read().decode("utf-8"))
+            status = task_data.get("status")
+
+            if status == "COMPLETED":
+                return task_data
+
+            if status == "FAILED":
+                error_msg = task_data.get("error", "Unknown internal error")
+                raise ToolError(f"Validation task failed on the server: {error_msg}")
+
+            await ctx.debug(f"Task {task_id} status is {status}. Attempt {attempt + 1}/10. Sleeping 5s.")
+
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                DesktopAuthManager.clear_api_key()
+                raise ToolError(
+                    "Your authentication expired. Please call `login_to_adeu_cloud` to re-authenticate."
+                ) from e
+            error_body = e.read().decode("utf-8")
+            raise ToolError(f"Failed to check task status (HTTP {e.code}): {error_body}") from e
+        except ToolError:
+            raise
+        except Exception as e:
+            raise ToolError(f"Unexpected error checking task status: {str(e)}") from e
+
+        await asyncio.sleep(5)
+    return None
+
+
 @tool(
     description=(
         "Searches the user's live email inbox via the Adeu cloud backend.\n\n"
@@ -502,52 +546,14 @@ async def search_and_fetch_emails(
         # ==========================================
         # PHASE 2: POLL (Wait for completion)
         # ==========================================
-        poll_url = f"{BACKEND_URL}/api/v1/emails/tasks/{task_id}"
-
-        for attempt in range(10):
-            req = urllib.request.Request(
-                poll_url,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Accept": "application/json",
-                },
-            )
-
-            try:
-                response = await asyncio.to_thread(urllib.request.urlopen, req)
-                task_data = json.loads(response.read().decode("utf-8"))
-                status = task_data.get("status")
-
-                if status == "COMPLETED":
-                    data = task_data
-                    break
-
-                if status == "FAILED":
-                    error_msg = task_data.get("error", "Unknown internal error")
-                    raise ToolError(f"Validation task failed on the server: {error_msg}")
-
-                await ctx.debug(f"Task {task_id} status is {status}. Attempt {attempt + 1}/10. Sleeping 5s.")
-
-            except urllib.error.HTTPError as e:
-                if e.code == 401:
-                    DesktopAuthManager.clear_api_key()
-                    raise ToolError(
-                        "Your authentication expired. Please call `login_to_adeu_cloud` to re-authenticate."
-                    ) from e
-                error_body = e.read().decode("utf-8")
-                raise ToolError(f"Failed to check task status (HTTP {e.code}): {error_body}") from e
-            except ToolError:
-                raise
-            except Exception as e:
-                raise ToolError(f"Unexpected error checking task status: {str(e)}") from e
-
-            await asyncio.sleep(5)
-        else:
+        task_data = await _poll_email_task(ctx, task_id, api_key)
+        if task_data is None:
             msg = (
                 f"Task {task_id} is still processing. "
                 + f"Please call `search_and_fetch_emails` again with task_id={task_id}."
             )
             return ToolResult(content=msg, structured_content={"status": "pending", "task_id": task_id, "message": msg})
+        data = task_data
 
     else:
         # ==========================================
@@ -592,16 +598,19 @@ async def search_and_fetch_emails(
             if status_code == 202 or (
                 isinstance(data, dict) and (data.get("status") == "pending" or "task_id" in data) and "type" not in data
             ):
-                new_task_id = data.get("task_id")
-                msg = (
-                    f"Email processing task started successfully. Task ID: {new_task_id}. "
-                    f"Please call `search_and_fetch_emails` again immediately with "
-                    f"task_id={new_task_id} to monitor the progress."
-                )
-                await ctx.info(f"Task started: {new_task_id}")
-                return ToolResult(
-                    content=msg, structured_content={"status": "pending", "task_id": str(new_task_id), "message": msg}
-                )
+                new_task_id = str(data.get("task_id"))
+                await ctx.info(f"Task started: {new_task_id}. Commencing immediate polling.")
+                task_data = await _poll_email_task(ctx, new_task_id, api_key)
+                if task_data is None:
+                    msg = (
+                        f"Task {new_task_id} is still processing. "
+                        f"Please call `search_and_fetch_emails` again immediately with "
+                        f"task_id={new_task_id} to monitor the progress."
+                    )
+                    return ToolResult(
+                        content=msg, structured_content={"status": "pending", "task_id": new_task_id, "message": msg}
+                    )
+                data = task_data
 
         except urllib.error.HTTPError as e:
             if e.code == 401:
