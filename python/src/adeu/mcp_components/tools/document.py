@@ -212,7 +212,7 @@ async def _process_document_batch_disk(
         "By default (compare_clean=True), it compares the 'Accepted' finalized states of both documents. "
         "Set compare_clean=False if you need to compare the raw underlying text including Tracked Change CriticMarkup."
     ),
-    tags=["docx"],
+    tags={"docx"},
     annotations={"readOnlyHint": True},
 )
 async def diff_docx_files(
@@ -319,7 +319,7 @@ def _create_diff_output(original_path: str, modified_path: str, text_orig: str, 
         "Use this when a document review is entirely complete and you want to clear all redlines. "
         "For selective acceptance/rejection of specific changes, use `process_document_batch` instead."
     ),
-    tags=["docx"],
+    tags={"docx"},
     annotations={"destructiveHint": True},
 )
 async def accept_all_changes(
@@ -354,7 +354,7 @@ async def accept_all_changes(
 
 @tool(
     description="Opens a local file in its native desktop application (e.g., Microsoft Word for DOCX files).",
-    tags=["docx"],
+    tags={"docx"},
     annotations={"openWorldHint": True},
 )
 async def open_local_file(
@@ -448,7 +448,7 @@ if sys.platform == "win32":
     @tool(
         description=READ_DOCX_COMMON_DESC + READ_DOCX_WIN32_EXTRA + READ_DOCX_TAIL,
         annotations={"readOnlyHint": True},
-        tags=["docx"],
+        tags={"docx"},
         meta={"ui": {"resourceUri": MARKDOWN_UI_URI}},
     )
     async def read_docx(
@@ -531,7 +531,7 @@ if sys.platform == "win32":
 
     @tool(
         description=PROCESS_BATCH_COMMON_DESC + PROCESS_BATCH_WIN32_EXTRA + PROCESS_BATCH_OPERATIONS_DESC,
-        tags=["docx"],
+        tags={"docx"},
         annotations={"destructiveHint": True},
     )
     async def process_document_batch(
@@ -680,7 +680,7 @@ else:
 
     @tool(
         description=READ_DOCX_COMMON_DESC + READ_DOCX_TAIL,
-        tags=["docx"],
+        tags={"docx"},
         annotations={"readOnlyHint": True},
         meta={"ui": {"resourceUri": MARKDOWN_UI_URI}},
     )
@@ -727,7 +727,7 @@ else:
 
     @tool(
         description=PROCESS_BATCH_COMMON_DESC + PROCESS_BATCH_OPERATIONS_DESC,
-        tags=["docx"],
+        tags={"docx"},
         annotations={"destructiveHint": True},
     )
     async def process_document_batch(

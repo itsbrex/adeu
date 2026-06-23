@@ -335,7 +335,7 @@ def _get_unique_filepath(save_dir: Path, filename: str) -> Path:
         "`search_and_fetch_emails` or `create_email_draft` to scope the operation. Omitting "
         "`mailbox_address` on those tools targets the user's primary personal mailbox."
     ),
-    tags=["cloud"],
+    tags={"cloud"},
     annotations={"readOnlyHint": True},
 )
 async def list_available_mailboxes(
@@ -474,7 +474,7 @@ async def _poll_email_task(ctx: Context, task_id: str, api_key: str) -> Optional
         "when calling from a project so attachments land alongside the user's other files. This directory "
         "path refers to the user's native operating system, not the LLM's sandbox environment."
     ),
-    tags=["cloud"],
+    tags={"cloud"},
     annotations={"openWorldHint": True, "readOnlyHint": True},
     meta={"ui": {"resourceUri": EMAIL_UI_URI}},
 )
@@ -845,7 +845,7 @@ async def search_and_fetch_emails(
         "draft. Useful right after search_and_fetch_emails downloaded attachments — those local paths can "
         "be passed directly here."
     ),
-    tags=["cloud"],
+    tags={"cloud"},
 )
 async def create_email_draft(
     ctx: Context,

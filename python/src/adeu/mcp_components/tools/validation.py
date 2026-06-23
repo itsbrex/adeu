@@ -28,6 +28,7 @@ from adeu.mcp_components.shared import (
         "To CHECK the status of a validation, call this tool AGAIN and provide ONLY the 'task_id'. "
         "The checking process will poll for up to 50 seconds. If it times out, continue checking."
     ),
+    tags={"cloud"},
     timeout=300.0,
     annotations={"openWorldHint": True},
     meta={"ui": {"resourceUri": MARKDOWN_UI_URI}},
