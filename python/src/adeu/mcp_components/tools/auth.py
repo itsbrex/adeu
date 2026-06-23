@@ -1,4 +1,3 @@
-# FILE: src/adeu/mcp_components/tools/auth.py
 import json
 import urllib.error
 import urllib.request
@@ -25,6 +24,7 @@ from adeu.mcp_components.shared import BACKEND_URL
         "When the user asks which accounts or mailboxes are available, call `list_available_mailboxes` "
         "rather than naming a single account from the login response."
     ),
+    tags=["cloud"],
     annotations={"openWorldHint": True},
 )
 async def login_to_adeu_cloud(ctx: Context) -> str:
@@ -85,6 +85,7 @@ async def login_to_adeu_cloud(ctx: Context) -> str:
 
 @tool(
     description="Logs out of the Adeu Cloud backend by clearing the local API key from the OS Keychain.",
+    tags=["cloud"],
     annotations={"openWorldHint": True},
 )
 async def logout_of_adeu_cloud(ctx: Context) -> str:

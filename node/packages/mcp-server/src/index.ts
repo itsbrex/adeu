@@ -1,4 +1,3 @@
-// FILE: node/packages/mcp-server/src/index.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { readFileSync, existsSync } from "node:fs";
@@ -89,9 +88,14 @@ const DIFF_DOCX_DESC =
   "Compares two DOCX files and returns a unified diff of their text content. Useful for analyzing differences between versions before editing.";
 
 const gitSha = process.env.GIT_SHA || "unknown";
-const buildTs = process.env.BUILD_TIMESTAMP || "unknown";
 const packageVersion = process.env.PACKAGE_VERSION || "unknown";
 const buildTag = ` [Adeu v${packageVersion}+${gitSha}]`;
+
+// --- Scope Configuration ---
+const args = process.argv.slice(2);
+const scopeIdx = args.indexOf("--scope");
+const requestedScope = (scopeIdx !== -1 ? args[scopeIdx + 1] : "all").toLowerCase();
+const isDocxOnly = requestedScope === "docx";
 
 // --- Server Setup ---
 const server = new McpServer({
@@ -199,7 +203,6 @@ registerAppResource(
 // ==========================================
 // 2. UI-ENABLED TOOLS
 // ==========================================
-
 registerAppTool(
   server,
   "read_docx",
@@ -279,66 +282,6 @@ registerAppTool(
             text: `Error executing tool read_docx: ${e.message}`,
           },
         ],
-      };
-    }
-  },
-);
-
-
-
-registerAppTool(
-  server,
-  "search_and_fetch_emails",
-  {
-    title: "Search & Fetch Emails",
-    description:
-      "Searches the user's live email inbox via the Adeu cloud backend.\n\n" +
-      "TWO MODES:\n" +
-      "1. Search mode (no `email_id`): returns up to `limit` lightweight previews. Use filters (`sender`, `subject`, `is_unread`, `days_ago`, `folder`, `has_attachments`, `attachment_name`) to narrow down.\n" +
-      "2. Fetch mode (with `email_id`): returns the full email body, thread history, and downloads attachments under `max_attachment_size_mb` to the local disk.\n\n" +
-      "AUTO-ESCALATION: If a search returns exactly one preview, the backend automatically fetches the full email in the same call. Plan around the response shape — check the `type` field (`previews` vs `full_email`) before assuming.\n\n" +
-      "EMAIL ID FORMATS (`email_id` parameter accepts any of):\n" +
-      "- `msg_<6 chars>` — short ID returned by previews on THIS machine. NOT portable across machines or sessions; the local cache holds the most recent 1000. If you reference one that's been evicted, the tool returns a StaleShortIdError telling you to re-search.\n" +
-      "- `adeu_<numeric>` — server-side reference for emails Adeu has previously processed. Portable across machines and sessions for the same authenticated user.\n" +
-      "- Raw provider ID (Gmail/Outlook native ID) — works if you have it, but you usually won't.\n\n" +
-      "FOLDER DEFAULT: omitting `folder` searches the Inbox only (matching what the user sees in their mail client). Use `folder='sent'` for sent items, `folder='all'` to include Deleted Items, Drafts, and other folders.\n\n" +
-      "ATTACHMENTS: attachments larger than `max_attachment_size_mb` (default 10) are listed in the response but NOT downloaded — raise the cap if you need them. Always set `working_directory` when calling from a project so attachments land alongside the user's other files.",
-    inputSchema: z.object({
-      sender: z.string().optional(),
-      subject: z.string().optional(),
-      has_attachments: z.boolean().optional(),
-      attachment_name: z.string().optional(),
-      is_unread: z.boolean().optional(),
-      days_ago: z.number().optional(),
-      folder: z.enum(["inbox", "sent", "all"]).optional(),
-      limit: z.number().default(10),
-      offset: z.number().default(0),
-      email_id: z.string().optional(),
-      working_directory: z.string().optional(),
-      mailbox_address: z
-        .string()
-        .optional()
-        .describe("Optional target mailbox email address to search within."),
-      task_id: z
-        .string()
-        .optional()
-        .describe("If resuming a pending check, provide the task ID here."),
-      max_attachment_size_mb: z
-        .number()
-        .optional()
-        .describe(
-          "Maximum attachment size in MB to download (default 10). Attachments larger than this are listed in the response but not downloaded. Raise this to fetch large files.",
-        ),
-    }),
-    _meta: { ui: { resourceUri: EMAIL_UI_URI } },
-  },
-  async (args) => {
-    try {
-      return (await search_and_fetch_emails(args)) as any;
-    } catch (e: any) {
-      return {
-        isError: true,
-        content: [{ type: "text", text: e.message }],
       };
     }
   },
@@ -608,6 +551,66 @@ server.registerTool(
     }
   },
 );
+
+if (!isDocxOnly) {
+registerAppTool(
+  server,
+  "search_and_fetch_emails",
+  {
+    title: "Search & Fetch Emails",
+    description:
+      "Searches the user's live email inbox via the Adeu cloud backend.\n\n" +
+      "TWO MODES:\n" +
+      "1. Search mode (no `email_id`): returns up to `limit` lightweight previews. Use filters (`sender`, `subject`, `is_unread`, `days_ago`, `folder`, `has_attachments`, `attachment_name`) to narrow down.\n" +
+      "2. Fetch mode (with `email_id`): returns the full email body, thread history, and downloads attachments under `max_attachment_size_mb` to the local disk.\n\n" +
+      "AUTO-ESCALATION: If a search returns exactly one preview, the backend automatically fetches the full email in the same call. Plan around the response shape — check the `type` field (`previews` vs `full_email`) before assuming.\n\n" +
+      "EMAIL ID FORMATS (`email_id` parameter accepts any of):\n" +
+      "- `msg_<6 chars>` — short ID returned by previews on THIS machine. NOT portable across machines or sessions; the local cache holds the most recent 1000. If you reference one that's been evicted, the tool returns a StaleShortIdError telling you to re-search.\n" +
+      "- `adeu_<numeric>` — server-side reference for emails Adeu has previously processed. Portable across machines and sessions for the same authenticated user.\n" +
+      "- Raw provider ID (Gmail/Outlook native ID) — works if you have it, but you usually won't.\n\n" +
+      "FOLDER DEFAULT: omitting `folder` searches the Inbox only (matching what the user sees in their mail client). Use `folder='sent'` for sent items, `folder='all'` to include Deleted Items, Drafts, and other folders.\n\n" +
+      "ATTACHMENTS: attachments larger than `max_attachment_size_mb` (default 10) are listed in the response but NOT downloaded — raise the cap if you need them. Always set `working_directory` when calling from a project so attachments land alongside the user's other files.",
+    inputSchema: z.object({
+      sender: z.string().optional(),
+      subject: z.string().optional(),
+      has_attachments: z.boolean().optional(),
+      attachment_name: z.string().optional(),
+      is_unread: z.boolean().optional(),
+      days_ago: z.number().optional(),
+      folder: z.enum(["inbox", "sent", "all"]).optional(),
+      limit: z.number().default(10),
+      offset: z.number().default(0),
+      email_id: z.string().optional(),
+      working_directory: z.string().optional(),
+      mailbox_address: z
+        .string()
+        .optional()
+        .describe("Optional target mailbox email address to search within."),
+      task_id: z
+        .string()
+        .optional()
+        .describe("If resuming a pending check, provide the task ID here."),
+      max_attachment_size_mb: z
+        .number()
+        .optional()
+        .describe(
+          "Maximum attachment size in MB to download (default 10). Attachments larger than this are listed in the response but not downloaded. Raise this to fetch large files.",
+        ),
+    }),
+    _meta: { ui: { resourceUri: EMAIL_UI_URI } },
+  },
+  async (args) => {
+    try {
+      return (await search_and_fetch_emails(args)) as any;
+    } catch (e: any) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: e.message }],
+      };
+    }
+  },
+);
+
 server.registerTool(
   "login_to_adeu_cloud",
   {
@@ -689,6 +692,8 @@ server.registerTool(
     }
   },
 );
+}
+
 // --- Formatter for process_document_batch ---
 export function formatBatchResult(
   stats: any,

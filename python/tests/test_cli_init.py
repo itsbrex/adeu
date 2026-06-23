@@ -24,6 +24,13 @@ def test_get_config_path_macos():
             assert path.as_posix() == "/Users/Test/Library/Application Support/Claude/claude_desktop_config.json"
 
 
+def mock_args():
+    args = MagicMock()
+    args.local = False
+    args.scope = "all"
+    return args
+
+
 # --- Tests for Init Logic ---
 
 
@@ -42,9 +49,7 @@ def test_init_creates_fresh_config(mock_config_path):
         # correct binary name (uvx). The resolved absolute path is what
         # must end up in the config — not the bare string "uvx".
         with patch("adeu.cli.shutil.which", return_value="/usr/local/bin/uvx"):
-            args = MagicMock()
-            args.local = False
-            handle_init(args)
+            handle_init(mock_args())
 
     assert mock_config_path.exists()
 
@@ -57,6 +62,8 @@ def test_init_creates_fresh_config(mock_config_path):
     assert cmd["command"] == "/usr/local/bin/uvx"
     assert "--from" in cmd["args"]
     assert "adeu" in cmd["args"]
+    assert "--scope" in cmd["args"]
+    assert "all" in cmd["args"]
 
 
 def test_init_updates_existing_and_backups(mock_config_path):
@@ -70,9 +77,7 @@ def test_init_updates_existing_and_backups(mock_config_path):
 
     with patch("adeu.cli._get_claude_config_path", return_value=mock_config_path):
         with patch("adeu.cli.shutil.which", return_value="/usr/local/bin/uvx"):
-            args = MagicMock()
-            args.local = False
-            handle_init(args)
+            handle_init(mock_args())
 
     backups = list(mock_config_path.parent.glob("*.bak"))
     assert len(backups) == 1
@@ -92,8 +97,7 @@ def test_init_exits_if_uvx_missing(mock_config_path):
     """
     with patch("adeu.cli._get_claude_config_path", return_value=mock_config_path):
         with patch("adeu.cli.shutil.which", return_value=None):
-            args = MagicMock()
-            args.local = False
+            args = mock_args()
             with pytest.raises(SystemExit) as exc_info:
                 handle_init(args)
 

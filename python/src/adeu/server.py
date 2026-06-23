@@ -10,7 +10,12 @@ from mcp.types import Icon
 
 from adeu.mcp_components.shared import get_build_info
 
-logging.basicConfig(stream=sys.stderr, level=logging.INFO, force=True)
+requested_scope = "all"
+for i, arg in enumerate(sys.argv):
+    if arg == "--scope" and i + 1 < len(sys.argv):
+        requested_scope = sys.argv[i + 1].lower()
+
+logging.basicConfig(stream=sys.stderr, level=logging.INFO if requested_scope != "all" else logging.WARNING, force=True)
 
 structlog.configure(
     processors=[
@@ -68,6 +73,15 @@ orig_mcp_list_tools = mcp.list_tools
 async def wrapped_mcp_list_tools(*args, **kwargs):
     tools = await orig_mcp_list_tools(*args, **kwargs)
     build_tag = f" [Adeu v{version}+{git_sha}]"
+
+    if requested_scope != "all":
+        filtered = []
+        for tool in tools:
+            tags = getattr(tool, "tags", []) or []
+            if requested_scope in tags:
+                filtered.append(tool)
+        tools = filtered
+
     for tool in tools:
         if hasattr(tool, "description") and tool.description:
             if build_tag not in tool.description:

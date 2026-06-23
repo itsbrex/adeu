@@ -102,7 +102,7 @@ def handle_init(args: argparse.Namespace):
 
         mcp_servers["adeu"] = {
             "command": uvx_path,  # absolute path, not bare "uvx"
-            "args": ["--from", "adeu", "adeu-server"],
+            "args": ["--from", "adeu", "adeu-server", "--scope", args.scope],
         }
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -740,6 +740,12 @@ def main():
         "--local",
         action="store_true",
         help="Configure to run from current source (for dev/testing)",
+    )
+    p_init.add_argument(
+        "--scope",
+        choices=["all", "docx"],
+        default="all",
+        help="Limit exposed tools to local manipulation ('docx') or everything ('all').",
     )
     p_init.set_defaults(func=handle_init)
 
