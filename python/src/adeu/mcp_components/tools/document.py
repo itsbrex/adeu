@@ -12,6 +12,7 @@ from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from fastmcp.tools.tool import ToolResult
+from pydantic import TypeAdapter
 
 from adeu.diff import generate_edits_from_text
 from adeu.ingest import _extract_text_from_doc, extract_text_from_stream
@@ -27,9 +28,64 @@ from adeu.mcp_components.shared import (
     read_file_bytes,
     save_stream,
 )
-from adeu.models import DocumentChange, ModifyText
+from adeu.models import (
+    AcceptChange,
+    BatchChanges,
+    DeleteTableRow,
+    DocumentChange,
+    InsertTableRow,
+    ModifyText,
+    RejectChange,
+    ReplyComment,
+    coerce_stringified_changes,
+)
 from adeu.redline.engine import BatchValidationError, RedlineEngine
 from adeu.utils.docx import strip_bom_from_docx_bytes
+
+_DOCUMENT_CHANGE_LIST_ADAPTER = TypeAdapter(List[DocumentChange])
+
+
+def _normalize_changes(changes: Any) -> List[DocumentChange]:
+    """
+    Normalize the `changes` argument into a list of validated DocumentChange
+    instances. Tolerates three shapes the tool may legitimately receive:
+
+      1. List of already-validated DocumentChange / Pydantic instances
+         (the common path when callers construct the objects themselves).
+      2. List of plain dicts (the common path when an LLM passes a JSON object).
+      3. List of JSON-encoded strings (Gemini quirk — see coerce_stringified_changes).
+
+    Mixed lists are also handled. We coerce strings -> dicts first, then run
+    the discriminated-union validator. Any item Pydantic can't classify will
+    raise a ValidationError with a clear path like `changes.2: ...`.
+
+    Pre-validated DocumentChange instances bypass re-validation because Pydantic
+    dump+reload would strip the engine's PrivateAttrs (e.g. _resolved_start_idx)
+    that may have been set during a dry-run.
+    """
+    if not isinstance(changes, list):
+        # Let the adapter produce the canonical "expected list" error.
+        return _DOCUMENT_CHANGE_LIST_ADAPTER.validate_python(changes)
+
+    # If every element is already a DocumentChange instance, skip revalidation.
+    if changes and all(
+        isinstance(
+            c,
+            (
+                AcceptChange,
+                RejectChange,
+                ReplyComment,
+                ModifyText,
+                InsertTableRow,
+                DeleteTableRow,
+            ),
+        )
+        for c in changes
+    ):
+        return changes  # type: ignore[return-value]
+
+    coerced = coerce_stringified_changes(changes)
+    return _DOCUMENT_CHANGE_LIST_ADAPTER.validate_python(coerced)
 
 
 async def _read_docx_disk(
@@ -570,7 +626,7 @@ if sys.platform == "win32":
         author_name: Annotated[str, "Name to appear in Track Changes (e.g., 'Reviewer AI')."],
         ctx: Context,
         changes: Annotated[
-            List[DocumentChange],
+            BatchChanges,
             "List of changes to apply. Each change must specify 'type'.",
         ],
         original_docx_path: Annotated[
@@ -587,6 +643,12 @@ if sys.platform == "win32":
         ] = False,
     ) -> str:
         start_time = time.perf_counter()
+        # FastMCP's parameter validation does not always honor the BeforeValidator
+        # attached to BatchChanges (it flattens the Annotated chain and validates
+        # against the bare list type), so coerce here as a defensive second pass.
+        # This is also what catches stringified-object lists emitted by some LLM
+        # clients (notably Gemini under load).
+        changes = _normalize_changes(changes)
         if dry_run:
             if not original_docx_path:
                 return (
@@ -605,7 +667,12 @@ if sys.platform == "win32":
             except Exception:
                 await ctx.debug("Document not open in live Word, falling back to disk edit.")
                 res = await _process_document_batch_disk(
-                    original_docx_path, author_name, ctx, changes, output_path, dry_run=False
+                    original_docx_path,
+                    author_name,
+                    ctx,
+                    changes,
+                    output_path,
+                    dry_run=False,
                 )
         return add_timing_if_debug(start_time, res)
 
@@ -773,7 +840,7 @@ else:
         author_name: Annotated[str, "Name to appear in Track Changes (e.g., 'Reviewer AI')."],
         ctx: Context,
         changes: Annotated[
-            List[DocumentChange],
+            BatchChanges,
             "List of changes to apply. Each change must specify 'type'.",
         ],
         output_path: Annotated[Optional[str], "Optional output path."] = None,
@@ -783,6 +850,8 @@ else:
         ] = False,
     ) -> str:
         start_time = time.perf_counter()
+        # See win32 branch above for why we re-coerce here.
+        changes = _normalize_changes(changes)
         res = await _process_document_batch_disk(
             original_docx_path, author_name, ctx, changes, output_path, dry_run=dry_run
         )

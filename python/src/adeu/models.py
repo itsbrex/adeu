@@ -1,6 +1,7 @@
-from typing import Annotated, Literal, Optional, Union
+import json
+from typing import Annotated, Any, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, BeforeValidator, Field, PrivateAttr
 
 from adeu.redline.mapper import DocumentMapper
 
@@ -143,3 +144,45 @@ DocumentChange = Annotated[
     ],
     Field(discriminator="type"),
 ]
+
+
+def coerce_stringified_changes(value: Any) -> Any:
+    """
+    Tolerate LLM clients (notably Gemini) that wrap each object in the `changes`
+    array as a JSON-encoded string instead of passing a real object:
+
+        "changes": ["{\"type\": \"modify\", ...}", "{\"type\": \"accept\", ...}"]
+
+    Without this, Pydantic rejects the call with an opaque discriminator error
+    and the agent has no way to recover. We decode any string elements so the
+    discriminated-union validator downstream sees real dicts.
+
+    Behaviour:
+      - Non-list inputs are passed through untouched (Pydantic will raise its
+        normal "expected list" error).
+      - String elements are json.loads()'d. If decoding fails, or the decoded
+        value is not a dict, the original string is left in place so Pydantic
+        produces a clear "expected object, got string" error at that index.
+      - Non-string elements (dicts, already-validated models) pass through.
+    """
+    if not isinstance(value, list):
+        return value
+
+    coerced: list[Any] = []
+    for item in value:
+        if isinstance(item, str):
+            try:
+                decoded = json.loads(item)
+            except (json.JSONDecodeError, ValueError):
+                coerced.append(item)
+                continue
+            if isinstance(decoded, dict):
+                coerced.append(decoded)
+            else:
+                coerced.append(item)
+        else:
+            coerced.append(item)
+    return coerced
+
+
+BatchChanges = Annotated[list[DocumentChange], BeforeValidator(coerce_stringified_changes)]

@@ -279,29 +279,50 @@ def build_search_response(
     total_matches = len(matches)
     total_pages = math.ceil(total_matches / 10)
 
+    out_of_range_warning = ""
     if str(page).lower() == "all":
         start_idx, end_idx = 0, total_matches
         page_text = "all"
     else:
-        page_num = int(page)
-        if page_num < 1 or page_num > total_pages:
-            raise ToolError(f"Page {page_num} out of range (search has {total_pages} pages).")
+        requested_page = int(page)
+        if requested_page < 1 or requested_page > total_pages:
+            # Soft clamp: LLMs commonly confuse search-result pagination with
+            # document-body pagination and pass a body page number here. Crashing
+            # the tool wastes a turn; instead, fall back to page 1 and tell the
+            # agent what happened so it can correct course.
+            out_of_range_warning = (
+                f"> ⚠️ **Note:** You requested search page {requested_page}, but search "
+                f"results for `{search_query}` only span {total_pages} page"
+                f"{'s' if total_pages != 1 else ''}. Showing page 1 instead. "
+                f"Reminder: the `page` parameter paginates **search results**, not "
+                f"the document body. To filter matches by document page, narrow "
+                f"your `search_query`.\n\n"
+            )
+            page_num = 1
+        else:
+            page_num = requested_page
         start_idx = (page_num - 1) * 10
         end_idx = min(start_idx + 10, total_matches)
         page_text = f"{page_num} of {total_pages}"
 
     page_matches = matches[start_idx:end_idx]
 
+    # When we clamped an out-of-range page back to 1, the "next page" hint must
+    # reference 2, not requested_page+1 (which would point off the end again).
+    next_page_hint = 2 if out_of_range_warning else (int(page) + 1 if str(page).lower() != "all" else 2)
     ui_parts = [
+        out_of_range_warning.rstrip() if out_of_range_warning else "",
         f"> **Search Results** — Found {total_matches} matches for query `{search_query}` in `{Path(file_path).name}`.",
         (
-            f"> Showing page {page_text} (matches {start_idx + 1}-{end_idx}). To see more matches, "
-            f"call `read_docx` with `search_query='{search_query}'`, "
-            f"`search_regex={'true' if search_regex else 'false'}`, "
-            f"and `page={int(page) + 1 if str(page).lower() != 'all' else 2}`."
-        )
-        if total_pages > 1 and str(page).lower() != "all"
-        else "",
+            (
+                f"> Showing page {page_text} (matches {start_idx + 1}-{end_idx}). To see more matches, "
+                f"call `read_docx` with `search_query='{search_query}'`, "
+                f"`search_regex={'true' if search_regex else 'false'}`, "
+                f"and `page={next_page_hint}`."
+            )
+            if total_pages > 1 and str(page).lower() != "all"
+            else ""
+        ),
     ]
 
     occurrences_map: dict[str, int] = {}
