@@ -218,8 +218,7 @@ export function build_search_response(
   file_path: string,
 ): ToolResult {
   const [body] = split_structural_appendix(text);
-  const escapeRegExp = (s: string) =>
-    s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const flags = search_case_sensitive ? "g" : "gi";
   const patternStr = search_regex ? search_query : escapeRegExp(search_query);
 
@@ -253,27 +252,63 @@ export function build_search_response(
   let start_idx = 0;
   let end_idx = total_matches;
   let page_text = "all";
+  let clamp_warning: string | null = null;
+  let effective_page_num: number | null = null;
 
   const pageStr = String(page).toLowerCase();
   if (pageStr !== "all") {
-    const page_num = parseInt(pageStr, 10);
-    if (isNaN(page_num) || page_num < 1 || page_num > total_pages) {
-      throw new Error(`Page ${page} out of range (search has ${total_pages} pages).`);
+    const requested_page_num = parseInt(pageStr, 10);
+    if (isNaN(requested_page_num) || requested_page_num < 1) {
+      throw new Error(
+        `Page ${page} out of range (search has ${total_pages} pages).`,
+      );
     }
-    start_idx = (page_num - 1) * 10;
+
+    // BUG-FIX (Search Pagination): when the LLM passes a `page` that exceeds
+    // the number of result pages, do NOT crash. The most common cause is the
+    // LLM confusing "page within search results" with "document page" — it
+    // sees the doc has N pages and passes page=N to read_docx with a
+    // search_query, expecting to restrict the search to that document page.
+    // Clamp to page 1 and surface a clear explanation of what `page` actually
+    // means in the search context, so the LLM can re-orient without burning a
+    // turn on a hard error.
+    if (requested_page_num > total_pages) {
+      clamp_warning =
+        `> ⚠️ Requested page ${requested_page_num} exceeds available result pages (${total_pages}). ` +
+        `In search mode, \`page\` paginates the SEARCH RESULTS (10 matches per page), not document pages. ` +
+        `Showing page 1 of ${total_pages} instead. The matches below already include hits from across the entire document — each match's \`(pN)\` annotation tells you which document page it lives on.`;
+      effective_page_num = 1;
+    } else {
+      effective_page_num = requested_page_num;
+    }
+
+    start_idx = (effective_page_num - 1) * 10;
     end_idx = Math.min(start_idx + 10, total_matches);
-    page_text = `${page_num} of ${total_pages}`;
+    page_text = `${effective_page_num} of ${total_pages}`;
   }
 
   const page_matches = matches.slice(start_idx, end_idx);
 
-  const ui_parts: string[] = [
+  const ui_parts: string[] = [];
+  if (clamp_warning) {
+    ui_parts.push(clamp_warning);
+  }
+  ui_parts.push(
     `> **Search Results** — Found ${total_matches} matches for query \`${search_query}\` in \`${basename(file_path)}\`.`,
-  ];
+  );
 
-  if (total_pages > 1 && pageStr !== "all") {
-    const nextPage = parseInt(pageStr, 10) + 1;
-    ui_parts.push(`> Showing page ${page_text} (matches ${start_idx + 1}-${end_idx}). To see more matches, call \`read_docx\` with \`search_query='${search_query}'\`, \`search_regex=${search_regex ? "true" : "false"}\`, and \`page=${nextPage}\`.`);
+  if (total_pages > 1 && pageStr !== "all" && effective_page_num !== null) {
+    const nextPage = effective_page_num + 1;
+    const has_next = nextPage <= total_pages;
+    if (has_next) {
+      ui_parts.push(
+        `> Showing page ${page_text} (matches ${start_idx + 1}-${end_idx}). To see more matches, call \`read_docx\` with \`search_query='${search_query}'\`, \`search_regex=${search_regex ? "true" : "false"}\`, and \`page=${nextPage}\`.`,
+      );
+    } else {
+      ui_parts.push(
+        `> Showing page ${page_text} (matches ${start_idx + 1}-${end_idx}). This is the last page of search results.`,
+      );
+    }
   }
 
   const occurrences_map: Record<string, number> = {};
@@ -294,7 +329,10 @@ export function build_search_response(
       if (m) {
         const level = m[1].length;
         if (level < current_level) {
-          let cleanHeading = m[2].replace(/\*\*|__|[*_]/g, "").replace(/\{#[^}]+\}/g, "").trim();
+          let cleanHeading = m[2]
+            .replace(/\*\*|__|[*_]/g, "")
+            .replace(/\{#[^}]+\}/g, "")
+            .trim();
           if (cleanHeading.length > 80) {
             cleanHeading = cleanHeading.substring(0, 80) + "...";
           }
@@ -324,7 +362,10 @@ export function build_search_response(
 
     const snippet_start = Math.max(0, m_start - 100);
     const snippet_end = Math.min(body.length, m_end + 100);
-    const snippet = body.substring(snippet_start, m_start) + `**${matched_str}**` + body.substring(m_end, snippet_end);
+    const snippet =
+      body.substring(snippet_start, m_start) +
+      `**${matched_str}**` +
+      body.substring(m_end, snippet_end);
 
     const snippet_lines = snippet
       .split("\n")
@@ -342,7 +383,9 @@ export function build_search_response(
 
     const count = occurrences_map[matched_str];
     ui_parts.push(snippet_lines);
-    ui_parts.push(`*Occurrences:* This exact phrasing appears ${count} time${count !== 1 ? "s" : ""} in the document.`);
+    ui_parts.push(
+      `*Occurrences:* This exact phrasing appears ${count} time${count !== 1 ? "s" : ""} in the document.`,
+    );
 
     i++;
   }
