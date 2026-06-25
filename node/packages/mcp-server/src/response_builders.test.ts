@@ -2,11 +2,9 @@
 import { describe, it, expect } from "vitest";
 import { build_search_response } from "./response-builders.js";
 
-describe("build_search_response — pagination clamp (BUG-FIX)", () => {
-  // Construct a body small enough that 12 matches fit in a single pagination
-  // page of the body itself, but produce 2 result pages (10 matches per result
-  // page). This isolates the result-pagination logic from body pagination.
-  function makeBodyWithMatches(count: number): string {
+describe("build_search_response — page-as-document-filter semantics", () => {
+  // Small body: 3 matches all in one paragraph → all on document page 1.
+  function makeSmallBody(count: number): string {
     const lines: string[] = ["# Section One"];
     for (let i = 0; i < count; i++) {
       lines.push(`Paragraph ${i} mentions the TARGET_PHRASE here.`);
@@ -14,82 +12,188 @@ describe("build_search_response — pagination clamp (BUG-FIX)", () => {
     return lines.join("\n\n");
   }
 
-  it("does NOT throw when requested page exceeds total result pages — clamps to page 1 with warning", () => {
-    // 12 matches → 2 result pages (10 + 2). Ask for page 5.
-    const body = makeBodyWithMatches(12);
+  // Large body designed to span multiple document pages (PAGE_TARGET_CHARS=19000).
+  // Each filler paragraph is ~500 chars, so ~40 paragraphs per document page.
+  // We seed TARGET_PHRASE at known intervals so we can predict page distribution.
+  function makeMultiPageBody(): string {
+    const filler =
+      "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.";
+    const blocks: string[] = [];
+    // ~50 paragraphs of filler before each marker, with TARGET_PHRASE injected at known places.
+    for (let i = 0; i < 200; i++) {
+      if (i === 10 || i === 11 || i === 12) {
+        blocks.push(`Paragraph ${i}: TARGET_PHRASE appears here.`);
+      } else if (i === 80) {
+        blocks.push(`Paragraph ${i}: TARGET_PHRASE appears here.`);
+      } else if (i === 150) {
+        blocks.push(`Paragraph ${i}: TARGET_PHRASE appears here.`);
+      } else {
+        blocks.push(`Paragraph ${i}: ${filler}`);
+      }
+    }
+    return blocks.join("\n\n");
+  }
 
-    let res: any;
-    expect(() => {
-      res = build_search_response(
+  it("page omitted with single-page doc: searches all, shows all matches", () => {
+    const body = makeSmallBody(3);
+    const res = build_search_response(
+      body,
+      "TARGET_PHRASE",
+      false,
+      true,
+      undefined,
+      "dummy.docx",
+    );
+    const text = res.content[0].text;
+
+    expect(text).toContain("Found 3 matches");
+    expect(text).toContain("### Match 1 (p1)");
+    expect(text).toContain("### Match 2 (p1)");
+    expect(text).toContain("### Match 3 (p1)");
+    // No clamp warning, no result-pagination hint.
+    expect(text).not.toContain("exceeds available result pages");
+    expect(text).not.toContain("Showing page");
+  });
+
+  it("page='all' explicit: same behavior as omitting", () => {
+    const body = makeSmallBody(3);
+    const res = build_search_response(
+      body,
+      "TARGET_PHRASE",
+      false,
+      true,
+      "all",
+      "dummy.docx",
+    );
+    expect(res.content[0].text).toContain("Found 3 matches");
+  });
+
+  it("page omitted with multi-page doc: shows distribution summary", () => {
+    const body = makeMultiPageBody();
+    const res = build_search_response(
+      body,
+      "TARGET_PHRASE",
+      false,
+      true,
+      undefined,
+      "dummy.docx",
+    );
+    const text = res.content[0].text;
+
+    expect(text).toContain("Found 5 matches");
+    expect(text).toContain("Distribution across");
+    expect(text).toMatch(/p\d+: \d+/);
+    expect(text).toContain("Pass `page=N` to filter");
+  });
+
+  it("page=N as document-page filter: only returns matches on that page", () => {
+    const body = makeMultiPageBody();
+
+    // First find out which doc pages actually have hits by doing an "all" search.
+    const allRes = build_search_response(
+      body,
+      "TARGET_PHRASE",
+      false,
+      true,
+      "all",
+      "dummy.docx",
+    );
+    const allText = allRes.content[0].text;
+    // Extract the first hit page from the Match annotations.
+    const firstMatchPageMatch = allText.match(/### Match 1 \(p(\d+)\)/);
+    expect(firstMatchPageMatch).not.toBeNull();
+    const firstHitPage = parseInt(firstMatchPageMatch![1], 10);
+
+    // Now filter to that page.
+    const res = build_search_response(
+      body,
+      "TARGET_PHRASE",
+      false,
+      true,
+      firstHitPage,
+      "dummy.docx",
+    );
+    const text = res.content[0].text;
+
+    expect(text).toContain(`on document page ${firstHitPage}`);
+    // All shown matches must be on the filtered page.
+    const matchPageRegex = /### Match \d+ \(p(\d+)\)/g;
+    const matches = Array.from(text.matchAll(matchPageRegex));
+    expect(matches.length).toBeGreaterThan(0);
+    for (const m of matches) {
+      expect(parseInt(m[1], 10)).toBe(firstHitPage);
+    }
+  });
+
+  it("page=N where N has no hits but query exists elsewhere: helpful message", () => {
+    const body = makeMultiPageBody();
+    // Find a page that has no hits. Multi-page body has hits on a few pages
+    // but several pages in between have none. Page 2 should be safe if hits
+    // are on early pages or much later pages.
+    // First, identify a hit-less page by checking the "all" output.
+    const allRes = build_search_response(
+      body,
+      "TARGET_PHRASE",
+      false,
+      true,
+      "all",
+      "dummy.docx",
+    );
+    const allText = allRes.content[0].text;
+    const hitPages = new Set<number>();
+    const matchPageRegex = /### Match \d+ \(p(\d+)\)/g;
+    for (const m of allText.matchAll(matchPageRegex)) {
+      hitPages.add(parseInt(m[1], 10));
+    }
+
+    // Find the total page count from the distribution line.
+    const distMatch = allText.match(/Distribution across (\d+) document pages/);
+    expect(distMatch).not.toBeNull();
+    const totalPages = parseInt(distMatch![1], 10);
+
+    // Find a page with no hits.
+    let emptyPage: number | null = null;
+    for (let p = 1; p <= totalPages; p++) {
+      if (!hitPages.has(p)) {
+        emptyPage = p;
+        break;
+      }
+    }
+    expect(emptyPage).not.toBeNull();
+
+    const res = build_search_response(
+      body,
+      "TARGET_PHRASE",
+      false,
+      true,
+      emptyPage!,
+      "dummy.docx",
+    );
+    const text = res.content[0].text;
+
+    expect(text).toContain(
+      `No matches for \`TARGET_PHRASE\` on document page ${emptyPage}`,
+    );
+    expect(text).toContain("The query DOES appear elsewhere");
+    expect(text).toContain("Omit `page` or pass `page='all'`");
+  });
+
+  it("page=N where N exceeds total document pages: hard error", () => {
+    const body = makeSmallBody(3); // Single-page document.
+    expect(() =>
+      build_search_response(
         body,
         "TARGET_PHRASE",
         false,
         true,
-        5,
+        99,
         "dummy.docx",
-      );
-    }).not.toThrow();
-
-    const text = res.content[0].text;
-
-    // Warning must mention the requested page, the actual page count, and explain
-    // the search-pagination semantics so the LLM can re-orient.
-    expect(text).toContain(
-      "Requested page 5 exceeds available result pages (2)",
-    );
-    expect(text).toContain("paginates the SEARCH RESULTS");
-    expect(text).toContain("Showing page 1 of 2");
-
-    // The header line still appears.
-    expect(text).toContain("Search Results");
-    expect(text).toContain("Found 12 matches");
-
-    // We clamped to page 1, so matches 1-10 are shown.
-    expect(text).toContain("Showing page 1 of 2 (matches 1-10)");
-
-    // Page 1 has a next-page hint pointing at page 2.
-    expect(text).toContain("page=2");
+      ),
+    ).toThrow(/Document page 99 is out of range/);
   });
 
-  it("normal in-range page request still works correctly", () => {
-    const body = makeBodyWithMatches(12);
-    const res = build_search_response(
-      body,
-      "TARGET_PHRASE",
-      false,
-      true,
-      1,
-      "dummy.docx",
-    );
-    const text = res.content[0].text;
-
-    // No clamp warning.
-    expect(text).not.toContain("exceeds available result pages");
-    expect(text).toContain("Showing page 1 of 2 (matches 1-10)");
-    expect(text).toContain("page=2");
-  });
-
-  it("last in-range page no longer suggests a non-existent next page", () => {
-    // 12 matches → 2 result pages. Request page 2 (the last one).
-    const body = makeBodyWithMatches(12);
-    const res = build_search_response(
-      body,
-      "TARGET_PHRASE",
-      false,
-      true,
-      2,
-      "dummy.docx",
-    );
-    const text = res.content[0].text;
-
-    expect(text).toContain("Showing page 2 of 2 (matches 11-12)");
-    expect(text).toContain("This is the last page of search results.");
-    // Critical: must NOT suggest a non-existent page=3.
-    expect(text).not.toContain("page=3");
-  });
-
-  it("invalid page values (NaN, <1) still throw — only out-of-range clamps", () => {
-    const body = makeBodyWithMatches(12);
+  it("invalid page values throw with actionable message", () => {
+    const body = makeSmallBody(3);
     expect(() =>
       build_search_response(
         body,
@@ -99,7 +203,7 @@ describe("build_search_response — pagination clamp (BUG-FIX)", () => {
         0,
         "dummy.docx",
       ),
-    ).toThrow(/out of range/);
+    ).toThrow(/Invalid page value/);
     expect(() =>
       build_search_response(
         body,
@@ -109,12 +213,26 @@ describe("build_search_response — pagination clamp (BUG-FIX)", () => {
         "garbage",
         "dummy.docx",
       ),
-    ).toThrow(/out of range/);
+    ).toThrow(/Invalid page value/);
   });
 
-  it("page='all' is unaffected", () => {
-    const body = makeBodyWithMatches(12);
+  it("no matches anywhere: standard empty message", () => {
+    const body = makeSmallBody(3);
     const res = build_search_response(
+      body,
+      "NONEXISTENT_TOKEN",
+      false,
+      true,
+      undefined,
+      "dummy.docx",
+    );
+    expect(res.content[0].text).toContain("No matches found");
+  });
+
+  it("occurrence counts are global, not filtered", () => {
+    const body = makeMultiPageBody();
+    // Filter to one specific page and verify the occurrence count reflects the full document.
+    const allRes = build_search_response(
       body,
       "TARGET_PHRASE",
       false,
@@ -122,32 +240,27 @@ describe("build_search_response — pagination clamp (BUG-FIX)", () => {
       "all",
       "dummy.docx",
     );
-    const text = res.content[0].text;
-    expect(text).toContain("Found 12 matches");
-    expect(text).not.toContain("exceeds available result pages");
-    // 'all' mode shouldn't have a Showing page X of Y line.
-    expect(text).not.toMatch(/Showing page \d+ of \d+/);
-  });
+    const totalMatches = (allRes.content[0].text.match(/### Match /g) || [])
+      .length;
+    expect(totalMatches).toBe(5);
 
-  it("single result page with an out-of-range request still clamps gracefully", () => {
-    // Matches exactly the bug report's scenario: 1 result page, LLM asks for page 3.
-    const body = makeBodyWithMatches(3); // 3 matches → 1 result page
-    const res = build_search_response(
+    // Now filter to the first hit page.
+    const firstPageMatch = allRes.content[0].text.match(
+      /### Match 1 \(p(\d+)\)/,
+    );
+    const firstHitPage = parseInt(firstPageMatch![1], 10);
+
+    const filteredRes = build_search_response(
       body,
       "TARGET_PHRASE",
       false,
       true,
-      3,
+      firstHitPage,
       "dummy.docx",
     );
-    const text = res.content[0].text;
-
-    expect(text).toContain(
-      "Requested page 3 exceeds available result pages (1)",
+    // The "Occurrences" line should still report the global count of 5.
+    expect(filteredRes.content[0].text).toContain(
+      "This exact phrasing appears 5 times in the document",
     );
-    expect(text).toContain("Showing page 1 of 1");
-    expect(text).toContain("Found 3 matches");
-    // Single result page → no pagination hint at all (total_pages === 1).
-    expect(text).not.toMatch(/page=\d+/);
   });
 });

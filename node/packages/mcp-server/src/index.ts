@@ -42,17 +42,17 @@ function readFileBytesOrThrow(filePath: string): Buffer {
     if (err.code === "ENOENT") {
       throw new Error(
         `File not found: ${filePath}.\n` +
-        `If you are running in a sandboxed/containerized environment (such as Claude Desktop or another containerized client), ` +
-        `the host application or MCP server may not have direct access to your local workspace files.\n` +
-        `You can resolve this by installing and running the local 'adeu' CLI tool directly within your environment.\n` +
-        `Here is how the MCP tools map to their CLI equivalents:\n` +
-        `- read_docx               -> adeu extract ${filePath}\n` +
-        `- process_document_batch  -> adeu apply ${filePath}\n` +
-        `- diff_docx_files         -> adeu diff ${filePath} <modified_path>\n` +
-        `- accept_all_changes      -> adeu accept-all ${filePath}\n\n` +
-        `To run the local tool, install it via:\n` +
-        `  uv tool install adeu\n` +
-        `and run the mapped CLI command directly in your terminal.`
+          `If you are running in a sandboxed/containerized environment (such as Claude Desktop or another containerized client), ` +
+          `the host application or MCP server may not have direct access to your local workspace files.\n` +
+          `You can resolve this by installing and running the local 'adeu' CLI tool directly within your environment.\n` +
+          `Here is how the MCP tools map to their CLI equivalents:\n` +
+          `- read_docx               -> adeu extract ${filePath}\n` +
+          `- process_document_batch  -> adeu apply ${filePath}\n` +
+          `- diff_docx_files         -> adeu diff ${filePath} <modified_path>\n` +
+          `- accept_all_changes      -> adeu accept-all ${filePath}\n\n` +
+          `To run the local tool, install it via:\n` +
+          `  uv tool install adeu\n` +
+          `and run the mapped CLI command directly in your terminal.`,
       );
     }
     throw err;
@@ -95,7 +95,9 @@ const buildTag = ` [Adeu v${packageVersion}+${gitSha}]`;
 // --- Scope Configuration ---
 const args = process.argv.slice(2);
 const scopeIdx = args.indexOf("--scope");
-const requestedScope = (scopeIdx !== -1 ? args[scopeIdx + 1] : "all").toLowerCase();
+const requestedScope = (
+  scopeIdx !== -1 ? args[scopeIdx + 1] : "all"
+).toLowerCase();
 const isDocxOnly = requestedScope === "docx";
 
 // --- Server Setup ---
@@ -116,7 +118,12 @@ server.registerTool = (name: string, schema: any, handler?: any) => {
 };
 
 // Wrap registerAppTool to inject buildTag into descriptions
-const registerAppTool: typeof origRegisterAppTool = (mcpServer, name, schema, handler) => {
+const registerAppTool: typeof origRegisterAppTool = (
+  mcpServer,
+  name,
+  schema,
+  handler,
+) => {
   if (schema && typeof schema === "object") {
     if (schema.description) {
       schema.description = schema.description.trim() + buildTag;
@@ -226,10 +233,12 @@ registerAppTool(
         ),
       page: z
         .union([z.number(), z.string()])
-        .default(1)
-        .describe("Page number (1-indexed) for mode='full', or 'all' to return unpaginated."),
-      outline_max_level: z
-        .coerce.number()
+        .optional()
+        .describe(
+          "Without `search_query`: 1-indexed document page to display (defaults to 1). With `search_query`: restricts matches to that document page (defaults to searching all pages; pass `page='all'` to be explicit).",
+        ),
+      outline_max_level: z.coerce
+        .number()
         .default(2)
         .describe("For mode='outline' only: cap on heading depth."),
       outline_verbose: z
@@ -239,11 +248,15 @@ registerAppTool(
       search_query: z
         .string()
         .optional()
-        .describe("The substring or regex pattern to search for. When provided, filters results to matching paragraphs."),
+        .describe(
+          "The substring or regex pattern to search for. When provided, filters results to matching paragraphs.",
+        ),
       search_regex: z
         .boolean()
         .default(false)
-        .describe("Set to true to interpret search_query as a regular expression."),
+        .describe(
+          "Set to true to interpret search_query as a regular expression.",
+        ),
       search_case_sensitive: z
         .boolean()
         .default(true)
@@ -267,7 +280,12 @@ registerAppTool(
 
       if (mode === "outline") {
         const doc = await DocumentObject.load(buf);
-        const extract_res = _extractTextFromDoc(doc, clean_view, true, true) as {
+        const extract_res = _extractTextFromDoc(
+          doc,
+          clean_view,
+          true,
+          true,
+        ) as {
           text: string;
           paragraph_offsets: Map<any, [number, number]>;
         };
@@ -284,14 +302,29 @@ registerAppTool(
 
       const text = await extractTextFromBuffer(buf, clean_view);
       if (search_query !== undefined && search_query !== null) {
-        const res = build_search_response(text, search_query, search_regex, search_case_sensitive, page, file_path);
+        // In search mode, undefined `page` means "search all document pages".
+        const res = build_search_response(
+          text,
+          search_query,
+          search_regex,
+          search_case_sensitive,
+          page,
+          file_path,
+        );
         return res as any;
       }
+      // In non-search mode, `page` defaults to 1 (show document page 1).
+      const resolvedPage =
+        page === undefined || page === null
+          ? 1
+          : typeof page === "number"
+            ? page
+            : parseInt(String(page), 10) || 1;
       if (mode === "appendix") {
-        const res = build_appendix_response(text, typeof page === "number" ? page : parseInt(page, 10) || 1, file_path);
+        const res = build_appendix_response(text, resolvedPage, file_path);
         return res as any;
       }
-      const res = build_paginated_response(text, typeof page === "number" ? page : parseInt(page, 10) || 1, file_path);
+      const res = build_paginated_response(text, resolvedPage, file_path);
       return res as any;
     } catch (e: any) {
       return {
@@ -595,145 +628,145 @@ server.registerTool(
 );
 
 if (!isDocxOnly) {
-registerAppTool(
-  server,
-  "search_and_fetch_emails",
-  {
-    title: "Search & Fetch Emails",
-    description:
-      "Searches the user's live email inbox via the Adeu cloud backend.\n\n" +
-      "TWO MODES:\n" +
-      "1. Search mode (no `email_id`): returns up to `limit` lightweight previews. Use filters (`sender`, `subject`, `is_unread`, `days_ago`, `folder`, `has_attachments`, `attachment_name`) to narrow down.\n" +
-      "2. Fetch mode (with `email_id`): returns the full email body, thread history, and downloads attachments under `max_attachment_size_mb` to the local disk.\n\n" +
-      "AUTO-ESCALATION: If a search returns exactly one preview, the backend automatically fetches the full email in the same call. Plan around the response shape — check the `type` field (`previews` vs `full_email`) before assuming.\n\n" +
-      "EMAIL ID FORMATS (`email_id` parameter accepts any of):\n" +
-      "- `msg_<6 chars>` — short ID returned by previews on THIS machine. NOT portable across machines or sessions; the local cache holds the most recent 1000. If you reference one that's been evicted, the tool returns a StaleShortIdError telling you to re-search.\n" +
-      "- `adeu_<numeric>` — server-side reference for emails Adeu has previously processed. Portable across machines and sessions for the same authenticated user.\n" +
-      "- Raw provider ID (Gmail/Outlook native ID) — works if you have it, but you usually won't.\n\n" +
-      "FOLDER DEFAULT: omitting `folder` searches the Inbox only (matching what the user sees in their mail client). Use `folder='sent'` for sent items, `folder='all'` to include Deleted Items, Drafts, and other folders.\n\n" +
-      "ATTACHMENTS: attachments larger than `max_attachment_size_mb` (default 10) are listed in the response but NOT downloaded — raise the cap if you need them. Always set `working_directory` when calling from a project so attachments land alongside the user's other files.",
-    inputSchema: z.object({
-      sender: z.string().optional(),
-      subject: z.string().optional(),
-      has_attachments: z.boolean().optional(),
-      attachment_name: z.string().optional(),
-      is_unread: z.boolean().optional(),
-      days_ago: z.coerce.number().optional(),
-      folder: z.enum(["inbox", "sent", "all"]).optional(),
-      limit: z.coerce.number().default(10),
-      offset: z.coerce.number().default(0),
-      email_id: z.string().optional(),
-      working_directory: z.string().optional(),
-      mailbox_address: z
-        .string()
-        .optional()
-        .describe("Optional target mailbox email address to search within."),
-      task_id: z
-        .string()
-        .optional()
-        .describe("If resuming a pending check, provide the task ID here."),
-      max_attachment_size_mb: z
-        .coerce.number()
-        .optional()
-        .describe(
-          "Maximum attachment size in MB to download (default 10). Attachments larger than this are listed in the response but not downloaded. Raise this to fetch large files.",
-        ),
-    }),
-    _meta: { ui: { resourceUri: EMAIL_UI_URI } },
-  },
-  async (args) => {
-    try {
-      return (await search_and_fetch_emails(args)) as any;
-    } catch (e: any) {
-      return {
-        isError: true,
-        content: [{ type: "text", text: e.message }],
-      };
-    }
-  },
-);
-
-server.registerTool(
-  "login_to_adeu_cloud",
-  {
-    description:
-      "Logs the user into Adeu Cloud. Opens a browser window for SSO authentication.\n\n" +
-      "IMPORTANT — login is user-level, not account-level:\n" +
-      "- An Adeu user can have multiple linked provider accounts (Microsoft, Google) and multiple mailboxes (personal + shared/delegated). One linked account is marked primary.\n" +
-      "- Signing in through ANY of the user's linked accounts authenticates the same Adeu user. Once logged in, the session can read from and draft in ALL of that user's linked accounts and ALL of their mailboxes — not just the one used to sign in.\n" +
-      "- The choice of which provider account to sign in through is purely an SSO mechanism; it does not select a 'current account' for the session.\n\n" +
-      "When the user asks which accounts or mailboxes are available, call `list_available_mailboxes` rather than naming a single account from the login response.",
-  },
-  async () => {
-    try {
-      return (await login_to_adeu_cloud()) as any;
-    } catch (e: any) {
-      return { isError: true, content: [{ type: "text", text: e.message }] };
-    }
-  },
-);
-
-server.registerTool(
-  "logout_of_adeu_cloud",
-  { description: "Logs out of the Adeu Cloud backend." },
-  async () => {
-    try {
-      return (await logout_of_adeu_cloud()) as any;
-    } catch (e: any) {
-      return { isError: true, content: [{ type: "text", text: e.message }] };
-    }
-  },
-);
-server.registerTool(
-  "create_email_draft",
-  {
-    description:
-      "Creates an email draft in the user's native draft box (Outlook Drafts or Gmail Drafts).\n\n" +
-      "TWO MODES:\n" +
-      "1. Reply mode: pass `reply_to_email_id` to create a threaded reply. The draft inherits subject, recipients, and threading headers from the original — do NOT pass `subject` or `to_recipients`.\n" +
-      "2. New email mode: omit `reply_to_email_id` and pass BOTH `subject` and `to_recipients`.\n\n" +
-      "`reply_to_email_id` accepts the same ID formats as search_and_fetch_emails (`msg_*` short IDs, `adeu_*` references, or raw provider IDs). Short IDs are validated against the local cache before the call; stale ones fail fast with a clear error telling you to re-search.\n\n" +
-      "`body_markdown` is converted server-side to styled HTML with inlined CSS for email-client compatibility. Write the body in plain Markdown — do not pre-render HTML.\n\n" +
-      "`attachment_paths` takes absolute file paths on the user's local disk and uploads them with the draft. Useful right after search_and_fetch_emails downloaded attachments — those local paths can be passed directly here.",
-    inputSchema: {
-      body_markdown: z.string(),
-      reply_to_email_id: z.string().optional(),
-      subject: z.string().optional(),
-      to_recipients: z.array(z.string()).optional(),
-      attachment_paths: z.array(z.string()).optional(),
-      mailbox_address: z
-        .string()
-        .optional()
-        .describe(
-          "Optional target mailbox email address to create the draft in.",
-        ),
+  registerAppTool(
+    server,
+    "search_and_fetch_emails",
+    {
+      title: "Search & Fetch Emails",
+      description:
+        "Searches the user's live email inbox via the Adeu cloud backend.\n\n" +
+        "TWO MODES:\n" +
+        "1. Search mode (no `email_id`): returns up to `limit` lightweight previews. Use filters (`sender`, `subject`, `is_unread`, `days_ago`, `folder`, `has_attachments`, `attachment_name`) to narrow down.\n" +
+        "2. Fetch mode (with `email_id`): returns the full email body, thread history, and downloads attachments under `max_attachment_size_mb` to the local disk.\n\n" +
+        "AUTO-ESCALATION: If a search returns exactly one preview, the backend automatically fetches the full email in the same call. Plan around the response shape — check the `type` field (`previews` vs `full_email`) before assuming.\n\n" +
+        "EMAIL ID FORMATS (`email_id` parameter accepts any of):\n" +
+        "- `msg_<6 chars>` — short ID returned by previews on THIS machine. NOT portable across machines or sessions; the local cache holds the most recent 1000. If you reference one that's been evicted, the tool returns a StaleShortIdError telling you to re-search.\n" +
+        "- `adeu_<numeric>` — server-side reference for emails Adeu has previously processed. Portable across machines and sessions for the same authenticated user.\n" +
+        "- Raw provider ID (Gmail/Outlook native ID) — works if you have it, but you usually won't.\n\n" +
+        "FOLDER DEFAULT: omitting `folder` searches the Inbox only (matching what the user sees in their mail client). Use `folder='sent'` for sent items, `folder='all'` to include Deleted Items, Drafts, and other folders.\n\n" +
+        "ATTACHMENTS: attachments larger than `max_attachment_size_mb` (default 10) are listed in the response but NOT downloaded — raise the cap if you need them. Always set `working_directory` when calling from a project so attachments land alongside the user's other files.",
+      inputSchema: z.object({
+        sender: z.string().optional(),
+        subject: z.string().optional(),
+        has_attachments: z.boolean().optional(),
+        attachment_name: z.string().optional(),
+        is_unread: z.boolean().optional(),
+        days_ago: z.coerce.number().optional(),
+        folder: z.enum(["inbox", "sent", "all"]).optional(),
+        limit: z.coerce.number().default(10),
+        offset: z.coerce.number().default(0),
+        email_id: z.string().optional(),
+        working_directory: z.string().optional(),
+        mailbox_address: z
+          .string()
+          .optional()
+          .describe("Optional target mailbox email address to search within."),
+        task_id: z
+          .string()
+          .optional()
+          .describe("If resuming a pending check, provide the task ID here."),
+        max_attachment_size_mb: z.coerce
+          .number()
+          .optional()
+          .describe(
+            "Maximum attachment size in MB to download (default 10). Attachments larger than this are listed in the response but not downloaded. Raise this to fetch large files.",
+          ),
+      }),
+      _meta: { ui: { resourceUri: EMAIL_UI_URI } },
     },
-  },
-  async (args) => {
-    try {
-      return (await create_email_draft(args)) as any;
-    } catch (e: any) {
-      return { isError: true, content: [{ type: "text", text: e.message }] };
-    }
-  },
-);
-server.registerTool(
-  "list_available_mailboxes",
-  {
-    description:
-      "Lists all personal and shared/delegated mailboxes the authenticated Adeu user has access to, across ALL of their linked provider accounts. Returns each mailbox's `email_address`, `display_name`, auto-processing settings, and write-back preference.\n\n" +
-      "This is the right tool to answer 'which accounts/mailboxes am I logged into?' — Adeu login is user-level, so a single MCP session can see every mailbox listed here regardless of which provider account was used for SSO.\n\n" +
-      "Call this FIRST when the user names a specific mailbox or shared inbox, to resolve the canonical `email_address`. Then pass that address as `mailbox_address` to `search_and_fetch_emails` or `create_email_draft` to scope the operation. Omitting `mailbox_address` on those tools targets the user's primary personal mailbox.",
-    inputSchema: {},
-  },
-  async () => {
-    try {
-      return (await list_available_mailboxes()) as any;
-    } catch (e: any) {
-      return { isError: true, content: [{ type: "text", text: e.message }] };
-    }
-  },
-);
+    async (args) => {
+      try {
+        return (await search_and_fetch_emails(args)) as any;
+      } catch (e: any) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: e.message }],
+        };
+      }
+    },
+  );
+
+  server.registerTool(
+    "login_to_adeu_cloud",
+    {
+      description:
+        "Logs the user into Adeu Cloud. Opens a browser window for SSO authentication.\n\n" +
+        "IMPORTANT — login is user-level, not account-level:\n" +
+        "- An Adeu user can have multiple linked provider accounts (Microsoft, Google) and multiple mailboxes (personal + shared/delegated). One linked account is marked primary.\n" +
+        "- Signing in through ANY of the user's linked accounts authenticates the same Adeu user. Once logged in, the session can read from and draft in ALL of that user's linked accounts and ALL of their mailboxes — not just the one used to sign in.\n" +
+        "- The choice of which provider account to sign in through is purely an SSO mechanism; it does not select a 'current account' for the session.\n\n" +
+        "When the user asks which accounts or mailboxes are available, call `list_available_mailboxes` rather than naming a single account from the login response.",
+    },
+    async () => {
+      try {
+        return (await login_to_adeu_cloud()) as any;
+      } catch (e: any) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
+      }
+    },
+  );
+
+  server.registerTool(
+    "logout_of_adeu_cloud",
+    { description: "Logs out of the Adeu Cloud backend." },
+    async () => {
+      try {
+        return (await logout_of_adeu_cloud()) as any;
+      } catch (e: any) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
+      }
+    },
+  );
+  server.registerTool(
+    "create_email_draft",
+    {
+      description:
+        "Creates an email draft in the user's native draft box (Outlook Drafts or Gmail Drafts).\n\n" +
+        "TWO MODES:\n" +
+        "1. Reply mode: pass `reply_to_email_id` to create a threaded reply. The draft inherits subject, recipients, and threading headers from the original — do NOT pass `subject` or `to_recipients`.\n" +
+        "2. New email mode: omit `reply_to_email_id` and pass BOTH `subject` and `to_recipients`.\n\n" +
+        "`reply_to_email_id` accepts the same ID formats as search_and_fetch_emails (`msg_*` short IDs, `adeu_*` references, or raw provider IDs). Short IDs are validated against the local cache before the call; stale ones fail fast with a clear error telling you to re-search.\n\n" +
+        "`body_markdown` is converted server-side to styled HTML with inlined CSS for email-client compatibility. Write the body in plain Markdown — do not pre-render HTML.\n\n" +
+        "`attachment_paths` takes absolute file paths on the user's local disk and uploads them with the draft. Useful right after search_and_fetch_emails downloaded attachments — those local paths can be passed directly here.",
+      inputSchema: {
+        body_markdown: z.string(),
+        reply_to_email_id: z.string().optional(),
+        subject: z.string().optional(),
+        to_recipients: z.array(z.string()).optional(),
+        attachment_paths: z.array(z.string()).optional(),
+        mailbox_address: z
+          .string()
+          .optional()
+          .describe(
+            "Optional target mailbox email address to create the draft in.",
+          ),
+      },
+    },
+    async (args) => {
+      try {
+        return (await create_email_draft(args)) as any;
+      } catch (e: any) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
+      }
+    },
+  );
+  server.registerTool(
+    "list_available_mailboxes",
+    {
+      description:
+        "Lists all personal and shared/delegated mailboxes the authenticated Adeu user has access to, across ALL of their linked provider accounts. Returns each mailbox's `email_address`, `display_name`, auto-processing settings, and write-back preference.\n\n" +
+        "This is the right tool to answer 'which accounts/mailboxes am I logged into?' — Adeu login is user-level, so a single MCP session can see every mailbox listed here regardless of which provider account was used for SSO.\n\n" +
+        "Call this FIRST when the user names a specific mailbox or shared inbox, to resolve the canonical `email_address`. Then pass that address as `mailbox_address` to `search_and_fetch_emails` or `create_email_draft` to scope the operation. Omitting `mailbox_address` on those tools targets the user's primary personal mailbox.",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        return (await list_available_mailboxes()) as any;
+      } catch (e: any) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
+      }
+    },
+  );
 }
 
 // --- Formatter for process_document_batch ---
@@ -748,8 +781,17 @@ export function formatBatchResult(
   } else {
     res = `Batch complete. Saved to: ${outPath}\n`;
   }
-  const total_occurrences = stats.edits ? stats.edits.reduce((acc: number, e: any) => acc + (e.status === "applied" ? (e.occurrences_modified || 1) : 0), 0) : 0;
-  const occ_text = total_occurrences > stats.edits_applied ? ` (${total_occurrences} occurrences)` : "";
+  const total_occurrences = stats.edits
+    ? stats.edits.reduce(
+        (acc: number, e: any) =>
+          acc + (e.status === "applied" ? e.occurrences_modified || 1 : 0),
+        0,
+      )
+    : 0;
+  const occ_text =
+    total_occurrences > stats.edits_applied
+      ? ` (${total_occurrences} occurrences)`
+      : "";
 
   res += `Actions: ${stats.actions_applied} applied, ${stats.actions_skipped} skipped.\n`;
   res += `Edits: ${stats.edits_applied} applied${occ_text}, ${stats.edits_skipped} skipped.\n`;
@@ -760,20 +802,22 @@ export function formatBatchResult(
       const report = stats.edits[i];
       const status_indicator =
         report.status === "applied" ? "✅ [applied]" : "❌ [failed]";
-        
-      const pagesStr = report.pages && report.pages.length > 0 
-        ? ` (p${report.pages.join(", p")})` 
-        : "";
-        
+
+      const pagesStr =
+        report.pages && report.pages.length > 0
+          ? ` (p${report.pages.join(", p")})`
+          : "";
+
       res += `### Edit ${i + 1} ${status_indicator}${pagesStr}\n`;
-      
+
       if (report.heading_path) {
         res += `**Path:** \`${report.heading_path}\`\n`;
       }
-      
+
       if (report.match_mode) {
-         const occ = report.occurrences_modified || (report.status === "applied" ? 1 : 0);
-         res += `**Mode:** \`${report.match_mode}\` (${occ} occurrence${occ !== 1 ? 's' : ''} modified)\n`;
+        const occ =
+          report.occurrences_modified || (report.status === "applied" ? 1 : 0);
+        res += `**Mode:** \`${report.match_mode}\` (${occ} occurrence${occ !== 1 ? "s" : ""} modified)\n`;
       }
 
       if (report.error) {
@@ -782,12 +826,12 @@ export function formatBatchResult(
       if (report.warning) {
         res += `*Warning:* ${report.warning}\n`;
       }
-      
+
       if (report.critic_markup) {
-        res += `*Preview (CriticMarkup):*\n> ${report.critic_markup.split('\\n').join('\\n> ')}\n`;
+        res += `*Preview (CriticMarkup):*\n> ${report.critic_markup.split("\\n").join("\\n> ")}\n`;
       }
       if (report.clean_text) {
-        res += `*Preview (Clean):*\n> ${report.clean_text.split('\\n').join('\\n> ')}\n`;
+        res += `*Preview (Clean):*\n> ${report.clean_text.split("\\n").join("\\n> ")}\n`;
       }
       res += "\n";
     }

@@ -214,7 +214,7 @@ export function build_search_response(
   search_query: string,
   search_regex: boolean,
   search_case_sensitive: boolean,
-  page: number | string,
+  page: number | string | undefined,
   file_path: string,
 ): ToolResult {
   const [body] = split_structural_appendix(text);
@@ -229,90 +229,123 @@ export function build_search_response(
     throw new Error(`Invalid regex pattern: ${e.message}`);
   }
 
-  const matches = Array.from(body.matchAll(regex));
+  const allMatches = Array.from(body.matchAll(regex));
 
+  // Compute document pagination once — needed for both annotation and filtering.
+  const pag_res = paginate(body, "");
+  const page_offsets = pag_res.body_page_offsets;
+  const total_doc_pages = pag_res.total_pages;
+
+  // Resolve `page` parameter to either "all" or a concrete document-page number.
+  // Undefined → "all" (search across the whole document).
+  // "all" (case-insensitive) → "all".
+  // A positive integer N → filter matches to document page N.
+  // Anything else → hard error.
+  let filter_doc_page: number | null = null; // null means "all"
+  if (page !== undefined && page !== null) {
+    const pageStr = String(page).toLowerCase();
+    if (pageStr !== "all") {
+      const parsed = parseInt(pageStr, 10);
+      if (isNaN(parsed) || parsed < 1) {
+        throw new Error(
+          `Invalid page value: \`${page}\`. Pass a positive integer to restrict the search to that document page, omit \`page\` to search all pages, or pass \`page='all'\` explicitly.`,
+        );
+      }
+      if (parsed > total_doc_pages) {
+        throw new Error(
+          `Document page ${parsed} is out of range — the document has ${total_doc_pages} page(s). In search mode, \`page\` filters matches to a specific document page; omit it or pass \`page='all'\` to search the whole document.`,
+        );
+      }
+      filter_doc_page = parsed;
+    }
+  }
+
+  // Helper: which document page does an offset live on?
+  const pageOfOffset = (offset: number): number => {
+    let p = 1;
+    for (let j = 0; j < page_offsets.length; j++) {
+      if (offset >= page_offsets[j]) p = j + 1;
+      else break;
+    }
+    return p;
+  };
+
+  // Apply the filter (if any), but keep a record of all pages that had hits
+  // so we can show a useful summary even when filtered.
+  const pagesWithHits = new Set<number>();
+  for (const m of allMatches) {
+    pagesWithHits.add(pageOfOffset(m.index!));
+  }
+
+  const matches =
+    filter_doc_page === null
+      ? allMatches
+      : allMatches.filter((m) => pageOfOffset(m.index!) === filter_doc_page);
+
+  // --- Empty result ---
   if (matches.length === 0) {
-    const ui_markdown = `> **Search Results** — No matches found for query \`${search_query}\` in \`${basename(file_path)}\`.\n\nVerify your search spelling, or try setting \`search_case_sensitive\` to false or enabling \`search_regex\` if you used pattern wildcards.`;
-    const llm_content = `> **File Path:** \`${resolve(file_path)}\`\n\n${ui_markdown}`;
+    let body_msg: string;
+    if (filter_doc_page !== null) {
+      if (allMatches.length === 0) {
+        body_msg = `> **Search Results** — No matches found for query \`${search_query}\` in \`${basename(file_path)}\`.\n\nVerify your search spelling, or try setting \`search_case_sensitive\` to false or enabling \`search_regex\` if you used pattern wildcards.`;
+      } else {
+        const hitPages = Array.from(pagesWithHits).sort((a, b) => a - b);
+        body_msg = `> **Search Results** — No matches for \`${search_query}\` on document page ${filter_doc_page}.\n\nThe query DOES appear elsewhere in the document (${allMatches.length} match${allMatches.length !== 1 ? "es" : ""} on page${hitPages.length !== 1 ? "s" : ""} ${hitPages.join(", ")}). Omit \`page\` or pass \`page='all'\` to see them.`;
+      }
+    } else {
+      body_msg = `> **Search Results** — No matches found for query \`${search_query}\` in \`${basename(file_path)}\`.\n\nVerify your search spelling, or try setting \`search_case_sensitive\` to false or enabling \`search_regex\` if you used pattern wildcards.`;
+    }
+    const llm_content = `> **File Path:** \`${resolve(file_path)}\`\n\n${body_msg}`;
     return {
       content: [{ type: "text", text: llm_content }],
       structuredContent: {
-        markdown: ui_markdown,
+        markdown: body_msg,
         title: `Search: ${basename(file_path)}`,
         file_path: resolve(file_path),
       },
     };
   }
 
-  const pag_res = paginate(body, "");
-  const page_offsets = pag_res.body_page_offsets;
-  const total_matches = matches.length;
-  const total_pages = Math.ceil(total_matches / 10);
-
-  let start_idx = 0;
-  let end_idx = total_matches;
-  let page_text = "all";
-  let clamp_warning: string | null = null;
-  let effective_page_num: number | null = null;
-
-  const pageStr = String(page).toLowerCase();
-  if (pageStr !== "all") {
-    const requested_page_num = parseInt(pageStr, 10);
-    if (isNaN(requested_page_num) || requested_page_num < 1) {
-      throw new Error(
-        `Page ${page} out of range (search has ${total_pages} pages).`,
-      );
-    }
-
-    // BUG-FIX (Search Pagination): when the LLM passes a `page` that exceeds
-    // the number of result pages, do NOT crash. The most common cause is the
-    // LLM confusing "page within search results" with "document page" — it
-    // sees the doc has N pages and passes page=N to read_docx with a
-    // search_query, expecting to restrict the search to that document page.
-    // Clamp to page 1 and surface a clear explanation of what `page` actually
-    // means in the search context, so the LLM can re-orient without burning a
-    // turn on a hard error.
-    if (requested_page_num > total_pages) {
-      clamp_warning =
-        `> ⚠️ Requested page ${requested_page_num} exceeds available result pages (${total_pages}). ` +
-        `In search mode, \`page\` paginates the SEARCH RESULTS (10 matches per page), not document pages. ` +
-        `Showing page 1 of ${total_pages} instead. The matches below already include hits from across the entire document — each match's \`(pN)\` annotation tells you which document page it lives on.`;
-      effective_page_num = 1;
-    } else {
-      effective_page_num = requested_page_num;
-    }
-
-    start_idx = (effective_page_num - 1) * 10;
-    end_idx = Math.min(start_idx + 10, total_matches);
-    page_text = `${effective_page_num} of ${total_pages}`;
-  }
-
-  const page_matches = matches.slice(start_idx, end_idx);
-
+  // --- Build the response ---
   const ui_parts: string[] = [];
-  if (clamp_warning) {
-    ui_parts.push(clamp_warning);
-  }
-  ui_parts.push(
-    `> **Search Results** — Found ${total_matches} matches for query \`${search_query}\` in \`${basename(file_path)}\`.`,
-  );
 
-  if (total_pages > 1 && pageStr !== "all" && effective_page_num !== null) {
-    const nextPage = effective_page_num + 1;
-    const has_next = nextPage <= total_pages;
-    if (has_next) {
+  if (filter_doc_page !== null) {
+    ui_parts.push(
+      `> **Search Results** — Found ${matches.length} match${matches.length !== 1 ? "es" : ""} for \`${search_query}\` on document page ${filter_doc_page} of ${total_doc_pages} in \`${basename(file_path)}\`.`,
+    );
+    const otherPages = Array.from(pagesWithHits)
+      .filter((p) => p !== filter_doc_page)
+      .sort((a, b) => a - b);
+    if (otherPages.length > 0) {
       ui_parts.push(
-        `> Showing page ${page_text} (matches ${start_idx + 1}-${end_idx}). To see more matches, call \`read_docx\` with \`search_query='${search_query}'\`, \`search_regex=${search_regex ? "true" : "false"}\`, and \`page=${nextPage}\`.`,
+        `> Additional matches exist on page${otherPages.length !== 1 ? "s" : ""} ${otherPages.join(", ")} — omit \`page\` or pass \`page='all'\` to see them.`,
       );
-    } else {
+    }
+  } else {
+    ui_parts.push(
+      `> **Search Results** — Found ${matches.length} match${matches.length !== 1 ? "es" : ""} for \`${search_query}\` in \`${basename(file_path)}\`.`,
+    );
+    if (total_doc_pages > 1) {
+      // Build a per-page hit distribution: "p1: 3, p3: 1, p7: 12"
+      const counts = new Map<number, number>();
+      for (const m of allMatches) {
+        const p = pageOfOffset(m.index!);
+        counts.set(p, (counts.get(p) || 0) + 1);
+      }
+      const distribution = Array.from(counts.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([p, n]) => `p${p}: ${n}`)
+        .join(", ");
       ui_parts.push(
-        `> Showing page ${page_text} (matches ${start_idx + 1}-${end_idx}). This is the last page of search results.`,
+        `> Distribution across ${total_doc_pages} document pages — ${distribution}. Pass \`page=N\` to filter to a specific document page.`,
       );
     }
   }
 
+  // Per-match occurrence counts use the FULL match set, not the filtered one —
+  // this gives the LLM accurate global counts even when filtering.
   const occurrences_map: Record<string, number> = {};
-  for (const m of matches) {
+  for (const m of allMatches) {
     const matched_str = m[0];
     occurrences_map[matched_str] = (occurrences_map[matched_str] || 0) + 1;
   }
@@ -345,20 +378,12 @@ export function build_search_response(
     return path.join(" > ");
   }
 
-  let i = start_idx + 1;
-  for (const m of page_matches) {
+  let i = 1;
+  for (const m of matches) {
     const matched_str = m[0];
     const m_start = m.index!;
     const m_end = m_start + matched_str.length;
-
-    let p_num = 1;
-    for (let j = 0; j < page_offsets.length; j++) {
-      if (m_start >= page_offsets[j]) {
-        p_num = j + 1;
-      } else {
-        break;
-      }
-    }
+    const p_num = pageOfOffset(m_start);
 
     const snippet_start = Math.max(0, m_start - 100);
     const snippet_end = Math.min(body.length, m_end + 100);
