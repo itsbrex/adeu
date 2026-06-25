@@ -91,9 +91,12 @@ class AdeuReadDocxInput(BaseModel):
             "minimize payload size."
         ),
     )
-    search_query: Optional[str] = Field(
+    search_query: str | None = Field(
         default=None,
-        description="The substring or regex pattern to search for. When provided, filters results to matching paragraphs.",
+        description=(
+            "The substring or regex pattern to search for. When provided, "
+            "filters results to matching paragraphs."
+        ),
     )
     search_regex: bool = Field(
         default=False,
@@ -145,7 +148,7 @@ class AdeuReadDocx(BaseTool):
         page: int = 1,
         outline_max_level: int = 2,
         outline_verbose: bool = False,
-        search_query: Optional[str] = None,
+        search_query: str | None = None,
         search_regex: bool = False,
         search_case_sensitive: bool = True,
     ) -> tuple[str, dict[str, Any]]:
@@ -169,9 +172,7 @@ class AdeuReadDocx(BaseTool):
             paragraph_offsets = None
 
         if search_query is not None:
-            result = build_search_response(
-                text, search_query, search_regex, search_case_sensitive, page, str(path)
-            )
+            result = build_search_response(text, search_query, search_regex, search_case_sensitive, page, str(path))
         elif mode == "outline":
             result = build_outline_response(
                 doc,
@@ -205,7 +206,7 @@ class AdeuReadDocx(BaseTool):
         page: int = 1,
         outline_max_level: int = 2,
         outline_verbose: bool = False,
-        search_query: Optional[str] = None,
+        search_query: str | None = None,
         search_regex: bool = False,
         search_case_sensitive: bool = True,
     ) -> tuple[str, dict[str, Any]]:
