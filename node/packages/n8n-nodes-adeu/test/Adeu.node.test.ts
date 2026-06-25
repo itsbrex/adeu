@@ -139,23 +139,18 @@ describe("Test Adeu n8n Node", () => {
     beforeAll(async () => {
       // Discover a unique substring from golden.docx so the test is independent
       // of the fixture's content. Picks the first non-heading line of moderate
-      // length that appears exactly once.
-      const markdown = await extractTextFromBuffer(goldenBuffer, true);
-      const candidates = markdown
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(
-          (l) =>
-            l.length >= 15 &&
-            l.length <= 80 &&
-            /[a-zA-Z]/.test(l) &&
-            !l.startsWith("#") &&
-            !l.startsWith("<!--"),
-        );
+      // length that appears exactly once, and has no pending tracked changes/comments on it.
+      const rawMarkdown = await extractTextFromBuffer(goldenBuffer, false);
+      const cleanMarkdown = await extractTextFromBuffer(goldenBuffer, true);
+      
+      const cleanChunks = rawMarkdown
+        .split(/\{--[\s\S]*?--\}|\{\+\+[\s\S]*?\+\+\}|\{>>[\s\S]*?<<\}|\{==[\s\S]*?==\}/g)
+        .map((chunk) => chunk.trim())
+        .filter((chunk) => chunk.length >= 3 && /[a-zA-Z]/.test(chunk));
 
-      for (const candidate of candidates) {
+      for (const candidate of cleanChunks) {
         const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const matches = markdown.match(new RegExp(escaped, "g"));
+        const matches = cleanMarkdown.match(new RegExp(escaped, "g"));
         if (matches && matches.length === 1) {
           uniqueTarget = candidate;
           break;
