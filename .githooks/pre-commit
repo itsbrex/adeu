@@ -1,0 +1,117 @@
+#!/bin/sh
+# Adeu monorepo pre-commit hook.
+#
+# Enable once per clone with:
+#     git config core.hooksPath .githooks
+# (or run scripts/setup-hooks.sh)
+#
+# For every directory touched by the staged changes, this runs that area's
+# formatter + linter, auto-fixing and re-staging the result so the formatted
+# code lands in the same commit, then runs the type checker as a gate:
+#
+#   python/      ruff check --fix, ruff format, mypy src           (via uv)
+#   langchain/   ruff check --fix, ruff format, mypy langchain_adeu (via uv)
+#   node/n8n     eslint --fix on n8n-nodes-adeu *.ts files
+#
+# Untouched areas are skipped. Tests are intentionally left to CI / pre-push
+# to keep commits fast. Cross-platform: runs under Git Bash on Windows and
+# /bin/sh on macOS/Linux.
+
+set -u
+
+# GUI git clients (notably on macOS) often launch with a minimal PATH that
+# omits uv / node. Add the usual install locations so the hook still works.
+PATH="$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT" || exit 1
+
+# Staged files that still exist (Added / Copied / Modified / Renamed).
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -n "$STAGED" ] || exit 0
+
+FAIL=0
+NL='
+'
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Print staged paths matching an extended-regex (relative to repo root).
+match() { printf '%s\n' "$STAGED" | grep -E "$1"; }
+
+# Re-stage paths (absolute) that still exist after formatting.
+restage() {
+	for _f in "$@"; do
+		[ -e "$_f" ] && git add -- "$_f"
+	done
+}
+
+# ---------------------------------------------------------------------------
+# Python area: $1 = directory (python|langchain), $2 = mypy target, rest regex
+# ---------------------------------------------------------------------------
+check_python_area() {
+	_dir=$1
+	_mypy_target=$2
+	_regex=$3
+
+	_files=$(match "$_regex")
+	[ -n "$_files" ] || return 0
+
+	if ! have uv; then
+		echo "  ! uv not found on PATH — skipping $_dir checks (CI still enforces them)"
+		return 0
+	fi
+
+	# Build absolute-path arg list.
+	_old=$IFS
+	IFS=$NL
+	set --
+	for _f in $_files; do set -- "$@" "$REPO_ROOT/$_f"; done
+	IFS=$_old
+
+	echo "→ $_dir: ruff (lint --fix + format)"
+	uv run --directory "$_dir" ruff check --force-exclude --fix "$@" || FAIL=1
+	uv run --directory "$_dir" ruff format --force-exclude "$@" || FAIL=1
+	restage "$@"
+
+	echo "→ $_dir: mypy"
+	uv run --directory "$_dir" mypy "$_mypy_target" || FAIL=1
+}
+
+# ---------------------------------------------------------------------------
+# Node area: eslint --fix on touched n8n-nodes-adeu TypeScript files.
+# ---------------------------------------------------------------------------
+check_n8n_eslint() {
+	_files=$(match '^node/packages/n8n-nodes-adeu/.*\.ts$')
+	[ -n "$_files" ] || return 0
+
+	_eslint="$REPO_ROOT/node/packages/n8n-nodes-adeu/node_modules/.bin/eslint"
+	if [ ! -x "$_eslint" ]; then
+		echo "  ! eslint not installed — run 'npm install' in node/; skipping (CI still enforces it)"
+		return 0
+	fi
+
+	_old=$IFS
+	IFS=$NL
+	set --
+	for _f in $_files; do set -- "$@" "$REPO_ROOT/$_f"; done
+	IFS=$_old
+
+	echo "→ n8n-nodes-adeu: eslint --fix"
+	(cd "$REPO_ROOT/node/packages/n8n-nodes-adeu" && "$_eslint" --fix "$@") || FAIL=1
+	restage "$@"
+}
+
+check_python_area "python" "src" '^python/.*\.pyi?$'
+check_python_area "langchain" "langchain_adeu" '^langchain/.*\.pyi?$'
+check_n8n_eslint
+
+if [ "$FAIL" -ne 0 ]; then
+	echo
+	echo "✖ pre-commit checks failed — see above. Formatting fixes (if any) were"
+	echo "  applied and staged; fix the remaining lint/type errors and re-commit."
+	exit 1
+fi
+
+exit 0
