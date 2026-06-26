@@ -33,7 +33,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Literal
 
-from adeu.models import DocumentChange
+from adeu.models import BatchChanges
 from adeu.redline.engine import BatchValidationError, RedlineEngine
 from langchain_core.tools import BaseTool, ToolException
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
@@ -62,8 +62,9 @@ class AdeuApplyChangesInput(BaseModel):
             "and is validated against the Adeu DocumentChange schema:\n\n"
             "MODIFY (search and replace text — most common):\n"
             "  {'type': 'modify', 'target_text': 'exact phrase to find', "
-            "'new_text': 'replacement text', 'comment': 'optional rationale'}\n"
-            "  - target_text must match uniquely; include surrounding context "
+            "'new_text': 'replacement text', 'comment': 'optional rationale', "
+            "'match_mode': 'strict'|'first'|'all', 'regex': false|true}\n"
+            "  - target_text must match uniquely (when match_mode='strict'); include surrounding context "
             "if ambiguous.\n"
             "  - new_text supports Markdown: '# Heading 1' through "
             "'###### Heading 6', '**bold**', '_italic_', and '\\n\\n' to split "
@@ -173,10 +174,11 @@ class AdeuApplyChanges(BaseTool):
         source = validate_docx_path(file_path, label="DOCX file")
 
         try:
-            adapter = TypeAdapter(list[DocumentChange])
+            # Replaced list[DocumentChange] with BatchChanges to automatically
+            # rescue stringified JSON elements sent by Gemini and other LLMs.
+            adapter = TypeAdapter(BatchChanges)
             validated_changes = adapter.validate_python(changes)
         except ValidationError as e:
-            #
             return _format_validation_failure_content(e), _failure_artifact(
                 source, output_path, author_name, [_format_pydantic_error(e)]
             )
