@@ -1,6 +1,7 @@
+# FILE: skills/adeu-redlining/LICENSE.txt
 MIT License
 
-Copyright (c) 2026 Dealfluence Oy
+Copyright (c) Dealfluence / Adeu Solutions
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
