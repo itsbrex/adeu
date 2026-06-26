@@ -33,10 +33,28 @@ cd python && uv run ruff check . --fix
 cd python && uv run mypy src
 ```
 
-We also recommend installing the pre-commit hooks to automate this:
+### Git Hooks (recommended)
+
+Enable the shared git hooks once per clone so staged code is auto-formatted and
+checked on every commit:
+
 ```bash
-cd python && uv run pre-commit install
+# from the repo root
+git config core.hooksPath .githooks
+# or: sh scripts/setup-hooks.sh
 ```
+
+The hook only touches the directories your commit changes:
+
+- **`python/` / `langchain/`** — runs `ruff check --fix` and `ruff format`
+  (fixes are applied in place and re-staged into the commit), then `mypy`.
+- **`node/` (n8n-nodes-adeu)** — runs `eslint --fix` on touched `.ts` files.
+
+It needs `uv` on your `PATH` (and `node` + `npm install` in `node/` if you touch
+the n8n package); areas whose tools are missing are skipped with a warning, so
+CI remains the source of truth. Tests are not run on commit — run `uv run pytest`
+yourself or rely on CI. The hook is POSIX `sh` and works on macOS, Linux, and
+Windows (Git Bash).
 
 ### 3. Testing
 
