@@ -30,7 +30,13 @@ def _get_claude_config_path() -> Path:
             raise OSError("APPDATA environment variable not found.")
         return Path(base) / "Claude" / "claude_desktop_config.json"
     elif system == "Darwin":  # macOS
-        return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+        return (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Claude"
+            / "claude_desktop_config.json"
+        )
     else:
         return Path.home() / ".config" / "Claude" / "claude_desktop_config.json"
 
@@ -66,7 +72,9 @@ def handle_init(args: argparse.Namespace):
                 if content:
                     data = json.loads(content)
         except json.JSONDecodeError:
-            print("⚠️  Existing config was invalid JSON. Starting fresh.", file=sys.stderr)
+            print(
+                "⚠️  Existing config was invalid JSON. Starting fresh.", file=sys.stderr
+            )
 
     mcp_servers = data.setdefault("mcpServers", {})
 
@@ -134,7 +142,9 @@ def _handle_docx_error_and_exit(filename: str, exc: Exception) -> None:
         match = re.search(r"not a valid DOCX file \(([^)]+)\)", err_str)
         if match:
             reason = match.group(1)
-    print(f"❌ Error: '{filename}' is not a valid DOCX file ({reason}).", file=sys.stderr)
+    print(
+        f"❌ Error: '{filename}' is not a valid DOCX file ({reason}).", file=sys.stderr
+    )
     sys.exit(1)
 
 
@@ -142,18 +152,30 @@ def _read_docx_text(path: Path, clean_view: bool = False) -> str:
     if not path.exists():
         _print_sandbox_warning_and_exit(path)
     if path.suffix.lower() != ".docx":
-        print(f"❌ Error: '{path.name}' must be a DOCX file (got {path.suffix or 'no extension'})", file=sys.stderr)
+        print(
+            f"❌ Error: '{path.name}' must be a DOCX file (got {path.suffix or 'no extension'})",
+            file=sys.stderr,
+        )
         sys.exit(1)
     try:
         with open(path, "rb") as f:
             header = f.read(4)
             if header != b"PK\x03\x04":
-                print(f"❌ Error: '{path.name}' is not a valid DOCX file (got bad zip signature).", file=sys.stderr)
+                print(
+                    f"❌ Error: '{path.name}' is not a valid DOCX file (got bad zip signature).",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
             f.seek(0)
-            return extract_text_from_stream(BytesIO(f.read()), filename=path.name, clean_view=clean_view)
+            return extract_text_from_stream(
+                BytesIO(f.read()), filename=path.name, clean_view=clean_view
+            )
     except Exception as e:
-        if "bad zip signature" in str(e) or "not a zip file" in str(e).lower() or "not a valid DOCX file" in str(e):
+        if (
+            "bad zip signature" in str(e)
+            or "not a zip file" in str(e).lower()
+            or "not a valid DOCX file" in str(e)
+        ):
             _handle_docx_error_and_exit(path.name, e)
         print(f"❌ Error reading DOCX file '{path.name}': {e}", file=sys.stderr)
         sys.exit(1)
@@ -173,7 +195,11 @@ def _load_batch_from_json(path: Path) -> List[DocumentChange]:
             changes_data = []
             for item in data.get("actions", []):
                 action_val = item.pop("action", "").lower()
-                item["type"] = action_val if action_val in ("accept", "reject", "reply") else "accept"
+                item["type"] = (
+                    action_val
+                    if action_val in ("accept", "reject", "reply")
+                    else "accept"
+                )
                 changes_data.append(item)
             for item in data.get("edits", []):
                 item["type"] = "modify"
@@ -184,7 +210,9 @@ def _load_batch_from_json(path: Path) -> List[DocumentChange]:
                 changes_data.append(item)
             data = changes_data
         elif not isinstance(data, list):
-            raise ValueError("JSON root must be a list of changes or a legacy dict with 'actions' and 'edits'.")
+            raise ValueError(
+                "JSON root must be a list of changes or a legacy dict with 'actions' and 'edits'."
+            )
 
         adapter = TypeAdapter(List[DocumentChange])
         return adapter.validate_python(data)
@@ -200,7 +228,9 @@ def handle_extract(args):
             sys.exit(1)
         from adeu.mcp_components.tools.live_word import _read_active_word_document_core
 
-        text, doc, paragraph_offsets = _read_active_word_document_core(clean_view=args.clean_view)
+        text, doc, paragraph_offsets = _read_active_word_document_core(
+            clean_view=args.clean_view
+        )
     else:
         if not args.input:
             print("❌ Must provide input file or use --live", file=sys.stderr)
@@ -251,10 +281,25 @@ def handle_extract(args):
         build_appendix_response,
         build_outline_response,
         build_paginated_response,
+        build_search_response,
     )
 
     try:
-        if args.mode == "outline":
+        page_val = args.page
+        page_num = (
+            int(page_val) if page_val is not None and str(page_val).isdigit() else 1
+        )
+
+        if getattr(args, "search_query", None):
+            res = build_search_response(
+                text,
+                args.search_query,
+                getattr(args, "search_regex", False),
+                not getattr(args, "search_case_insensitive", False),
+                args.page,
+                "Active Document" if args.live else str(args.input),
+            )
+        elif args.mode == "outline":
             res = build_outline_response(
                 doc,
                 text,
@@ -267,20 +312,23 @@ def handle_extract(args):
         elif args.mode == "appendix":
             res = build_appendix_response(
                 text,
-                args.page,
+                page_num,
                 "Active Document" if args.live else str(args.input),
                 is_cli=True,
             )
         else:
             res = build_paginated_response(
                 text,
-                args.page,
+                page_num,
                 "Active Document" if args.live else str(args.input),
                 is_cli=True,
             )
 
         if isinstance(res.content, list):
-            output_text = "\n".join(item.text if hasattr(item, "text") else str(item) for item in res.content)
+            output_text = "\n".join(
+                item.text if hasattr(item, "text") else str(item)
+                for item in res.content
+            )
         else:
             output_text = str(res.content)
     except Exception as e:
@@ -358,7 +406,10 @@ def handle_apply(args):
             args.original = None
 
     if args.live and args.dry_run:
-        print("❌ Dry-run simulation is only supported for disk-based files.", file=sys.stderr)
+        print(
+            "❌ Dry-run simulation is only supported for disk-based files.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     if not args.changes:
@@ -383,7 +434,9 @@ def handle_apply(args):
             text_orig, _, _ = _read_active_word_document_core(clean_view=False)
         else:
             if not args.original:
-                print("❌ Must provide original file if not using --live", file=sys.stderr)
+                print(
+                    "❌ Must provide original file if not using --live", file=sys.stderr
+                )
                 sys.exit(1)
             if not args.original.exists():
                 _print_sandbox_warning_and_exit(args.original)
@@ -410,7 +463,9 @@ def handle_apply(args):
 
             from adeu.ingest import _extract_text_from_doc
 
-            text_orig = _extract_text_from_doc(doc, clean_view=True, include_appendix=False)
+            text_orig = _extract_text_from_doc(
+                doc, clean_view=True, include_appendix=False
+            )
 
             with open(args.changes, "r", encoding="utf-8") as f:
                 text_mod = f.read()
@@ -425,7 +480,9 @@ def handle_apply(args):
             sys.exit(1)
         from adeu.mcp_components.tools.live_word import _process_active_word_batch_core
 
-        print(f"Applying {len(changes)} changes to live Word document...", file=sys.stderr)
+        print(
+            f"Applying {len(changes)} changes to live Word document...", file=sys.stderr
+        )
         stats = _process_active_word_batch_core(changes, args.author)
         print(
             f"✅ Live Word Batch complete. Applied: {stats['applied']}, Failed: {stats['failed']}",
@@ -441,7 +498,9 @@ def handle_apply(args):
 
     import zipfile
 
-    print(f"Applying {len(changes)} changes to {args.original.name}...", file=sys.stderr)
+    print(
+        f"Applying {len(changes)} changes to {args.original.name}...", file=sys.stderr
+    )
     try:
         with open(args.original, "rb") as f:
             stream = BytesIO(f.read())
@@ -471,10 +530,14 @@ def handle_apply(args):
     if not args.dry_run:
         output_path = args.output
         if not output_path:
-            if args.original.stem.endswith("_redlined") or args.original.stem.endswith("_processed"):
+            if args.original.stem.endswith("_redlined") or args.original.stem.endswith(
+                "_processed"
+            ):
                 output_path = args.original
             else:
-                output_path = args.original.with_name(f"{args.original.stem}_redlined.docx")
+                output_path = args.original.with_name(
+                    f"{args.original.stem}_redlined.docx"
+                )
 
         with open(output_path, "wb") as f:
             f.write(engine.save_to_stream().getvalue())
@@ -492,7 +555,9 @@ def handle_apply(args):
     if stats.get("edits"):
         print("\nDetailed Edit Reports:", file=sys.stderr)
         for i, report in enumerate(stats["edits"]):
-            status_indicator = "✅ [applied]" if report["status"] == "applied" else "❌ [failed]"
+            status_indicator = (
+                "✅ [applied]" if report["status"] == "applied" else "❌ [failed]"
+            )
             print(f"Edit {i + 1} {status_indicator}:", file=sys.stderr)
             print(f"  Target: '{report['target_text']}'", file=sys.stderr)
             print(f"  New text: '{report['new_text']}'", file=sys.stderr)
@@ -501,7 +566,10 @@ def handle_apply(args):
             if report.get("error"):
                 print(f"  Error: {report['error']}", file=sys.stderr)
             if report.get("critic_markup"):
-                print(f"  Preview (CriticMarkup): {report['critic_markup']}", file=sys.stderr)
+                print(
+                    f"  Preview (CriticMarkup): {report['critic_markup']}",
+                    file=sys.stderr,
+                )
             if report.get("clean_text"):
                 print(f"  Clean text preview: {report['clean_text']}", file=sys.stderr)
 
@@ -569,7 +637,9 @@ def handle_sanitize(args: argparse.Namespace):
 
         output_path = args.output
         if not output_path:
-            output_path = input_path.parent / f"{input_path.stem}_sanitized{input_path.suffix}"
+            output_path = (
+                input_path.parent / f"{input_path.stem}_sanitized{input_path.suffix}"
+            )
 
         try:
             result = sanitize_docx(
@@ -597,7 +667,11 @@ def handle_sanitize(args: argparse.Namespace):
             print(f"❌ {e}", file=sys.stderr)
             sys.exit(2)
         except Exception as e:
-            if "bad zip signature" in str(e) or "not a zip file" in str(e).lower() or "not a valid DOCX file" in str(e):
+            if (
+                "bad zip signature" in str(e)
+                or "not a zip file" in str(e).lower()
+                or "not a valid DOCX file" in str(e)
+            ):
                 _handle_docx_error_and_exit(input_path.name, e)
             print(f"❌ Error: {e}", file=sys.stderr)
             sys.exit(2)
@@ -689,21 +763,33 @@ def handle_sanitize(args: argparse.Namespace):
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="adeu", description="Adeu: Agentic DOCX Redlining Engine")
+    parser = argparse.ArgumentParser(
+        prog="adeu", description="Adeu: Agentic DOCX Redlining Engine"
+    )
     _version, _sha, _ = get_build_info()
     _ver_str = f"{_version}+{_sha}" if _sha and _sha != "unknown" else _version
-    parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {_ver_str}")
+    parser.add_argument(
+        "-v", "--version", action="version", version=f"%(prog)s {_ver_str}"
+    )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
-    subparsers = parser.add_subparsers(dest="command", required=True, help="Subcommands")
+    subparsers = parser.add_subparsers(
+        dest="command", required=True, help="Subcommands"
+    )
 
-    p_extract = subparsers.add_parser("extract", help="Extract raw text from a DOCX file")
-    p_extract.add_argument("input", type=Path, nargs="?", help="Input DOCX file (omit if --live)")
+    p_extract = subparsers.add_parser(
+        "extract", help="Extract raw text from a DOCX file"
+    )
+    p_extract.add_argument(
+        "input", type=Path, nargs="?", help="Input DOCX file (omit if --live)"
+    )
     p_extract.add_argument(
         "--live",
         action="store_true",
         help="Extract text from live active Word document",
     )
-    p_extract.add_argument("-o", "--output", type=Path, help="Output file (default: stdout)")
+    p_extract.add_argument(
+        "-o", "--output", type=Path, help="Output file (default: stdout)"
+    )
     p_extract.add_argument(
         "--clean-view",
         action="store_true",
@@ -718,9 +804,22 @@ def main():
     )
     p_extract.add_argument(
         "--page",
-        type=int,
-        default=1,
-        help="Page number (1-indexed) for 'full' and 'appendix' modes.",
+        type=str,
+        default=None,
+        help="Page number (1-indexed) for 'full' and 'appendix' modes (defaults to 1), or 'all' for search (defaults to all).",
+    )
+    p_extract.add_argument(
+        "--search-query", type=str, help="The substring or regex pattern to search for."
+    )
+    p_extract.add_argument(
+        "--search-regex",
+        action="store_true",
+        help="Set to true to interpret search_query as a regular expression.",
+    )
+    p_extract.add_argument(
+        "--search-case-insensitive",
+        action="store_true",
+        help="Perform case-insensitive matching.",
     )
     p_extract.add_argument(
         "--outline-max-level",
@@ -735,7 +834,9 @@ def main():
     )
     p_extract.set_defaults(func=handle_extract)
 
-    p_init = subparsers.add_parser("init", help="Auto-configure Adeu for Claude Desktop")
+    p_init = subparsers.add_parser(
+        "init", help="Auto-configure Adeu for Claude Desktop"
+    )
     p_init.add_argument(
         "--local",
         action="store_true",
@@ -770,9 +871,15 @@ def main():
         default_author = "Adeu AI"
 
     p_apply = subparsers.add_parser("apply", help="Apply edits to a DOCX")
-    p_apply.add_argument("original", type=Path, nargs="?", help="Original DOCX (omit if --live)")
-    p_apply.add_argument("changes", type=Path, nargs="?", help="JSON edits file OR Modified Text file")
-    p_apply.add_argument("--live", action="store_true", help="Apply edits to live active Word document")
+    p_apply.add_argument(
+        "original", type=Path, nargs="?", help="Original DOCX (omit if --live)"
+    )
+    p_apply.add_argument(
+        "changes", type=Path, nargs="?", help="JSON edits file OR Modified Text file"
+    )
+    p_apply.add_argument(
+        "--live", action="store_true", help="Apply edits to live active Word document"
+    )
     p_apply.add_argument("-o", "--output", type=Path, help="Output DOCX path")
     p_apply.add_argument(
         "--author",
@@ -793,7 +900,9 @@ def main():
     )
     p_markup.add_argument("input", type=Path, help="Input DOCX or Markdown file")
     p_markup.add_argument("edits", type=Path, help="JSON file containing edits")
-    p_markup.add_argument("-o", "--output", type=Path, help="Output Markdown path (default: input.md)")
+    p_markup.add_argument(
+        "-o", "--output", type=Path, help="Output Markdown path (default: input.md)"
+    )
     p_markup.add_argument(
         "-i",
         "--index",
@@ -812,7 +921,9 @@ def main():
         help="Strip metadata and sensitive information from a DOCX file",
     )
     p_sanitize.add_argument("input", type=Path, nargs="+", help="Input DOCX file(s)")
-    p_sanitize.add_argument("-o", "--output", type=Path, help="Output DOCX path (single file mode)")
+    p_sanitize.add_argument(
+        "-o", "--output", type=Path, help="Output DOCX path (single file mode)"
+    )
     p_sanitize.add_argument("--outdir", type=Path, help="Output directory (batch mode)")
     p_sanitize.add_argument(
         "--keep-markup",

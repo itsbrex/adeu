@@ -42,6 +42,7 @@ async function main() {
       type: "modify",
       target_text: "State of New York",
       new_text: "State of Delaware",
+      match_mode: "all",
       comment: "Standardizing governing law."
     }
   ]);

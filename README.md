@@ -108,8 +108,8 @@ You can guarantee the best behavioral results by adding this context to your age
 > **Role:** Document Specialist
 > **Tools:**
 >
-> - `read_docx(clean_view=True)`: Read the final "clean" version of the text to understand context.
-> - `process_document_batch`: **Commit & Negotiate Mode.** Apply a unified list of changes. Use `type: "modify"` for specific search-and-replace text edits, and `type: "accept"`, `"reject"`, or `"reply"` to manage existing Track Changes and Comments by ID.
+> - `read_docx(clean_view=True)`: Read the final "clean" version of the text to understand context. Use `search_query` and `page` filters to locate specific clauses without reading the whole document.
+> - `process_document_batch`: **Commit & Negotiate Mode.** Apply a unified list of changes. Use `type: "modify"` for specific search-and-replace text edits (supports `match_mode="all"` and `regex=True` for bulk updates), and `type: "accept"`, `"reject"`, or `"reply"` to manage existing Track Changes and Comments by ID.
 > - `finalize_document`: **Pre-Send Scrub.** Strip dangerous metadata, author names, and internal tracking IDs, lock the document (`protection_mode="read_only"`), and prepare it for distribution.
 
 ### Live MS Word Integration

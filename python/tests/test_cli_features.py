@@ -64,7 +64,13 @@ def test_cli_apply_dry_run(tmp_path, capsys):
     changes_file = tmp_path / "changes.json"
 
     # Create an edit
-    changes_data = [{"type": "modify", "target_text": "document", "new_text": "simulated modified document"}]
+    changes_data = [
+        {
+            "type": "modify",
+            "target_text": "document",
+            "new_text": "simulated modified document",
+        }
+    ]
     with open(changes_file, "w") as f:
         json.dump(changes_data, f)
 
@@ -110,7 +116,14 @@ def test_cli_debug_logging(capsys):
     assert "Initializing CommentsManager" not in combined_output
 
     # 2. Test WITH --debug flag
-    test_args_with_debug = ["adeu", "--debug", "extract", str(fixture_path), "--mode", "full"]
+    test_args_with_debug = [
+        "adeu",
+        "--debug",
+        "extract",
+        str(fixture_path),
+        "--mode",
+        "full",
+    ]
     with patch.object(sys, "argv", test_args_with_debug):
         try:
             main()
@@ -142,7 +155,15 @@ def test_cli_pagination_parity(capsys):
     assert "read_docx" not in captured_outline.out
 
     # 2. Test CLI extract --mode full (shows page 1 with CLI navigation instructions)
-    test_args_full = ["adeu", "extract", str(fixture_path), "--mode", "full", "--page", "1"]
+    test_args_full = [
+        "adeu",
+        "extract",
+        str(fixture_path),
+        "--mode",
+        "full",
+        "--page",
+        "1",
+    ]
     with patch.object(sys, "argv", test_args_full):
         try:
             main()
@@ -159,13 +180,17 @@ def test_cli_pagination_parity(capsys):
     from adeu.mcp_components._response_builders import build_paginated_response
 
     large_text = "A\n\n" * 10000  # Exceeds PAGE_TARGET_CHARS to force pagination
-    mcp_paginated = build_paginated_response(large_text, 1, "test_doc.docx", is_cli=False)
+    mcp_paginated = build_paginated_response(
+        large_text, 1, "test_doc.docx", is_cli=False
+    )
     mcp_markdown = mcp_paginated.structured_content["markdown"]
     assert "read_docx" in mcp_markdown
     assert "adeu extract" not in mcp_markdown
 
     # 4. Verify CLI builders (is_cli=True) output 'adeu extract'
-    cli_paginated = build_paginated_response(large_text, 1, "test_doc.docx", is_cli=True)
+    cli_paginated = build_paginated_response(
+        large_text, 1, "test_doc.docx", is_cli=True
+    )
     cli_markdown = cli_paginated.structured_content["markdown"]
     assert "adeu extract" in cli_markdown
     assert "read_docx" not in cli_markdown
@@ -274,7 +299,9 @@ def test_docx_vs_text_diff_precision(tmp_path, capsys):
     assert target_idx != -1
 
     p_orig = orig_paragraphs[target_idx]
-    p_mod = re.sub(r"\bthe\b", "the governing and crucial", p_orig, count=1, flags=re.IGNORECASE)
+    p_mod = re.sub(
+        r"\bthe\b", "the governing and crucial", p_orig, count=1, flags=re.IGNORECASE
+    )
     orig_paragraphs[target_idx] = p_mod
     modified_text = "\n\n".join(orig_paragraphs)
 
@@ -402,7 +429,10 @@ def test_cli_deeply_malformed_docx_errors(tmp_path, capsys):
             main()
         assert exc_info.value.code == 1
     captured = capsys.readouterr()
-    assert "is not a valid DOCX file (corrupted or invalid OOXML structure)" in captured.err
+    assert (
+        "is not a valid DOCX file (corrupted or invalid OOXML structure)"
+        in captured.err
+    )
 
     # 2. apply
     fake_changes = tmp_path / "changes.json"
@@ -413,7 +443,10 @@ def test_cli_deeply_malformed_docx_errors(tmp_path, capsys):
             main()
         assert exc_info.value.code == 1
     captured = capsys.readouterr()
-    assert "is not a valid DOCX file (corrupted or invalid OOXML structure)" in captured.err
+    assert (
+        "is not a valid DOCX file (corrupted or invalid OOXML structure)"
+        in captured.err
+    )
 
     # 3. diff (fake2.docx vs mod.txt)
     mod_txt = tmp_path / "mod.txt"
@@ -424,7 +457,10 @@ def test_cli_deeply_malformed_docx_errors(tmp_path, capsys):
             main()
         assert exc_info.value.code == 1
     captured = capsys.readouterr()
-    assert "is not a valid DOCX file (corrupted or invalid OOXML structure)" in captured.err
+    assert (
+        "is not a valid DOCX file (corrupted or invalid OOXML structure)"
+        in captured.err
+    )
 
 
 def test_cli_version(capsys):
@@ -448,3 +484,79 @@ def test_cli_version(capsys):
     assert version in output
     assert "+" in output
     assert "unknown" not in output
+
+
+def test_cli_extract_search_query(capsys):
+    from unittest.mock import patch
+
+    from adeu.cli import main
+
+    fixture_path = get_fixture_path("golden.docx")
+
+    # Test basic search query
+    test_args = ["adeu", "extract", str(fixture_path), "--search-query", "golden"]
+    with patch.object(sys, "argv", test_args):
+        try:
+            main()
+        except SystemExit as e:
+            assert e.code == 0 or e.code is None
+
+    captured = capsys.readouterr()
+    assert "**Search Results**" in captured.out
+    assert "match" in captured.out
+
+
+def test_cli_extract_search_regex_and_case(capsys):
+    from unittest.mock import patch
+
+    from adeu.cli import main
+
+    fixture_path = get_fixture_path("golden.docx")
+
+    # Test regex search with case insensitivity
+    test_args = [
+        "adeu",
+        "extract",
+        str(fixture_path),
+        "--search-query",
+        "g[oO]lden",
+        "--search-regex",
+        "--search-case-insensitive",
+    ]
+    with patch.object(sys, "argv", test_args):
+        try:
+            main()
+        except SystemExit as e:
+            assert e.code == 0 or e.code is None
+
+    captured = capsys.readouterr()
+    assert "**Search Results**" in captured.out
+    assert "golden" in captured.out.lower()
+
+
+def test_cli_extract_search_page_filter(capsys):
+    from unittest.mock import patch
+
+    from adeu.cli import main
+
+    fixture_path = get_fixture_path("golden.docx")
+
+    # Test search with page filtering
+    test_args = [
+        "adeu",
+        "extract",
+        str(fixture_path),
+        "--search-query",
+        "golden",
+        "--page",
+        "1",
+    ]
+    with patch.object(sys, "argv", test_args):
+        try:
+            main()
+        except SystemExit as e:
+            assert e.code == 0 or e.code is None
+
+    captured = capsys.readouterr()
+    assert "**Search Results**" in captured.out
+    assert "on document page 1" in captured.out
