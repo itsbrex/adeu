@@ -22,9 +22,11 @@
     },
     {
       "parameters": {
+        "operation": "extractMarkdown",
         "documentSource": "fromInput",
         "binaryPropertyName": "data",
-        "cleanView": true
+        "cleanView": true,
+        "page": 0
       },
       "type": "n8n-nodes-adeu.adeu",
       "typeVersion": 1,
@@ -34,7 +36,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const markdown = $input.first().json.markdown;\n\nconst systemInstruction = `You are a contract editing assistant. Analyze the provided Markdown document and generate exactly 2 distinct modifications in a JSON array. Return ONLY the raw JSON array containing exactly 2 items conforming to the DocumentChange schema. Do not add markdown blocks, formatting or metadata.\n\nSchema:\n[\n  {\n    \"type\": \"modify\",\n    \"target_text\": \"<copied verbatim from document>\",\n    \"new_text\": \"<replacement>\",\n    \"comment\": \"<reviewer note>\"\n  }\n]`;\n\nconst userText = `Here is the document:\\n\\n${markdown}`;\n\nconst geminiPayload = {\n  contents: [\n    {\n      role: \"user\",\n      parts: [\n        {\n          text: userText\n        }\n      ]\n    }\n  ],\n  systemInstruction: {\n    parts: [\n      {\n        text: systemInstruction\n      }\n    ]\n  },\n  generationConfig: {\n    responseMimeType: \"application/json\",\n    temperature: 0\n  }\n};\n\nreturn { json: { geminiPayload } };"
+        "jsCode": "const markdown = $input.first().json.markdown;\n\nconst systemInstruction = `You are a contract editing assistant. Analyze the provided Markdown document and generate exactly 2 distinct modifications in a JSON array. Return ONLY the raw JSON array containing exactly 2 items conforming to the DocumentChange schema. Do not add markdown blocks, formatting or metadata.\n\nAvailable Edit Types & Schema:\n- {\"type\":\"modify\", \"target_text\":\"<copied VERBATIM from source>\", \"new_text\":\"<replacement>\", \"comment\":\"<optional>\", \"match_mode\":\"<optional 'strict' (default) | 'first' | 'all'>\", \"regex\": false}\n- {\"type\":\"insert_row\", \"target_text\":\"<cell text anchoring row>\", \"position\":\"above\" or \"below\", \"cells\":[\"col1\",\"col2\"]}\n- {\"type\":\"delete_row\", \"target_text\":\"<cell text anchoring row>\"}\n\nRules:\n- target_text must be copied VERBATIM from the document (same punctuation, whitespace, capitalization).\n- NEVER include CriticMarkup tags like {++ or {-- in new_text.\n- Set match_mode='all' to replace every occurrence in linear order. Omit or use 'strict' to fail on ambiguous matches.`;\n\nconst userText = `Here is the document:\\n\\n${markdown}`;\n\nconst geminiPayload = {\n  contents: [\n    {\n      role: \"user\",\n      parts: [\n        {\n          text: userText\n        }\n      ]\n    }\n  ],\n  systemInstruction: {\n    parts: [\n      {\n        text: systemInstruction\n      }\n    ]\n  },\n  generationConfig: {\n    responseMimeType: \"application/json\",\n    temperature: 0\n  }\n};\n\nreturn { json: { geminiPayload } };"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -74,7 +76,9 @@
         "binaryPropertyName": "data",
         "editsSource": "fromInputJson",
         "editsJsonPath": "changes",
-        "returnMarkdown": true
+        "returnMarkdown": true,
+        "author": "Adeu AI",
+        "dryRun": false
       },
       "type": "n8n-nodes-adeu.adeu",
       "typeVersion": 1,
@@ -84,9 +88,11 @@
     },
     {
       "parameters": {
+        "operation": "extractMarkdown",
         "documentSource": "fromNode",
         "sourceNodeName": "Apply Turn 1 Edits",
-        "cleanView": false
+        "cleanView": false,
+        "page": 0
       },
       "type": "n8n-nodes-adeu.adeu",
       "typeVersion": 1,
@@ -96,7 +102,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const markdown = $input.first().json.markdown;\n\nconst systemInstruction = `You are a contract reviewer. You will be provided with a raw Markdown document containing CriticMarkup tags representing active tracked changes (such as {++inserted++} or {--deleted--}) along with their IDs (e.g. Chg:1 or Chg:2). Generate a JSON array with exactly two operations: 1) Accept the first change (using its exact Chg:N target_id), and 2) Reply to the comment or change representing the second change (using its exact target_id Com:N or Chg:N, and providing a reply text). Output ONLY the raw JSON array with no formatting or markdown.\n\nSchema:\n[\n  {\n    \"type\": \"accept\",\n    \"target_id\": \"Chg:1\"\n  },\n  {\n    \"type\": \"reply\",\n    \"target_id\": \"Com:2\",\n    \"text\": \"<reply text>\"\n  }\n]`;\n\nconst userText = `Here is the document containing tracked changes:\\n\\n${markdown}`;\n\nconst geminiPayload = {\n  contents: [\n    {\n      role: \"user\",\n      parts: [\n        {\n          text: userText\n        }\n      ]\n    }\n  ],\n  systemInstruction: {\n    parts: [\n      {\n        text: systemInstruction\n      }\n    ]\n  },\n  generationConfig: {\n    responseMimeType: \"application/json\",\n    temperature: 0\n  }\n};\n\nreturn { json: { geminiPayload } };"
+        "jsCode": "const markdown = $input.first().json.markdown;\n\nconst systemInstruction = `You are a contract reviewer. You will be provided with a raw Markdown document containing CriticMarkup tags representing active tracked changes (such as {++inserted++} or {--deleted--}) along with their IDs (e.g. Chg:1 or Chg:2). Generate a JSON array with exactly two operations: 1) Accept the first change (using its exact Chg:N target_id), and 2) Reply to the comment or change representing the second change (using its exact target_id Com:N or Chg:N, and providing a reply text). Output ONLY the raw JSON array with no formatting or markdown.\n\nAvailable Review Schema:\n- {\"type\": \"accept\", \"target_id\": \"Chg:1\", \"comment\": \"<optional>\"}\n- {\"type\": \"reject\", \"target_id\": \"Chg:1\", \"comment\": \"<optional>\"}\n- {\"type\": \"reply\", \"target_id\": \"Com:2\", \"text\": \"<reply text>\"}\n\nRules:\n- Use Chg:N and Com:N identifiers exactly as they appear in the Markdown output. Do not invent IDs.`;\n\nconst userText = `Here is the document containing tracked changes:\\n\\n${markdown}`;\n\nconst geminiPayload = {\n  contents: [\n    {\n      role: \"user\",\n      parts: [\n        {\n          text: userText\n        }\n      ]\n    }\n  ],\n  systemInstruction: {\n    parts: [\n      {\n        text: systemInstruction\n      }\n    ]\n  },\n  generationConfig: {\n    responseMimeType: \"application/json\",\n    temperature: 0\n  }\n};\n\nreturn { json: { geminiPayload } };"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -136,7 +142,9 @@
         "sourceNodeName": "Apply Turn 1 Edits",
         "editsSource": "fromInputJson",
         "editsJsonPath": "changes",
-        "returnMarkdown": false
+        "returnMarkdown": false,
+        "author": "Adeu AI",
+        "dryRun": false
       },
       "type": "n8n-nodes-adeu.adeu",
       "typeVersion": 1,
