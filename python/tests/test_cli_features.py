@@ -180,17 +180,13 @@ def test_cli_pagination_parity(capsys):
     from adeu.mcp_components._response_builders import build_paginated_response
 
     large_text = "A\n\n" * 10000  # Exceeds PAGE_TARGET_CHARS to force pagination
-    mcp_paginated = build_paginated_response(
-        large_text, 1, "test_doc.docx", is_cli=False
-    )
+    mcp_paginated = build_paginated_response(large_text, 1, "test_doc.docx", is_cli=False)
     mcp_markdown = mcp_paginated.structured_content["markdown"]
     assert "read_docx" in mcp_markdown
     assert "adeu extract" not in mcp_markdown
 
     # 4. Verify CLI builders (is_cli=True) output 'adeu extract'
-    cli_paginated = build_paginated_response(
-        large_text, 1, "test_doc.docx", is_cli=True
-    )
+    cli_paginated = build_paginated_response(large_text, 1, "test_doc.docx", is_cli=True)
     cli_markdown = cli_paginated.structured_content["markdown"]
     assert "adeu extract" in cli_markdown
     assert "read_docx" not in cli_markdown
@@ -299,9 +295,7 @@ def test_docx_vs_text_diff_precision(tmp_path, capsys):
     assert target_idx != -1
 
     p_orig = orig_paragraphs[target_idx]
-    p_mod = re.sub(
-        r"\bthe\b", "the governing and crucial", p_orig, count=1, flags=re.IGNORECASE
-    )
+    p_mod = re.sub(r"\bthe\b", "the governing and crucial", p_orig, count=1, flags=re.IGNORECASE)
     orig_paragraphs[target_idx] = p_mod
     modified_text = "\n\n".join(orig_paragraphs)
 
@@ -429,10 +423,7 @@ def test_cli_deeply_malformed_docx_errors(tmp_path, capsys):
             main()
         assert exc_info.value.code == 1
     captured = capsys.readouterr()
-    assert (
-        "is not a valid DOCX file (corrupted or invalid OOXML structure)"
-        in captured.err
-    )
+    assert "is not a valid DOCX file (corrupted or invalid OOXML structure)" in captured.err
 
     # 2. apply
     fake_changes = tmp_path / "changes.json"
@@ -443,10 +434,7 @@ def test_cli_deeply_malformed_docx_errors(tmp_path, capsys):
             main()
         assert exc_info.value.code == 1
     captured = capsys.readouterr()
-    assert (
-        "is not a valid DOCX file (corrupted or invalid OOXML structure)"
-        in captured.err
-    )
+    assert "is not a valid DOCX file (corrupted or invalid OOXML structure)" in captured.err
 
     # 3. diff (fake2.docx vs mod.txt)
     mod_txt = tmp_path / "mod.txt"
@@ -457,10 +445,7 @@ def test_cli_deeply_malformed_docx_errors(tmp_path, capsys):
             main()
         assert exc_info.value.code == 1
     captured = capsys.readouterr()
-    assert (
-        "is not a valid DOCX file (corrupted or invalid OOXML structure)"
-        in captured.err
-    )
+    assert "is not a valid DOCX file (corrupted or invalid OOXML structure)" in captured.err
 
 
 def test_cli_version(capsys):
