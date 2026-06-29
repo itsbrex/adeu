@@ -216,10 +216,15 @@ class RedlineEngine:
 
         w16du_ns_str = 'xmlns:w16du="http://schemas.microsoft.com/office/word/2023/wordml/word16du"'
 
+        # Only the main document part is stamped with the w16du namespace up
+        # front, because that is the only part this engine writes tracked
+        # changes (carrying w16du:dateUtc) to in __init__'s normal flow.
+        # Eagerly stamping headers/footers/footnotes corrupts the invariant
+        # that an UNMODIFIED part stays byte-for-byte untouched (report F9 /
+        # TC5): editing document.xml must not add the w16du namespace to a
+        # header that was never edited. Parts that later receive a tracked
+        # change get the namespace injected at write time as needed.
         parts_to_inject = [self.doc.part]
-        for part in self.doc.part.package.parts:
-            if part != self.doc.part and "wordprocessingml" in part.content_type and part.content_type.endswith("+xml"):
-                parts_to_inject.append(part)
 
         for part in parts_to_inject:
             if hasattr(part, "_element"):
@@ -2492,8 +2497,54 @@ class RedlineEngine:
             return next_run
         return prev_run
 
+    def _inject_w16du_if_needed(self, part) -> None:
+        """
+        Lazily declare the w16du namespace on a part's root element, but ONLY
+        when that part actually uses a w16du-qualified attribute (e.g. the
+        w16du:dateUtc stamped on a tracked change). This preserves the
+        invariant (report F9 / TC5) that an UNMODIFIED part — a header that
+        was never edited — stays byte-for-byte untouched and never acquires
+        the namespace, while still guaranteeing (VAL-CRIT-7 / VAL-OBS-1B)
+        that a part which DID receive a tracked change carries the
+        declaration at its root rather than an lxml-minted ns0 prefix.
+
+        Operates on the live python-docx `_element` so header/footer parts
+        (saved natively by Document.save) are covered; the main document
+        part is declared eagerly in __init__ and skipped here.
+        """
+        if part == self.doc.part:
+            return
+        element = getattr(part, "_element", None)
+        if element is None:
+            return
+
+        xml_bytes = etree.tostring(element, encoding="utf-8", pretty_print=False)
+        xml_str = xml_bytes.decode("utf-8")
+
+        # Only act if the part references the w16du namespace but hasn't
+        # declared it (the common case: lxml serialized the attribute with a
+        # generated ns0 prefix because the root lacked the declaration).
+        uses_w16du = "w16du:" in xml_str or w16du_ns in xml_str
+        already_declared = 'xmlns:w16du="' in xml_str or "xmlns:w16du='" in xml_str
+        if not uses_w16du or already_declared:
+            return
+
+        w16du_ns_str = f'xmlns:w16du="{w16du_ns}"'
+        xml_str = re.sub(r"(<w:[a-zA-Z0-9_]+ )", r"\1" + w16du_ns_str + " ", xml_str, count=1)
+        new_root = parse_xml(xml_str.encode("utf-8"))
+        # Collapse lxml's auto-generated ns0 prefix (emitted for the
+        # w16du:dateUtc attributes that existed before the root declaration
+        # was added) onto the canonical w16du prefix now declared at the root.
+        etree.cleanup_namespaces(new_root, top_nsmap={"w16du": w16du_ns}, keep_ns_prefixes=["w16du"])
+        part._element = new_root
+
     def save_to_stream(self) -> BytesIO:
         import lxml.etree as etree
+
+        # Lazily declare w16du on any non-main part that picked up a tracked
+        # change (and therefore a w16du:dateUtc attribute) during editing.
+        for part in self.doc.part.package.parts:
+            self._inject_w16du_if_needed(part)
 
         for part in self.doc.part.package.parts:
             if hasattr(part, "_adeu_element"):
