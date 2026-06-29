@@ -1587,18 +1587,19 @@ export class RedlineEngine {
         !["accept", "reject", "reply"].includes(c.type),
     ) : [];
     let mapper_dirty = false;
-    for (const edit of edits_for_merge) {
+    for (const edit of edits_for_merge as any[]) {
       if (typeof edit !== "object" || edit === null || !edit.target_text) continue;
-      const is_regex = (edit as any).regex || false;
+      const is_regex = edit.regex || false;
       let matches = this.mapper.find_all_match_indices(edit.target_text, is_regex);
+      let target_mapper = this.mapper;
       if (matches.length === 0) {
         if (!this.clean_mapper) {
           this.clean_mapper = new DocumentMapper(this.doc, true);
         }
         matches = this.clean_mapper.find_all_match_indices(edit.target_text, is_regex);
+        target_mapper = this.clean_mapper!;
       }
       for (const [start, length] of matches) {
-        const target_mapper = matches === this.clean_mapper ? this.clean_mapper : this.mapper;
         const spans = target_mapper.spans.filter(
           (s) => s.end > start && s.start < start + length,
         );
