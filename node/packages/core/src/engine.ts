@@ -673,6 +673,106 @@ export class RedlineEngine {
     }
   }
 
+  /**
+   * Revert every tracked change, returning the document to the state it had
+   * before any revision was proposed. The exact inverse of
+   * accept_all_revisions:
+   *
+   *   - <w:ins>  -> removed together with all of its content (the proposed
+   *                 insertion never existed); an inserted row (<w:ins> in
+   *                 <w:trPr>) drops the whole row.
+   *   - <w:del>  -> unwrapped, restoring the original text (<w:delText> becomes
+   *                 <w:t> again); a row-deletion mark in <w:trPr> is removed so
+   *                 the row survives.
+   *   - paragraph-mark <w:del> in pPr/rPr -> removed, undoing a proposed merge.
+   *
+   * Comments are annotations, not revisions, so standalone comments are left in
+   * place; only anchors stranded inside a rejected insertion are cleaned up.
+   *
+   * Insertions are reverted before deletions are restored so a deletion nested
+   * inside a foreign author's insertion is removed wholesale with the insertion
+   * — the contingent text disappears rather than being promoted to committed
+   * body text.
+   *
+   * Known limitation: tracked paragraph STRUCTURE changes (a split recorded as a
+   * pilcrow <w:ins>, or a merge recorded as a pilcrow <w:del>) are reverted only
+   * to the extent of dropping/keeping the mark; the original paragraph boundary
+   * is not reconstructed, because the merge protocol coalesces paragraphs
+   * destructively at edit time. Reverting run-level insertions/deletions (the
+   * common case) is exact. This limitation is shared with the Python engine.
+   */
+  public reject_all_revisions() {
+    const parts_to_process: Element[] = [this.doc.element];
+
+    for (const part of this.doc.pkg.parts) {
+      if (part === this.doc.part) continue;
+      if (
+        part.contentType.includes("wordprocessingml") &&
+        part.contentType.endsWith("+xml")
+      ) {
+        parts_to_process.push(part._element);
+      }
+    }
+
+    for (const root_element of parts_to_process) {
+      // 1. Reject insertions: drop the <w:ins> and everything inside it.
+      //    Document order means an outer <w:ins> is handled before a nested
+      //    one; removing the outer detaches the inner (guarded below).
+      const insNodes = findAllDescendants(root_element, "w:ins");
+      for (const ins of insNodes) {
+        const parent = ins.parentNode as Element | null;
+        if (!parent) continue;
+        this._clean_wrapping_comments(ins);
+        this._delete_comments_in_element(ins);
+        if (parent.tagName === "w:trPr") {
+          const row = parent.parentNode as Element | null;
+          if (row && row.parentNode) {
+            row.parentNode.removeChild(row);
+          }
+        } else {
+          parent.removeChild(ins);
+        }
+      }
+
+      // 2. Reject paragraph-mark deletions: keep the paragraph break.
+      const pNodes = findAllDescendants(root_element, "w:p");
+      for (const p of pNodes) {
+        const pPr = findChild(p, "w:pPr");
+        if (pPr) {
+          const rPr = findChild(pPr, "w:rPr");
+          const delMark = rPr ? findChild(rPr, "w:del") : null;
+          if (rPr && delMark) {
+            rPr.removeChild(delMark);
+          }
+        }
+      }
+
+      // 3. Reject deletions: restore the original text.
+      const delNodes = findAllDescendants(root_element, "w:del");
+      for (const d of delNodes) {
+        const parent = d.parentNode as Element | null;
+        if (!parent) continue;
+        this._clean_wrapping_comments(d);
+        if (parent.tagName === "w:trPr") {
+          parent.removeChild(d);
+          continue;
+        }
+        const delTexts = Array.from(d.getElementsByTagName("w:delText"));
+        for (const dt of delTexts) {
+          const t = d.ownerDocument!.createElement("w:t");
+          t.textContent = dt.textContent;
+          if (dt.hasAttribute("xml:space"))
+            t.setAttribute("xml:space", "preserve");
+          dt.parentNode?.replaceChild(t, dt);
+        }
+        while (d.firstChild) {
+          parent.insertBefore(d.firstChild, d);
+        }
+        parent.removeChild(d);
+      }
+    }
+  }
+
   private _getNextId(): string {
     this.current_id++;
     return this.current_id.toString();
@@ -1540,7 +1640,12 @@ export class RedlineEngine {
       }
 
       for (const [start, length] of matches) {
-        const spans = this.mapper.spans.filter(
+        // Filter spans from the SAME mapper the match indices came from
+        // (target_mapper may be the clean mapper); using this.mapper.spans here
+        // would read a different coordinate space and miss the foreign <w:ins>
+        // overlap for clean-mapper-resolved targets — silently letting a
+        // partial straddle through. (Python filters target_mapper.spans too.)
+        const spans = target_mapper.spans.filter(
           (s) => s.end > start && s.start < start + length,
         );
         const insAuthors = new Set<string>();
@@ -1727,60 +1832,17 @@ export class RedlineEngine {
         !["accept", "reject", "reply"].includes(c.type),
     );
 
-    // Run edits_for_merge logic to unwrap collaborative active insertions
-    let mapper_dirty = false;
-    for (const edit of edits as any[]) {
-      if (typeof edit !== "object" || edit === null || !edit.target_text) continue;
-      const is_regex = edit.regex || false;
-      let matches = this.mapper.find_all_match_indices(edit.target_text, is_regex);
-      let target_mapper = this.mapper;
-      if (matches.length === 0) {
-        if (!this.clean_mapper) {
-          this.clean_mapper = new DocumentMapper(this.doc, true);
-        }
-        matches = this.clean_mapper.find_all_match_indices(edit.target_text, is_regex);
-        target_mapper = this.clean_mapper!;
-      }
-      for (const [start, length] of matches) {
-        const spans = target_mapper.spans.filter(
-          (s) => s.end > start && s.start < start + length,
-        );
-        for (const s of spans) {
-          if (s.ins_id) {
-            const insNodes = findAllDescendants(this.doc.element, "w:ins").filter(
-              (n) => n.getAttribute("w:id") === s.ins_id,
-            );
-            if (insNodes.length > 0) {
-              const auth = insNodes[0].getAttribute("w:author");
-              if (auth && auth !== this.author) {
-                const is_fully_contained_in_ins = start >= s.start && (start + length) <= s.end;
-                const match_mode = edit.match_mode || "strict";
-                if (!is_fully_contained_in_ins && match_mode !== "all") {
-                  const node = insNodes[0];
-                  this._clean_wrapping_comments(node);
-                  const parent = node.parentNode as Element | null;
-                  if (parent) {
-                    if (parent.tagName === "w:trPr") {
-                      parent.removeChild(node);
-                    } else {
-                      while (node.firstChild) {
-                        parent.insertBefore(node.firstChild, node);
-                      }
-                      parent.removeChild(node);
-                    }
-                  }
-                  mapper_dirty = true;
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-    if (mapper_dirty) {
-      this.mapper = new DocumentMapper(this.doc);
-      this.clean_mapper = null;
-    }
+    // NOTE: a previous "edits_for_merge" pre-pass here silently UNWRAPPED a
+    // foreign author's <w:ins> when a strict/first edit only partially straddled
+    // its boundary — turning that author's tracked-inserted text into untracked
+    // committed body text before the edit applied, destroying their provenance.
+    // That is the same provenance-laundering failure mode the canonical engine
+    // refuses, so it has been removed: a partial straddle now surfaces the
+    // standard validation error ("Modification targets an active insertion from
+    // another author …") via validate_edits, matching the Python engine. An edit
+    // fully CONTAINED inside a foreign <w:ins> stays allowed and is handled by
+    // nesting the <w:del> inside that <w:ins> (see _apply_single_edit_indexed /
+    // _insert_and_split_ins).
 
     // BUG-7: Unified single-pass validation in wet-run / standard mode.
     if (!dry_run_mode) {
@@ -2560,6 +2622,41 @@ export class RedlineEngine {
     return all_sub_edits[0];
   }
 
+  /**
+   * Split a <w:ins> so that everything up to and INCLUDING split_after stays in
+   * a left <w:ins>, new_elem is placed between, and the remainder moves to a
+   * right <w:ins> — all at the grandparent level. Used when revising another
+   * author's pending insertion: the <w:del> stays nested in their <w:ins> while
+   * our replacement <w:ins> lands as a sibling, so we never nest <w:ins> in
+   * <w:ins>.
+   */
+  private _insert_and_split_ins(
+    parent_ins: Element,
+    split_after: Element,
+    new_elem: Element,
+  ) {
+    const grandparent = parent_ins.parentNode as Element | null;
+    if (!grandparent) return;
+    // cloneNode(false) copies the attributes (author/id/date) onto both halves.
+    const left = parent_ins.cloneNode(false) as Element;
+    const right = parent_ins.cloneNode(false) as Element;
+    let toRight = false;
+    for (const kid of Array.from(parent_ins.childNodes)) {
+      parent_ins.removeChild(kid);
+      if (!toRight) {
+        left.appendChild(kid);
+        if (kid === split_after) toRight = true;
+      } else {
+        right.appendChild(kid);
+      }
+    }
+    if (left.childNodes.length > 0) grandparent.insertBefore(left, parent_ins);
+    grandparent.insertBefore(new_elem, parent_ins);
+    if (right.childNodes.length > 0)
+      grandparent.insertBefore(right, parent_ins);
+    grandparent.removeChild(parent_ins);
+  }
+
   private _apply_single_edit_indexed(
     edit: any,
     orig_new: string | null,
@@ -2818,7 +2915,20 @@ export class RedlineEngine {
       const is_inline_first = result.first_node.tagName === "w:ins";
       if (is_inline_first) {
         if (anchor_run) {
-          insertAfter(result.first_node, anchor_run._element);
+          const anchor_parent = anchor_run._element.parentNode as Element | null;
+          if (anchor_parent && anchor_parent.tagName === "w:ins") {
+            // Inserting inside another author's pending <w:ins>: split it so our
+            // new <w:ins> lands as a sibling right after the anchor run, never
+            // <w:ins> nested in <w:ins> (mirrors the MODIFICATION path and the
+            // Python engine).
+            this._insert_and_split_ins(
+              anchor_parent,
+              anchor_run._element,
+              result.first_node,
+            );
+          } else {
+            insertAfter(result.first_node, anchor_run._element);
+          }
         } else if (anchor_para) {
           anchor_para._element.appendChild(result.first_node);
         }
@@ -2960,8 +3070,17 @@ export class RedlineEngine {
       if (result.first_node) {
         const is_inline_first = result.first_node.tagName === "w:ins";
         if (is_inline_first) {
-          // Inline: place the first <w:ins> immediately after last_del.
-          insertAfter(result.first_node, last_del);
+          const del_parent = last_del!.parentNode as Element | null;
+          if (del_parent && del_parent.tagName === "w:ins") {
+            // Revising another author's pending insertion: keep the <w:del>
+            // nested in their <w:ins> and splice our new <w:ins> in right after
+            // it by splitting their <w:ins>, so we never nest <w:ins> in
+            // <w:ins>.
+            this._insert_and_split_ins(del_parent, last_del!, result.first_node);
+          } else {
+            // Inline: place the first <w:ins> immediately after last_del.
+            insertAfter(result.first_node, last_del!);
+          }
           ins_elem = result.first_node;
         } else {
           // Block-mode first paragraph was already inserted after the anchor

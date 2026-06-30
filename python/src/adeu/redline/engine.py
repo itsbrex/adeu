@@ -1061,44 +1061,31 @@ class RedlineEngine:
         if parent is None:
             return None
 
-        if parent.tag == qn("w:ins"):
-            grandparent = parent.getparent()
-            if grandparent is not None:
-                parent_index = grandparent.index(parent)
-                run_index = parent.index(run._r)
-
-                left_ins = create_element("w:ins")
-                for attr, val in parent.attrib.items():
-                    left_ins.set(attr, val)
-
-                right_ins = create_element("w:ins")
-                for attr, val in parent.attrib.items():
-                    right_ins.set(attr, val)
-
-                # Snapshot children to safely extract them across loops
-                children = list(parent)
-                for child in children[:run_index]:
-                    left_ins.append(child)
-                # Skip the run being deleted
-                for child in children[run_index + 1 :]:
-                    right_ins.append(child)
-
-                insert_idx = parent_index
-                if len(left_ins) > 0:
-                    grandparent.insert(insert_idx, left_ins)
-                    insert_idx += 1
-
-                grandparent.insert(insert_idx, del_tag)
-                insert_idx += 1
-
-                if len(right_ins) > 0:
-                    grandparent.insert(insert_idx, right_ins)
-
-                grandparent.remove(parent)
-                return del_tag
-
+        # Replace the run with <w:del> in place. When the run lives inside
+        # another author's <w:ins>, this leaves the <w:del> NESTED inside that
+        # <w:ins> (<w:ins author="A"><w:del author="B">…</w:del></w:ins>) — the
+        # canonical OOXML representation of "B deletes A's still-pending
+        # insertion." This preserves A's authorship and makes reject-all revert
+        # the contingent text to nothing (rejecting A's <w:ins> removes the
+        # nested <w:del> with it) rather than promoting it to committed text.
+        # The replacement-insertion side (in _apply_single_edit_indexed) splits
+        # the enclosing <w:ins> so the new <w:ins> is a sibling, never <w:ins>
+        # nested in <w:ins>.
         parent.replace(run._r, del_tag)
         return del_tag
+
+    @staticmethod
+    def _paragraph_child_ancestor(element, paragraph):
+        """
+        Return the ancestor of ``element`` that is a direct child of
+        ``paragraph`` (or ``element`` itself if it already is). Comment range
+        markers must be siblings of a paragraph-level child, so an element that
+        lives inside a <w:ins>/<w:del> wrapper has to be lifted to that wrapper.
+        """
+        cur = element
+        while cur.getparent() is not None and cur.getparent() is not paragraph:
+            cur = cur.getparent()
+        return cur
 
     def _attach_comment(self, parent_element, start_element, end_element, text: str):
         if not text:
@@ -2435,8 +2422,18 @@ class RedlineEngine:
                 last_del_element = del_elem
 
             if edit.comment and first_del_element is not None and last_del_element is not None:
+                # The deletions may be nested inside a foreign author's <w:ins>;
+                # lift the comment anchors to their paragraph-level child.
                 start_p = first_del_element.getparent()
+                while start_p is not None and start_p.tag != qn("w:p"):
+                    start_p = start_p.getparent()
                 end_p = last_del_element.getparent()
+                while end_p is not None and end_p.tag != qn("w:p"):
+                    end_p = end_p.getparent()
+                if start_p is not None:
+                    first_del_element = self._paragraph_child_ancestor(first_del_element, start_p)
+                if end_p is not None:
+                    last_del_element = self._paragraph_child_ancestor(last_del_element, end_p)
                 if start_p == end_p:
                     self._attach_comment(start_p, first_del_element, last_del_element, edit.comment)
                 else:
@@ -2460,8 +2457,6 @@ class RedlineEngine:
             if first_del_element is not None and last_del_element is not None and edit.new_text:
                 parent = last_del_element.getparent()
                 if parent is not None:
-                    del_index = parent.index(last_del_element)
-
                     text_to_insert = edit.new_text
                     clean_text, style_name = self._parse_markdown_style(text_to_insert)
                     if style_name:
@@ -2485,37 +2480,65 @@ class RedlineEngine:
                         reuse_id=ins_id,
                     )
                     if ins_elem is not None:
-                        parent.insert(del_index + 1, ins_elem)
+                        if parent.tag == qn("w:ins"):
+                            # Revising another author's pending insertion: the
+                            # <w:del> stays nested in their <w:ins>; splice our
+                            # new <w:ins> in right after it by splitting their
+                            # <w:ins> so we never produce <w:ins> within <w:ins>.
+                            self._insert_and_split_ins(
+                                parent, parent.index(last_del_element) + 1, ins_elem
+                            )
+                        else:
+                            parent.insert(parent.index(last_del_element) + 1, ins_elem)
 
                     if edit.comment and first_del_element is not None:
+                        # first_del_element / ins_elem may now sit inside a
+                        # <w:ins> wrapper; lift anchors to their paragraph-level
+                        # child so the comment range markers attach correctly.
                         start_p = first_del_element.getparent()
+                        while start_p is not None and start_p.tag != qn("w:p"):
+                            start_p = start_p.getparent()
+                        first_anchor = (
+                            self._paragraph_child_ancestor(first_del_element, start_p)
+                            if start_p is not None
+                            else first_del_element
+                        )
                         if last_p is not None:
                             end_p = last_p
                             last_ins = last_p.findall(f".//{qn('w:ins')}")[-1]
                             self._attach_comment_spanning(
                                 start_p,
-                                first_del_element,
+                                first_anchor,
                                 end_p,
                                 last_ins,
                                 edit.comment,
                             )
                         elif ins_elem is not None:
                             end_p = ins_elem.getparent()
-                            if start_p == end_p:
-                                self._attach_comment(parent, first_del_element, ins_elem, edit.comment)
+                            while end_p is not None and end_p.tag != qn("w:p"):
+                                end_p = end_p.getparent()
+                            end_anchor = (
+                                self._paragraph_child_ancestor(ins_elem, end_p)
+                                if end_p is not None
+                                else ins_elem
+                            )
+                            if start_p is not None and start_p == end_p:
+                                self._attach_comment(start_p, first_anchor, end_anchor, edit.comment)
                             else:
                                 self._attach_comment_spanning(
                                     start_p,
-                                    first_del_element,
+                                    first_anchor,
                                     end_p,
-                                    ins_elem,
+                                    end_anchor,
                                     edit.comment,
                                 )
                         else:
                             self._attach_comment(
                                 start_p,
-                                first_del_element,
-                                last_del_element,
+                                first_anchor,
+                                self._paragraph_child_ancestor(last_del_element, start_p)
+                                if start_p is not None
+                                else last_del_element,
                                 edit.comment,
                             )
 
@@ -3139,3 +3162,95 @@ class RedlineEngine:
                     pkg._parts[:] = [p for p in pkg._parts if p.partname not in comment_partnames]
                 elif hasattr(pkg, "parts") and isinstance(pkg.parts, list):
                     pkg.parts[:] = [p for p in pkg.parts if p.partname not in comment_partnames]
+
+    def reject_all_revisions(self):
+        """
+        Revert every tracked change, returning the document to the state it had
+        before any revision was proposed. The exact inverse of
+        accept_all_revisions:
+
+          * <w:ins>  -> removed together with all of its content (the proposed
+                        insertion never existed). An inserted table row (an
+                        <w:ins> inside <w:trPr>) drops the whole row.
+          * <w:del>  -> unwrapped, restoring the original text (<w:delText>
+                        becomes <w:t> again). A row-deletion mark inside <w:trPr>
+                        is removed so the row survives.
+          * paragraph-mark <w:del> in pPr/rPr -> removed, so a proposed paragraph
+                        merge is undone and the paragraphs stay split.
+
+        Comments are annotations, not revisions, so standalone comments are left
+        in place; only comment anchors stranded inside a rejected insertion are
+        cleaned up.
+
+        Insertions are reverted before deletions are restored so that a deletion
+        nested inside a foreign author's insertion (<w:ins A><w:del B>…</w:del>
+        </w:ins>) is removed wholesale with the insertion — the contingent text
+        correctly disappears rather than being promoted to committed body text.
+
+        Known limitation: tracked paragraph STRUCTURE changes (a split recorded
+        as a pilcrow <w:ins>, or a merge recorded as a pilcrow <w:del>) are
+        reverted only to the extent of dropping/keeping the mark; the original
+        paragraph boundary is not reconstructed, because the merge protocol
+        coalesces paragraphs destructively at edit time. Reverting run-level
+        insertions/deletions (the common case) is exact. This limitation is
+        shared with the Node engine.
+        """
+        parts_to_process = [self.doc.element]
+
+        for part in self.doc.part.package.parts:
+            if part == self.doc.part:
+                continue
+            if "wordprocessingml" in part.content_type and part.content_type.endswith("+xml"):
+                element_to_process = None
+                if hasattr(part, "_element"):
+                    element_to_process = part._element
+                else:
+                    if not hasattr(part, "_adeu_element"):
+                        part._adeu_element = parse_xml(part.blob)  # type: ignore[attr-defined]
+                    element_to_process = part._adeu_element  # type: ignore[attr-defined]
+                parts_to_process.append(element_to_process)
+
+        for root_element in parts_to_process:
+            # 1. Reject insertions: drop the <w:ins> and everything inside it.
+            #    findall walks in document order, so an outer <w:ins> is handled
+            #    before any nested one; removing the outer detaches the inner,
+            #    whose later (no-op) processing is guarded by the parent check.
+            for ins in root_element.findall(f".//{qn('w:ins')}"):
+                parent = ins.getparent()
+                if parent is None:
+                    continue
+                self._clean_wrapping_comments(ins)
+                self._delete_comments_in_element(ins)
+                if parent.tag == qn("w:trPr"):
+                    row = parent.getparent()
+                    if row is not None and row.getparent() is not None:
+                        row.getparent().remove(row)
+                else:
+                    parent.remove(ins)
+
+            # 2. Reject paragraph-mark deletions: keep the paragraph break.
+            for p in root_element.findall(f".//{qn('w:p')}"):
+                pPr = p.find(qn("w:pPr"))
+                if pPr is not None:
+                    rPr = pPr.find(qn("w:rPr"))
+                    if rPr is not None:
+                        del_mark = rPr.find(qn("w:del"))
+                        if del_mark is not None:
+                            rPr.remove(del_mark)
+
+            # 3. Reject deletions: restore the original text.
+            for d in root_element.findall(f".//{qn('w:del')}"):
+                parent = d.getparent()
+                if parent is None:
+                    continue
+                self._clean_wrapping_comments(d)
+                if parent.tag == qn("w:trPr"):
+                    parent.remove(d)
+                    continue
+                for dt in d.findall(f".//{qn('w:delText')}"):
+                    dt.tag = qn("w:t")
+                index = parent.index(d)
+                for child in list(d):
+                    parent.insert(index, child)
+                    index += 1
+                parent.remove(d)

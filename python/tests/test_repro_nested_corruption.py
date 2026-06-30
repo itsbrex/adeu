@@ -128,10 +128,18 @@ def test_repro_surgical_edit_inside_insertion():
     ins_texts = [t.text for t in doc_final.element.xpath("//w:ins//w:t") if t.text]
     assert "45" in ins_texts, "The new text '45' was not inserted."
 
-    # 5. VERIFY XML VALIDITY (No nested Track Changes tags)
-    # Word corrupts files if <w:del> is placed inside <w:ins>. The engine must split them.
-    invalid_nested_del = doc_final.element.xpath("//w:ins//w:del")
-    assert not invalid_nested_del, "Corrupt XML: Found <w:del> nested inside <w:ins>."
+    # 5. VERIFY XML VALIDITY
+    # <w:del> nested inside <w:ins> is the CANONICAL OOXML representation of
+    # "this author deletes another author's still-pending insertion" (both
+    # w:ins and w:del are EG_RunLevelElts and their content models recursively
+    # re-admit run-level elements; it is exactly what Word itself authors). It
+    # is REQUIRED here so that reject-all reverts the contingent text to nothing
+    # instead of promoting it to committed body text. So we now EXPECT it.
+    expected_nested_del = doc_final.element.xpath("//w:ins//w:del")
+    assert expected_nested_del, "Expected <w:del> nested inside the foreign author's <w:ins>."
 
+    # <w:ins> directly inside <w:ins> is the structure Word does NOT author and
+    # normalizes/repairs; the engine must split the enclosing insertion so the
+    # new insertion is a sibling. This invariant stays.
     invalid_nested_ins = doc_final.element.xpath("//w:ins//w:ins")
     assert not invalid_nested_ins, "Corrupt XML: Found <w:ins> nested inside <w:ins>."

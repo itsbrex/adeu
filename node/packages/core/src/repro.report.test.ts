@@ -57,10 +57,10 @@ describe("Webinar Report Bug Reproductions", () => {
     expect(res.edits_skipped).toBe(0);
   });
 
-  it("Bug 2: Revision History Lockouts (Active Insertion Collisions)", async () => {
+  it("Bug 2: editing across a foreign author's insertion boundary is refused (provenance-safe)", async () => {
     const doc = await createTestDocument();
     const xmlDoc = doc.element.ownerDocument!;
-    
+
     const p = addParagraph(doc, "The party shall provide ");
     const ins = xmlDoc.createElement("w:ins");
     ins.setAttribute("w:id", "123");
@@ -78,20 +78,22 @@ describe("Webinar Report Bug Reproductions", () => {
     suffixRun.appendChild(suffixText);
     p.appendChild(suffixRun);
 
-    // Create an engine with a different user name to trigger co-authoring lockout
     const engine = new RedlineEngine(doc, "Reviewer");
 
-    // Standard edit targeting the paragraph text containing the active insertion
+    // The target STRADDLES Supplier's Counsel's pending <w:ins> boundary
+    // (foreign-inserted "written notice" + plain " within 30 days."). Canonical
+    // behavior is to REFUSE rather than silently lift the foreign insertion into
+    // committed text (which would launder another author's pending proposal and
+    // erase their provenance). The agent must accept that change first, or scope
+    // the edit within / outside the insertion. (Matches the Python engine.)
     const edit = {
       type: "modify",
       target_text: "written notice within 30 days.",
       new_text: "notice within 15 business days.",
     };
-
-    // Under normal collaborative conditions, this edit should succeed.
-    // However, on the current unpatched codebase, the dry-run engine aborts with a BatchValidationError.
-    const res = engine.process_batch([edit as any], true);
-    expect(res.edits_applied).toBe(1);
+    expect(() => engine.process_batch([edit as any], false)).toThrow(
+      /active insertion from another author/,
+    );
   });
 
   it("Bug 3: Table Layout Ambiguity and Markdown Loss of Fidelity", async () => {
