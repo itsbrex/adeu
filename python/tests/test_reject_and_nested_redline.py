@@ -10,6 +10,7 @@ representation Word itself authors; it preserves A's authorship and makes
 reject-all revert the contingent text to nothing rather than promoting an
 unaccepted proposal to committed body text. <w:ins> is never nested in <w:ins>.
 """
+
 import io
 
 from docx import Document
@@ -48,9 +49,7 @@ def _foreign_ins_doc():
 
 def _clean_text(stream):
     d = Document(stream)
-    return " ".join(
-        "".join(t.text or "" for t in p._element.findall(f".//{{{W}}}t")) for p in d.paragraphs
-    )
+    return " ".join("".join(t.text or "" for t in p._element.findall(f".//{{{W}}}t")) for p in d.paragraphs)
 
 
 def test_modify_inside_foreign_ins_produces_canonical_c3_structure():
@@ -64,9 +63,7 @@ def test_modify_inside_foreign_ins_produces_canonical_c3_structure():
     # The deletion is nested inside Supplier's Counsel's insertion.
     nested_del = root.xpath("//w:ins[@w:author=\"Supplier's Counsel\"]//w:del[@w:author='Reviewer AI']")
     assert nested_del, "deletion must be nested inside the foreign author's <w:ins>"
-    assert "written notice" in "".join(
-        t.text or "" for t in nested_del[0].findall(f".//{{{W}}}delText")
-    )
+    assert "written notice" in "".join(t.text or "" for t in nested_del[0].findall(f".//{{{W}}}delText"))
 
     # The replacement insertion is a sibling authored by Reviewer AI, NOT nested
     # inside Supplier's insertion.

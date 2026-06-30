@@ -1332,9 +1332,7 @@ class RedlineEngine:
                     # "all" fan-outs, partial overlaps that straddle the insertion
                     # boundary, and edits touching another author's comment range.
                     fully_within_foreign_ins = (
-                        bool(ins_authors_to_ids)
-                        and not has_non_foreign_real_text
-                        and not comment_authors_to_ids
+                        bool(ins_authors_to_ids) and not has_non_foreign_real_text and not comment_authors_to_ids
                     )
                     if match_mode in ("strict", "first") and fully_within_foreign_ins:
                         continue
@@ -2485,9 +2483,7 @@ class RedlineEngine:
                             # <w:del> stays nested in their <w:ins>; splice our
                             # new <w:ins> in right after it by splitting their
                             # <w:ins> so we never produce <w:ins> within <w:ins>.
-                            self._insert_and_split_ins(
-                                parent, parent.index(last_del_element) + 1, ins_elem
-                            )
+                            self._insert_and_split_ins(parent, parent.index(last_del_element) + 1, ins_elem)
                         else:
                             parent.insert(parent.index(last_del_element) + 1, ins_elem)
 
@@ -2518,9 +2514,7 @@ class RedlineEngine:
                             while end_p is not None and end_p.tag != qn("w:p"):
                                 end_p = end_p.getparent()
                             end_anchor = (
-                                self._paragraph_child_ancestor(ins_elem, end_p)
-                                if end_p is not None
-                                else ins_elem
+                                self._paragraph_child_ancestor(ins_elem, end_p) if end_p is not None else ins_elem
                             )
                             if start_p is not None and start_p == end_p:
                                 self._attach_comment(start_p, first_anchor, end_anchor, edit.comment)

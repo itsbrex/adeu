@@ -1,4 +1,5 @@
 import io
+
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -23,7 +24,7 @@ def test_boundary_failure():
 
     edit = ModifyText(
         target_text="First paragraph text.\n\nSecond paragraph text.",
-        new_text="First paragraph text. New.\n\nSecond paragraph text. New."
+        new_text="First paragraph text. New.\n\nSecond paragraph text. New.",
     )
 
     # On the unpatched codebase, this throws a BatchValidationError.
@@ -66,10 +67,7 @@ def test_conflict_failure():
     # Engine is Reviewer AI (different from Supplier's Counsel)
     engine = RedlineEngine(stream, author="Reviewer AI")
 
-    edit = ModifyText(
-        target_text="written notice",
-        new_text="email notification"
-    )
+    edit = ModifyText(target_text="written notice", new_text="email notification")
 
     # On the unpatched codebase, this throws a BatchValidationError.
     # We assert that the batch executes successfully to replicate the failure on unpatched environments.
