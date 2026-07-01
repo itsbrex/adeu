@@ -568,6 +568,7 @@ PROCESS_BATCH_OPERATIONS_DESC = (
 
 if sys.platform == "win32":
     from adeu.mcp_components.tools.live_word import (
+        is_document_open_in_word,
         open_word_document_impl,
         process_active_word_batch,
         read_active_word_document,
@@ -647,8 +648,15 @@ if sys.platform == "win32":
                 search_case_sensitive=search_case_sensitive,
             )
         else:
-            # Try Live Word first. Fallback to Disk if Word is closed or document isn't open.
-            try:
+            # An explicit file_path means the file on disk is authoritative:
+            # read from disk UNLESS Word already has that exact file open (in
+            # which case the canvas may hold unsaved edits the agent expects to
+            # see). The probe is a cheap COM connect + open-documents scan with
+            # NO document extraction, and returns False when Word isn't running
+            # — so a headless environment never pays the failed-extraction cost
+            # or leaks a COM connection error to the model.
+            if is_document_open_in_word(file_path):
+                await ctx.debug("Document is open in live Word; reading from the canvas.")
                 res = await read_active_word_document(
                     ctx,
                     clean_view,
@@ -661,16 +669,7 @@ if sys.platform == "win32":
                     search_regex=search_regex,
                     search_case_sensitive=search_case_sensitive,
                 )
-                await ctx.debug("Read document via Live Word COM.")
-            except ToolError:
-                # ToolError = Live Word read succeeded but the request itself failed
-                # (e.g. page out of range). Do not fall back to disk; the disk doc
-                # would produce the same error and might also have stale content.
-                raise
-            except Exception:
-                # Any other exception means Live Word couldn't extract at all
-                # (e.g. doc not open, COM unavailable). Fall back to disk.
-                await ctx.debug("Document not open in live Word, falling back to disk read.")
+            else:
                 res = await _read_docx_disk(
                     file_path,
                     ctx,
@@ -740,21 +739,24 @@ if sys.platform == "win32":
         elif not original_docx_path:
             # Edit active document directly. No disk fallback available.
             res = await process_active_word_batch(ctx, changes, author_name, None)
+        elif is_document_open_in_word(original_docx_path):
+            # The file is open in Word: apply edits to the live canvas so the
+            # agent's changes land where the user is looking. (Probe does no
+            # extraction and returns False when Word isn't running.)
+            await ctx.debug("Document is open in live Word; editing the canvas.")
+            res = await process_active_word_batch(ctx, changes, author_name, original_docx_path)
         else:
-            # Try Live Word first. Fallback to Disk if Word is closed or document isn't open.
-            try:
-                res = await process_active_word_batch(ctx, changes, author_name, original_docx_path)
-            except Exception:
-                await ctx.debug("Document not open in live Word, falling back to disk edit.")
-                res = await _process_document_batch_disk(
-                    original_docx_path,
-                    author_name,
-                    ctx,
-                    changes,
-                    output_path,
-                    dry_run=False,
-                    rejected_notes=rejected_notes,
-                )
+            # Not open in Word (or Word not running): the file on disk is
+            # authoritative — edit it directly. This is also the headless path.
+            res = await _process_document_batch_disk(
+                original_docx_path,
+                author_name,
+                ctx,
+                changes,
+                output_path,
+                dry_run=False,
+                rejected_notes=rejected_notes,
+            )
         return add_timing_if_debug(start_time, res)
 
     if os.getenv("ADEU_ENABLE_TEST_TOOLS") in ("1", "true", "True", "yes"):

@@ -220,13 +220,27 @@ export function build_search_response(
   const [body] = split_structural_appendix(text);
   const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const flags = search_case_sensitive ? "g" : "gi";
-  const patternStr = search_regex ? search_query : escapeRegExp(search_query);
 
+  // When the caller asked for a regex but supplied something the engine can't
+  // compile (e.g. an unterminated character class `\[`, or an inline-flag group
+  // `(?i)...` that JS RegExp rejects), do NOT hard-error and burn the turn.
+  // Downgrade to a literal search of the raw string and tell the model, so it
+  // can either accept the literal hits or fix its pattern — instead of retrying
+  // the same broken regex.
+  let regexDowngradedNote = "";
   let regex: RegExp;
-  try {
-    regex = new RegExp(patternStr, flags);
-  } catch (e: any) {
-    throw new Error(`Invalid regex pattern: ${e.message}`);
+  if (search_regex) {
+    try {
+      regex = new RegExp(search_query, flags);
+    } catch (e: any) {
+      regexDowngradedNote =
+        `> **Note:** \`${search_query}\` is not a valid regular expression ` +
+        `(${e.message}), so it was searched as literal text instead. ` +
+        `If you meant a regex, fix the pattern; if you meant literal text, set \`search_regex\` to false.`;
+      regex = new RegExp(escapeRegExp(search_query), flags);
+    }
+  } else {
+    regex = new RegExp(escapeRegExp(search_query), flags);
   }
 
   const allMatches = Array.from(body.matchAll(regex));
@@ -295,6 +309,7 @@ export function build_search_response(
     } else {
       body_msg = `> **Search Results** — No matches found for query \`${search_query}\` in \`${basename(file_path)}\`.\n\nVerify your search spelling, or try setting \`search_case_sensitive\` to false or enabling \`search_regex\` if you used pattern wildcards.`;
     }
+    if (regexDowngradedNote) body_msg = `${regexDowngradedNote}\n\n${body_msg}`;
     const llm_content = `> **File Path:** \`${resolve(file_path)}\`\n\n${body_msg}`;
     return {
       content: [{ type: "text", text: llm_content }],
@@ -415,6 +430,7 @@ export function build_search_response(
     i++;
   }
 
+  if (regexDowngradedNote) ui_parts.unshift(regexDowngradedNote);
   const ui_markdown = ui_parts.join("\n\n");
   const llm_content = `> **File Path:** \`${resolve(file_path)}\`\n\n${ui_markdown}`;
 

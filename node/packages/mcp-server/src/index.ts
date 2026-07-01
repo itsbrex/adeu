@@ -34,7 +34,56 @@ import {
   list_available_mailboxes,
 } from "./tools/email.js";
 import { MARKDOWN_UI_URI, EMAIL_UI_URI } from "./shared.js";
+// Parity with Python models.py `_infer_type_in_place` + `_coerce_match_mode_in_place`.
+// The MCP boundary schema is permissive; these repairs let recoverable payloads
+// (a missing `type` that's unambiguous from the key signature, or a non-canonical
+// `match_mode`) succeed instead of failing the whole-array Zod parse with an
+// opaque -32602. Anything still un-inferrable is caught by the handler guard
+// below and reported per-index; anything that doesn't apply to the document is
+// caught by the engine's validate_edits. Mirrors how Python repairs in a
+// BeforeValidator ahead of its (strict) discriminated union.
+const MATCH_MODE_SYNONYMS: Record<string, "strict" | "first" | "all"> = {
+  strict: "strict",
+  first: "first",
+  all: "all",
+  first_only: "first",
+  firstonly: "first",
+  "first-only": "first",
+  all_occurrences: "all",
+  alloccurrences: "all",
+  "all-occurrences": "all",
+  every: "all",
+};
 
+function coerceChangeItemInPlace(item: any): void {
+  if (item === null || typeof item !== "object" || Array.isArray(item)) return;
+
+  // Infer a missing `type` ONLY when exactly one variant fits unambiguously.
+  // Deliberately do NOT infer from `target_id` alone (accept vs reject is a
+  // semantic choice) or `target_text` alone (delete_row vs empty-new_text
+  // modify). Those stay absent and are rejected with a clear message.
+  if (!("type" in item) || item.type === undefined || item.type === null) {
+    if ("cells" in item) item.type = "insert_row";
+    else if ("text" in item && "target_id" in item) item.type = "reply";
+    else if ("target_text" in item && "new_text" in item) item.type = "modify";
+  }
+
+  // Normalize match_mode: canonical passes through, synonyms map, anything else
+  // (help-string echo "strict, first, or all", empty, non-string) is dropped so
+  // the engine's "strict" default applies. Never coerce junk to "all" — that
+  // would silently mass-edit; defaulting to strict fails safe with an
+  // ambiguity error instead.
+  if ("match_mode" in item) {
+    const raw = item.match_mode;
+    if (typeof raw !== "string") {
+      delete item.match_mode;
+    } else {
+      const mapped = MATCH_MODE_SYNONYMS[raw.trim().toLowerCase()];
+      if (mapped === undefined) delete item.match_mode;
+      else item.match_mode = mapped;
+    }
+  }
+}
 function readFileBytesOrThrow(filePath: string): Buffer {
   try {
     return readFileSync(filePath);
@@ -359,8 +408,9 @@ const CHANGE_ITEM_SCHEMA = z
   .object({
     type: z
       .enum(["modify", "accept", "reject", "reply", "insert_row", "delete_row"])
+      .optional()
       .describe(
-        "Change kind: 'modify' (search-and-replace), 'accept'/'reject' (resolve a tracked change by id), 'reply' (reply to a comment by id), 'insert_row'/'delete_row' (table edits; disk mode only).",
+        "Change kind: 'modify' (search-and-replace), 'accept'/'reject' (resolve a tracked change by id), 'reply' (reply to a comment by id), 'insert_row'/'delete_row' (table edits; disk mode only). If omitted it is inferred when unambiguous from the other fields.",
       ),
     target_text: z
       .string()
@@ -465,19 +515,63 @@ server.registerTool(
       // bundled. Genuine objects and unparseable strings pass through
       // untouched so validation surfaces a clear error rather than crashing.
       const sanitizedChanges = changes.map((item: any) => {
+        let obj: any = item;
         if (typeof item === "string") {
           try {
             const parsed = JSON.parse(item);
-            if (parsed !== null && typeof parsed === "object") {
-              return parsed;
-            }
-            return item;
+            obj = parsed !== null && typeof parsed === "object" ? parsed : item;
           } catch {
-            return item;
+            obj = item;
           }
         }
-        return item;
+        // Repair recoverable payloads (infer type, normalize match_mode) the
+        // same way Python does before its union validation.
+        if (obj !== null && typeof obj === "object" && !Array.isArray(obj)) {
+          coerceChangeItemInPlace(obj);
+        }
+        return obj;
       });
+
+      // Boundary guard, scoped narrowly: after inference, reject only an OBJECT
+      // that still carries no resolvable `type`. Strings, nulls, and non-objects
+      // are intentionally left for the engine's validate_edits to report
+      // ("Invalid change format… received a primitive"), keeping the engine the
+      // single authority for those and avoiding a competing error surface.
+      // A typeless object is the one case the engine can't cleanly reject (with
+      // `type` now optional it would fall into the edits bucket as a no-op), so
+      // it is caught here with an actionable, per-index message.
+      const VALID_TYPES = new Set([
+        "modify",
+        "accept",
+        "reject",
+        "reply",
+        "insert_row",
+        "delete_row",
+      ]);
+      const typeErrors: string[] = [];
+      sanitizedChanges.forEach((c: any, i: number) => {
+        if (
+          c !== null &&
+          typeof c === "object" &&
+          !Array.isArray(c) &&
+          (!c.type || !VALID_TYPES.has(c.type))
+        ) {
+          typeErrors.push(
+            `- Change ${i + 1}: missing or unrecognized "type". Use one of: modify (needs target_text + new_text), accept/reject (needs target_id like "Chg:12"), reply (needs target_id like "Com:5" + text), insert_row (needs target_text + cells), delete_row (needs target_text). Received keys: [${Object.keys(c).join(", ")}].`,
+          );
+        }
+      });
+      if (typeErrors.length > 0) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `Batch rejected. Some changes are malformed:\n\n${typeErrors.join("\n")}`,
+            },
+          ],
+        };
+      }
 
       let outPath = output_path;
       if (!outPath) {

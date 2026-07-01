@@ -263,12 +263,27 @@ def build_search_response(
     """
     body, _ = split_structural_appendix(text)
     flags = 0 if search_case_sensitive else re.IGNORECASE
-    pattern = search_query if search_regex else re.escape(search_query)
 
-    try:
-        matches = list(re.finditer(pattern, body, flags=flags))
-    except re.error as e:
-        raise ToolError(f"Invalid regex pattern: {e}") from e
+    # When the caller asked for a regex but supplied something re can't compile
+    # (e.g. an unterminated character class `\[`, or an inline-flag group
+    # `(?i)...` that Python's re rejects mid-pattern), do NOT hard-error and
+    # burn the turn. Downgrade to a literal search of the raw string and tell
+    # the model, so it can accept the literal hits or fix its pattern rather
+    # than retrying the same broken regex.
+    regex_downgraded_note = ""
+    if search_regex:
+        try:
+            matches = list(re.finditer(search_query, body, flags=flags))
+        except re.error as e:
+            regex_downgraded_note = (
+                f"> **Note:** `{search_query}` is not a valid regular expression "
+                f"({e}), so it was searched as literal text instead. "
+                f"If you meant a regex, fix the pattern; if you meant literal "
+                f"text, set `search_regex` to false."
+            )
+            matches = list(re.finditer(re.escape(search_query), body, flags=flags))
+    else:
+        matches = list(re.finditer(re.escape(search_query), body, flags=flags))
 
     # Pagination needed for both filter mode and distribution summary, even
     # when there are no matches (to validate `page` is in range).
@@ -326,6 +341,8 @@ def build_search_response(
             "Verify your search spelling, or try setting `search_case_sensitive` to false "
             "or enabling `search_regex` if you used pattern wildcards."
         )
+        if regex_downgraded_note:
+            ui_markdown = f"{regex_downgraded_note}\n\n{ui_markdown}"
         return ToolResult(
             content=f"> **File Path:** `{file_path}`\n\n{ui_markdown}",
             structured_content={
@@ -458,6 +475,8 @@ def build_search_response(
             ]
         )
 
+    if regex_downgraded_note:
+        ui_parts.insert(0, regex_downgraded_note)
     ui_markdown = "\n\n".join(part for part in ui_parts if part)
     return ToolResult(
         content=f"> **File Path:** `{file_path}`\n\n{ui_markdown}",

@@ -198,6 +198,38 @@ if sys.platform == "win32":
         ReplyComment,
     )
 
+    def is_document_open_in_word(file_path: Optional[str]) -> bool:
+        """
+        Cheap check: is `file_path` currently open in a running Word instance?
+
+        Deliberately does NO document extraction (no WordOpenXML / Flat-OPC
+        rebuild) — it only connects to an already-running Word and compares
+        resolved FullName paths. Returns False (never raises) when Word is not
+        running, not installed, or the file is not open, so callers can treat a
+        False as an unambiguous "use disk".
+
+        An empty/None file_path returns True: that is the explicit "operate on
+        the active document" mode, which only makes sense against live Word.
+        """
+        if not file_path:
+            return True
+        try:
+            pythoncom.CoInitialize()
+            app = win32com.client.GetActiveObject("Word.Application")
+        except Exception:
+            # No running Word instance (the headless / benchmark case).
+            return False
+        try:
+            target = str(Path(file_path).resolve()).lower()
+            for i in range(1, app.Documents.Count + 1):
+                doc = app.Documents(i)
+                full = getattr(doc, "FullName", None)
+                if full and str(Path(full).resolve()).lower() == target:
+                    return True
+        except Exception:
+            return False
+        return False
+
     def _get_word_doc(app: Any, file_path: Optional[str] = None) -> Any:
         """Gets the requested document from Word, or the ActiveDocument if no path provided."""
         if not file_path:
@@ -1158,6 +1190,9 @@ else:
         return_paragraph_offsets: bool = False,
     ) -> Tuple:
         raise NotImplementedError("Live Word is only supported on Windows.")
+
+    def is_document_open_in_word(file_path: Optional[str]) -> bool:
+        return False
 
     def _process_active_word_batch_core(
         changes: List[DocumentChange], author_name: str, file_path: Optional[str] = None

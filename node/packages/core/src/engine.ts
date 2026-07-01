@@ -65,7 +65,6 @@ function insertAtIndex(parent: Element, index: number, child: Node) {
   }
 }
 
-
 function safeCloneEdit(val: any, seen: WeakMap<any, any> = new WeakMap()): any {
   if (val === null || typeof val !== "object") {
     return val;
@@ -127,7 +126,10 @@ function restoreSnapshot(doc: any, snapshot: any): void {
   }
 }
 
-function stripMatchingHeadingHashes(target: string, newText: string): [string, string] {
+function stripMatchingHeadingHashes(
+  target: string,
+  newText: string,
+): [string, string] {
   if (!target || !newText) return [target, newText];
   const targetMatch = target.match(/^(#+)\s+/);
   const newMatch = newText.match(/^(#+)\s+/);
@@ -150,7 +152,10 @@ export class BatchValidationError extends Error {
   }
 }
 
-export function validate_edit_strings(edits: any[], index_offset: number = 0): string[] {
+export function validate_edit_strings(
+  edits: any[],
+  index_offset: number = 0,
+): string[] {
   const errors: string[] = [];
 
   for (let i = 0; i < edits.length; i++) {
@@ -397,7 +402,8 @@ export class RedlineEngine {
     let target_text = edit.target_text || "";
     let new_text = edit.new_text || "";
 
-    const [clean_target, target_style] = this._parse_markdown_style(target_text);
+    const [clean_target, target_style] =
+      this._parse_markdown_style(target_text);
     if (target_style && target_style.startsWith("Heading")) {
       const prefix_len = target_text.length - clean_target.length;
       start_idx += prefix_len;
@@ -1358,7 +1364,29 @@ export class RedlineEngine {
 
     insertAfter(ref_run, new_end);
   }
-
+  /**
+   * Read a comment's author directly from the comments part. Used by
+   * _clean_wrapping_comments to decide whether a wrapping comment belongs to
+   * another author (and must be preserved when its anchored change is
+   * accepted/rejected) or to us (safe to delete). Reads the part rather than
+   * the mapper because the mapper's comments_map is not rebuilt between review
+   * actions, so it can be stale mid-batch. Returns null if not found.
+   */
+  private _get_comment_author(c_id: string): string | null {
+    const part = this.doc.pkg.parts.find(
+      (p) =>
+        p.contentType ===
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+    );
+    if (!part) return null;
+    const comments = findAllDescendants(part._element, "w:comment");
+    for (const c of comments) {
+      if (c.getAttribute("w:id") === c_id) {
+        return c.getAttribute("w:author");
+      }
+    }
+    return null;
+  }
   private _clean_wrapping_comments(element: Element) {
     let first_node: Element = element;
     while (true) {
@@ -1431,7 +1459,21 @@ export class RedlineEngine {
     for (const s of starts_to_remove) {
       const c_id = s.getAttribute("w:id");
       if (c_id && end_ids.has(c_id)) {
-        this.comments_manager.deleteComment(c_id);
+        // Author-aware preservation. A comment that merely WRAPS the change
+        // being accepted/rejected is a separate annotation — often the
+        // counterparty's note explaining the very edit we are resolving.
+        // Deleting it silently destroys their provenance (and, e.g., fails a
+        // "keep the counterparty's comment" review requirement). So: always
+        // detach the range markers (leaving no orphaned anchor, which lets the
+        // accept/reject proceed cleanly), but only delete the comment BODY when
+        // it is ours. Foreign-authored comment bodies are kept in the comments
+        // part. When the author can't be read we default to preserving, since
+        // deletion is the irreversible, higher-cost mistake.
+        const author = this._get_comment_author(c_id);
+        const is_own = author !== null && author === this.author;
+        if (is_own) {
+          this.comments_manager.deleteComment(c_id);
+        }
         if (s.parentNode) s.parentNode.removeChild(s);
         for (const e of ends_to_remove) {
           let e_id: string | null = null;
@@ -1583,10 +1625,9 @@ export class RedlineEngine {
         if (edit.target_text.includes("|")) {
           matches = matches.slice(0, 1);
         } else {
-          const positions: [number, number][] = matches.map(([start, length]) => [
-            start,
-            start + length,
-          ]);
+          const positions: [number, number][] = matches.map(
+            ([start, length]) => [start, start + length],
+          );
           errors.push(
             format_ambiguity_error(
               i + 1 + index_offset,
@@ -1821,8 +1862,17 @@ export class RedlineEngine {
   ): any {
     // Pre-process edits: strip identical leading heading hashes from target_text and new_text
     for (const c of changes) {
-      if (c && typeof c === "object" && (c as any).type === "modify" && (c as any).target_text && (c as any).new_text) {
-        const [strippedTarget, strippedNew] = stripMatchingHeadingHashes((c as any).target_text, (c as any).new_text);
+      if (
+        c &&
+        typeof c === "object" &&
+        (c as any).type === "modify" &&
+        (c as any).target_text &&
+        (c as any).new_text
+      ) {
+        const [strippedTarget, strippedNew] = stripMatchingHeadingHashes(
+          (c as any).target_text,
+          (c as any).new_text,
+        );
         (c as any).target_text = strippedTarget;
         (c as any).new_text = strippedNew;
       }
@@ -1861,10 +1911,7 @@ export class RedlineEngine {
         actions.length > 0 ? this.validate_review_actions(actions) : [];
       const validate_edits_now = edits.length > 0 && action_errors.length > 0;
       const edit_errors = validate_edits_now ? this.validate_edits(edits) : [];
-      const all_errors = [
-        ...action_errors,
-        ...edit_errors,
-      ];
+      const all_errors = [...action_errors, ...edit_errors];
       if (all_errors.length > 0) {
         throw new BatchValidationError(all_errors);
       }
@@ -1994,9 +2041,7 @@ export class RedlineEngine {
           throw err;
         }
 
-        applied_edits = edits.filter(
-          (e) => (e as any)._applied_status,
-        ).length;
+        applied_edits = edits.filter((e) => (e as any)._applied_status).length;
         skipped_edits = edits.length - applied_edits;
 
         for (const edit of edits) {
@@ -2585,7 +2630,10 @@ export class RedlineEngine {
             const t_seg = target_segs[k];
             const n_seg = new_segs[k];
             if (t_seg !== n_seg) {
-              const [seg_prefix, seg_suffix] = trim_common_context(t_seg, n_seg);
+              const [seg_prefix, seg_suffix] = trim_common_context(
+                t_seg,
+                n_seg,
+              );
               const seg_target = t_seg.substring(
                 seg_prefix,
                 t_seg.length - seg_suffix,
@@ -2938,7 +2986,8 @@ export class RedlineEngine {
       const is_inline_first = result.first_node.tagName === "w:ins";
       if (is_inline_first) {
         if (anchor_run) {
-          const anchor_parent = anchor_run._element.parentNode as Element | null;
+          const anchor_parent = anchor_run._element
+            .parentNode as Element | null;
           if (anchor_parent && anchor_parent.tagName === "w:ins") {
             // Inserting inside another author's pending <w:ins>: split it so our
             // new <w:ins> lands as a sibling right after the anchor run, never
@@ -3099,7 +3148,11 @@ export class RedlineEngine {
             // nested in their <w:ins> and splice our new <w:ins> in right after
             // it by splitting their <w:ins>, so we never nest <w:ins> in
             // <w:ins>.
-            this._insert_and_split_ins(del_parent, last_del!, result.first_node);
+            this._insert_and_split_ins(
+              del_parent,
+              last_del!,
+              result.first_node,
+            );
           } else {
             // Inline: place the first <w:ins> immediately after last_del.
             insertAfter(result.first_node, last_del!);
