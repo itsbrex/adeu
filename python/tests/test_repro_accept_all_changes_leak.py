@@ -72,7 +72,14 @@ def test_repro_accept_all_changes_comment_leak(tmp_path):
     output_path = tmp_path / "finalized.docx"
     ctx = MockContext()
 
-    asyncio.run(accept_all_changes(docx_path=str(tracked_path), ctx=ctx, output_path=str(output_path)))
+    asyncio.run(
+        accept_all_changes(
+            reasoning="test",
+            docx_path=str(tracked_path),
+            ctx=ctx,
+            output_path=str(output_path),
+        )
+    )
 
     assert output_path.exists(), "Finalized document was not created"
 

@@ -1,6 +1,7 @@
 import json
 import urllib.error
 import urllib.request
+from typing import Annotated
 
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
@@ -27,7 +28,14 @@ from adeu.mcp_components.shared import BACKEND_URL
     tags={"cloud"},
     annotations={"openWorldHint": True},
 )
-async def login_to_adeu_cloud(ctx: Context) -> str:
+async def login_to_adeu_cloud(
+    reasoning: Annotated[
+        str,
+        "Why do I need to log in to Adeu Cloud? State this reason before any other parameter.",
+    ],
+    ctx: Context,
+) -> str:
+    del reasoning
     await ctx.info("Initiating cloud authentication workflow")
     try:
         await ctx.debug("Checking DesktopAuthManager for API key")
@@ -88,7 +96,14 @@ async def login_to_adeu_cloud(ctx: Context) -> str:
     tags={"cloud"},
     annotations={"openWorldHint": True},
 )
-async def logout_of_adeu_cloud(ctx: Context) -> str:
+async def logout_of_adeu_cloud(
+    reasoning: Annotated[
+        str,
+        "Why do I need to log out of Adeu Cloud? State this reason before any other parameter.",
+    ],
+    ctx: Context,
+) -> str:
+    del reasoning  # reason-first UX; not used by the tool.
     await ctx.info("Initiating cloud session logout")
     try:
         DesktopAuthManager.clear_api_key()

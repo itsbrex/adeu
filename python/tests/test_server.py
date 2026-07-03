@@ -58,7 +58,7 @@ def modified_docx(tmp_path) -> str:
 
 def test_read_docx(sample_docx):
     ctx = MockContext()
-    result = asyncio.run(read_docx(file_path=sample_docx, ctx=ctx, clean_view=False))
+    result = asyncio.run(read_docx(reasoning="test", file_path=sample_docx, ctx=ctx, clean_view=False))
     assert "This is the original text." in result.structured_content["markdown"]
 
 
@@ -69,14 +69,19 @@ def test_read_docx_debug_mode(sample_docx):
 
     # 1. By default (no env var), there should be no [Debug] timing string in the output
     with patch.dict(os.environ, {"ADEU_ENABLE_TEST_TOOLS": ""}):
-        result = asyncio.run(read_docx(file_path=sample_docx, ctx=ctx, clean_view=False))
+        result = asyncio.run(read_docx(reasoning="test", file_path=sample_docx, ctx=ctx, clean_view=False))
         assert "[Debug]" not in result.structured_content["markdown"]
 
     # 2. When ADEU_ENABLE_TEST_TOOLS is enabled, [Debug] timing string should be appended, but NOT [Debug] build stamp
     with patch.dict(
-        os.environ, {"ADEU_ENABLE_TEST_TOOLS": "true", "GIT_SHA": "test_sha", "BUILD_TIMESTAMP": "test_ts"}
+        os.environ,
+        {
+            "ADEU_ENABLE_TEST_TOOLS": "true",
+            "GIT_SHA": "test_sha",
+            "BUILD_TIMESTAMP": "test_ts",
+        },
     ):
-        result = asyncio.run(read_docx(file_path=sample_docx, ctx=ctx, clean_view=False))
+        result = asyncio.run(read_docx(reasoning="test", file_path=sample_docx, ctx=ctx, clean_view=False))
         assert "[Debug] Tool execution time" in result.structured_content["markdown"]
         assert "[Debug] build=" not in result.structured_content["markdown"]
 
@@ -93,7 +98,7 @@ def test_read_docx_string_page_hallucination(mock_error, mock_warning, mock_debu
     """
     from adeu.server import mcp
 
-    arguments = {"file_path": sample_docx, "page": "1"}
+    arguments = {"reasoning": "test", "file_path": sample_docx, "page": "1"}
     result = asyncio.run(mcp.call_tool("read_docx", arguments))
     text = "".join(item.text for item in result.content if item.type == "text")
     assert "This is the original text." in text
@@ -117,7 +122,7 @@ def test_python_server_version_and_descriptions():
 def test_read_docx_file_not_found():
     ctx = MockContext()
     with pytest.raises(ToolError) as exc_info:
-        asyncio.run(read_docx(file_path="nonexistent.docx", ctx=ctx))
+        asyncio.run(read_docx(reasoning="test", file_path="nonexistent.docx", ctx=ctx))
 
     error_msg = str(exc_info.value)
     assert "Error reading file" in error_msg
@@ -128,6 +133,7 @@ def test_diff_docx_files(sample_docx, modified_docx):
     ctx = MockContext()
     result = asyncio.run(
         diff_docx_files(
+            reasoning="test",
             original_path=sample_docx,
             modified_path=modified_docx,
             ctx=ctx,
@@ -147,6 +153,7 @@ def test_process_document_batch(sample_docx, tmp_path):
 
     result = asyncio.run(
         process_document_batch(
+            reasoning="test",
             original_docx_path=sample_docx,
             author_name="AI Agent",
             ctx=ctx,
@@ -172,6 +179,7 @@ def test_process_document_batch_validation_failure(sample_docx, tmp_path):
 
     result = asyncio.run(
         process_document_batch(
+            reasoning="test",
             original_docx_path=sample_docx,
             author_name="AI Agent",
             ctx=ctx,
@@ -199,7 +207,14 @@ def test_accept_all_changes(sample_docx, tmp_path):
 
     output_path = tmp_path / "clean.docx"
 
-    result = asyncio.run(accept_all_changes(docx_path=str(tracked_path), ctx=ctx, output_path=str(output_path)))
+    result = asyncio.run(
+        accept_all_changes(
+            reasoning="test",
+            docx_path=str(tracked_path),
+            ctx=ctx,
+            output_path=str(output_path),
+        )
+    )
 
     assert "Accepted all changes" in result
     assert output_path.exists()
@@ -227,7 +242,7 @@ def test_login_to_adeu_cloud_success(mock_urlopen, mock_ensure_auth):
     mock_response.__enter__.return_value = mock_response
     mock_urlopen.return_value = mock_response
 
-    result = asyncio.run(login_to_adeu_cloud(ctx=ctx))
+    result = asyncio.run(login_to_adeu_cloud(reasoning="test", ctx=ctx))
     assert "Login successful" in result
     assert "test@adeu.ai" in result
 
@@ -235,7 +250,7 @@ def test_login_to_adeu_cloud_success(mock_urlopen, mock_ensure_auth):
 @patch("adeu.mcp_components.desktop_auth.DesktopAuthManager.clear_api_key")
 def test_logout_of_adeu_cloud(mock_clear_key):
     ctx = MockContext()
-    result = asyncio.run(logout_of_adeu_cloud(ctx=ctx))
+    result = asyncio.run(logout_of_adeu_cloud(reasoning="test", ctx=ctx))
     assert "Successfully logged out" in result
     mock_clear_key.assert_called_once()
 
@@ -254,7 +269,7 @@ def test_validate_documents_init(mock_urlopen, sample_docx):
     # Convert the list to a JSON string before passing it to the tool
     file_paths_json = json.dumps([sample_docx])
 
-    result = asyncio.run(validate_documents(file_paths=file_paths_json, ctx=ctx, api_key="fake_key"))
+    result = asyncio.run(validate_documents(reasoning="test", file_paths=file_paths_json, ctx=ctx, api_key="fake_key"))
 
     text_result = str(result.content)
     assert "Validation task started successfully" in text_result
@@ -282,7 +297,7 @@ def test_validate_documents_poll_success(mock_urlopen, mock_sleep):
     mock_urlopen.return_value = mock_response
 
     # Call with task_id to trigger polling mode
-    result = asyncio.run(validate_documents(task_id=99, ctx=ctx, api_key="fake_key"))
+    result = asyncio.run(validate_documents(reasoning="test", task_id=99, ctx=ctx, api_key="fake_key"))
 
     text_result = str(result.content)
     assert "Validation Report" in text_result
@@ -303,7 +318,7 @@ def test_validate_documents_poll_timeout(mock_urlopen, mock_sleep):
     mock_response.__enter__.return_value = mock_response
     mock_urlopen.return_value = mock_response
 
-    result = asyncio.run(validate_documents(task_id=99, ctx=ctx, api_key="fake_key"))
+    result = asyncio.run(validate_documents(reasoning="test", task_id=99, ctx=ctx, api_key="fake_key"))
 
     text_result = str(result.content)
     # Ensure it tells the LLM to call again with the same task ID

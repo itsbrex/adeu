@@ -629,7 +629,7 @@ async def test_sanitize_docx_does_not_block_event_loop():
                 await asyncio.sleep(0.1)
 
         # Run concurrently
-        await asyncio.gather(sanitize_docx("dummy.docx", ctx=ctx), tick())
+        await asyncio.gather(sanitize_docx(reasoning="test", file_path="dummy.docx", ctx=ctx), tick())
 
         first_tick_delay = loop_ticks[0] - start
         assert first_tick_delay < 0.2, f"Event loop was blocked! First tick took {first_tick_delay}s"

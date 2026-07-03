@@ -34,6 +34,10 @@ from adeu.mcp_components.shared import (
     meta={"ui": {"resourceUri": MARKDOWN_UI_URI}},
 )
 async def validate_documents(
+    reasoning: Annotated[
+        str,
+        "Why do I need to validate these documents? State this reason before any other parameter.",
+    ],
     ctx: Context,
     file_paths: Annotated[
         Optional[str],
@@ -46,6 +50,7 @@ async def validate_documents(
     task_id: Annotated[Optional[int], "If resuming a pending check, provide the task ID here."] = None,
     api_key: str = Depends(get_cloud_auth_token),
 ) -> ToolResult:
+    del reasoning  # reason-first UX; not used by the tool.
     if not file_paths and not task_id:
         raise ToolError(
             "You must provide either 'file_paths' to start a new validation, or 'task_id' to check an existing one."

@@ -103,6 +103,7 @@ def test_issue1_accept_then_modify_same_change_in_one_batch_succeeds(tmp_path):
     out = tmp_path / "lease_final.docx"
     msg = asyncio.run(
         process_document_batch(
+            reasoning="test",
             original_docx_path=str(mid),
             author_name="Acme's Counsel",
             ctx=MockContext(),
@@ -133,7 +134,17 @@ def test_issue2_self_replacement_comment_over_fragmented_runs_is_single_comment(
     """
     doc = Document()
     p = doc.add_paragraph()
-    words = ["The ", "Purchase ", "Price ", "is ", "[   ] ", "dollars ", "per ", "unit ", "total."]
+    words = [
+        "The ",
+        "Purchase ",
+        "Price ",
+        "is ",
+        "[   ] ",
+        "dollars ",
+        "per ",
+        "unit ",
+        "total.",
+    ]
     for w in words:
         p.add_run(w)
     s = io.BytesIO()
@@ -201,6 +212,7 @@ def test_issue3_default_output_paths_diverge_and_fragment_state(tmp_path):
     # 1. Redline with NO output_path -> contract_processed.docx
     msg1 = asyncio.run(
         process_document_batch(
+            reasoning="test",
             original_docx_path=str(base),
             author_name="Agent",
             ctx=MockContext(),
@@ -213,6 +225,7 @@ def test_issue3_default_output_paths_diverge_and_fragment_state(tmp_path):
     # 2. Accept-all on the redlined file, NO output_path -> *_clean.docx (different stem).
     msg2 = asyncio.run(
         accept_all_changes(
+            reasoning="test",
             docx_path=str(tmp_path / "contract_processed.docx"),
             ctx=MockContext(),
         )
@@ -242,6 +255,7 @@ def test_issue3_python_idempotency_guard_reuses_processed_path(tmp_path):
 
     msg = asyncio.run(
         process_document_batch(
+            reasoning="test",
             original_docx_path=str(processed),
             author_name="Agent",
             ctx=MockContext(),

@@ -89,6 +89,7 @@ def test_read_docx_falls_back_to_disk_on_com_unavailable(monkeypatch):
 
     async def run_test():
         res = await doc_mod.read_docx(
+            reasoning="test",
             ctx=ctx,
             file_path=r"C:\deal\contract.docx",
             mode="full",
@@ -125,6 +126,7 @@ def test_read_docx_does_not_swallow_toolerror(monkeypatch):
     async def run_test():
         with pytest.raises(ToolError, match="out of range"):
             await doc_mod.read_docx(
+                reasoning="test",
                 ctx=ctx,
                 file_path=r"C:\deal\contract.docx",
                 mode="full",
@@ -155,6 +157,7 @@ def test_read_docx_uses_disk_directly_when_not_open(monkeypatch):
 
     async def run_test():
         res = await doc_mod.read_docx(
+            reasoning="test",
             ctx=ctx,
             file_path=r"C:\deal\contract.docx",
             mode="full",
@@ -185,6 +188,7 @@ def test_read_docx_uses_live_when_open_and_com_healthy(monkeypatch):
 
     async def run_test():
         res = await doc_mod.read_docx(
+            reasoning="test",
             ctx=ctx,
             file_path=r"C:\deal\contract.docx",
             mode="full",
@@ -237,6 +241,7 @@ def test_process_batch_falls_back_to_disk_on_com_unavailable(monkeypatch):
 
     async def run_test():
         res = await doc_mod.process_document_batch(
+            reasoning="test",
             author_name="Reviewer AI",
             ctx=ctx,
             changes=changes,
@@ -273,6 +278,7 @@ def test_process_batch_uses_live_when_open_and_com_healthy(monkeypatch):
 
     async def run_test():
         res = await doc_mod.process_document_batch(
+            reasoning="test",
             author_name="Reviewer AI",
             ctx=ctx,
             changes=changes,
@@ -306,6 +312,7 @@ def test_process_batch_uses_disk_directly_when_not_open(monkeypatch):
 
     async def run_test():
         res = await doc_mod.process_document_batch(
+            reasoning="test",
             author_name="Reviewer AI",
             ctx=ctx,
             changes=changes,
@@ -356,6 +363,7 @@ def test_process_batch_active_mode_surfaces_com_unavailable(monkeypatch):
     async def run_test():
         with pytest.raises(ToolError, match="active Word document"):
             await doc_mod.process_document_batch(
+                reasoning="test",
                 author_name="Reviewer AI",
                 ctx=ctx,
                 changes=changes,

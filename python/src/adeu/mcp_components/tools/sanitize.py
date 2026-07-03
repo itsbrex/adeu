@@ -22,6 +22,10 @@ from adeu.mcp_components.shared import add_timing_if_debug
     annotations={"destructiveHint": True},
 )
 async def sanitize_docx(
+    reasoning: Annotated[
+        str,
+        "Why do I need to sanitize this document? State this reason before any other parameter.",
+    ],
     file_path: Annotated[str, "Absolute path to the DOCX file to sanitize."],
     ctx: Context,
     output_path: Annotated[
@@ -52,6 +56,7 @@ async def sanitize_docx(
     ] = False,
 ) -> dict:
     start_time = time.perf_counter()
+    del reasoning  # reason-first UX; not used by the tool.
     from adeu.sanitize.core import SanitizeError
     from adeu.sanitize.core import sanitize_docx as _sanitize
 

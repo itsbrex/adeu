@@ -268,6 +268,7 @@ def test_end_to_end_form_fill_payload_applies(sample_docx, tmp_path):
     ]
     result = asyncio.run(
         process_document_batch(
+            reasoning="test",
             original_docx_path=sample_docx,
             author_name="Contract Editor",
             ctx=ctx,  # type: ignore[arg-type]
@@ -298,6 +299,7 @@ def test_end_to_end_partial_reports_skips_in_response(sample_docx, tmp_path):
     ]
     result = asyncio.run(
         process_document_batch(
+            reasoning="test",
             original_docx_path=sample_docx,
             author_name="Contract Editor",
             ctx=ctx,  # type: ignore[arg-type]

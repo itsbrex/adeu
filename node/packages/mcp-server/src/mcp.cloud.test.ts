@@ -83,7 +83,7 @@ describe("Cloud Auth & Email Tools MCP Verification", () => {
       "tools/call",
       {
         name: "search_and_fetch_emails",
-        arguments: { subject: "Invoice" },
+        arguments: { reasoning: "test", subject: "Invoice" },
       },
       201,
     );
@@ -97,7 +97,7 @@ describe("Cloud Auth & Email Tools MCP Verification", () => {
       "tools/call",
       {
         name: "list_available_mailboxes",
-        arguments: {},
+        arguments: { reasoning: "test" },
       },
       204,
     );
@@ -116,6 +116,7 @@ describe("Cloud Auth & Email Tools MCP Verification", () => {
       {
         name: "create_email_draft",
         arguments: {
+          reasoning: "test",
           body_markdown: "Hello World",
           // Missing reply_to_email_id AND subject/to_recipients
         },
@@ -137,7 +138,7 @@ describe("Cloud Auth & Email Tools MCP Verification", () => {
       "tools/call",
       {
         name: "logout_of_adeu_cloud",
-        arguments: {},
+        arguments: { reasoning: "test" },
       },
       203,
     );

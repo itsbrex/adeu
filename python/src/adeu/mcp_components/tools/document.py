@@ -345,12 +345,17 @@ async def _process_document_batch_disk(
     annotations={"readOnlyHint": True},
 )
 async def diff_docx_files(
+    reasoning: Annotated[
+        str,
+        "Why do I need to diff these two documents? State this reason before any other parameter.",
+    ],
     original_path: Annotated[str, "Path to the base document."],
     modified_path: Annotated[str, "Path to the new document."],
     ctx: Context,
     compare_clean: Annotated[bool, "If True, compares 'Accepted' state. If False, compares raw text."] = True,
 ) -> str:
     start_time = time.perf_counter()
+    del reasoning
     await ctx.info(
         "Starting document diff",
         extra={
@@ -452,11 +457,16 @@ def _create_diff_output(original_path: str, modified_path: str, text_orig: str, 
     annotations={"destructiveHint": True},
 )
 async def accept_all_changes(
+    reasoning: Annotated[
+        str,
+        "Why do I need to accept all changes in this document? State this reason before any other parameter.",
+    ],
     docx_path: Annotated[str, "Absolute path to the DOCX file."],
     ctx: Context,
     output_path: Annotated[Optional[str], "Optional output path."] = None,
 ) -> str:
     start_time = time.perf_counter()
+    del reasoning  # reason-first UX; not used by the tool.
     await ctx.info(f"Accepting all changes for document: {Path(docx_path).name}")
     try:
         stream = read_file_bytes(docx_path)
@@ -487,10 +497,15 @@ async def accept_all_changes(
     annotations={"openWorldHint": True},
 )
 async def open_local_file(
+    reasoning: Annotated[
+        str,
+        "Why do I need to open this file in its native app? State this reason before any other parameter.",
+    ],
     file_path: Annotated[str, "Absolute path to the file to open."],
     ctx: Context,
 ) -> str:
     start_time = time.perf_counter()
+    del reasoning  # reason-first UX; not used by the tool.
     await ctx.info(f"Opening file in native app: {file_path}")
     p = Path(file_path)
     if not p.exists():
@@ -583,6 +598,10 @@ if sys.platform == "win32":
         meta={"ui": {"resourceUri": MARKDOWN_UI_URI}},
     )
     async def read_docx(
+        reasoning: Annotated[
+            str,
+            "Why do I need to read this docx document? State this reason before any other parameter.",
+        ],
         ctx: Context,
         file_path: Annotated[
             Optional[str],
@@ -628,6 +647,7 @@ if sys.platform == "win32":
         search_case_sensitive: Annotated[bool, "Set to false to perform case-insensitive matching."] = True,
     ) -> ToolResult:
         start_time = time.perf_counter()
+        del reasoning
         # Outside of search mode, `page` semantically means "document page" and
         # defaults to 1. In search mode, `page` is a document-page filter and
         # `None` means "search all pages" — we leave it as None to let the
@@ -714,6 +734,10 @@ if sys.platform == "win32":
         annotations={"destructiveHint": True},
     )
     async def process_document_batch(
+        reasoning: Annotated[
+            str,
+            "Why do I need to apply these changes to the document? State this reason before any other parameter.",
+        ],
         author_name: Annotated[str, "Name to appear in Track Changes (e.g., 'Reviewer AI')."],
         ctx: Context,
         changes: Annotated[
@@ -734,6 +758,7 @@ if sys.platform == "win32":
         ] = False,
     ) -> str:
         start_time = time.perf_counter()
+        del reasoning  # reason-first UX; not used by the tool.
         # FastMCP's parameter validation does not always honor the BeforeValidator
         # attached to BatchChanges (it flattens the Annotated chain and validates
         # against the bare list type), so coerce here as a defensive second pass.
@@ -807,11 +832,16 @@ if sys.platform == "win32":
             annotations={"readOnlyHint": True},
         )
         async def debug_xml_diff(
+            reasoning: Annotated[
+                str,
+                "Why do I need this structural XML diff? State this reason before any other parameter.",
+            ],
             file_a: Annotated[str, "Absolute path to the first/baseline DOCX file."],
             file_b: Annotated[str, "Absolute path to the second/modified DOCX file."],
             ctx: Context,
         ) -> str:
             start_time = time.perf_counter()
+            del reasoning  # reason-first UX; not used by the tool.
             await ctx.info(f"Generating XML diff between {Path(file_a).name} and {Path(file_b).name}")
             import difflib
 
@@ -872,11 +902,16 @@ if sys.platform == "win32":
             ),
         )
         async def open_word_document(
+            reasoning: Annotated[
+                str,
+                "Why do I need to open this document in Word? State this reason before any other parameter.",
+            ],
             ctx: Context,
             file_path: Annotated[str, "Absolute path to the DOCX file to open in Word."],
             visible: Annotated[bool, "Whether to make the Word application window visible."] = True,
         ) -> str:
             start_time = time.perf_counter()
+            del reasoning  # reason-first UX; not used by the tool.
             res = await open_word_document_impl(ctx, file_path, visible)
             return add_timing_if_debug(start_time, res)
 
@@ -884,6 +919,10 @@ if sys.platform == "win32":
             description="Saves the currently active Microsoft Word document to disk. Optionally closes it after saving."
         )
         async def save_active_word_document(
+            reasoning: Annotated[
+                str,
+                "Why do I need to save the active document? State this reason before any other parameter.",
+            ],
             ctx: Context,
             output_path: Annotated[
                 Optional[str],
@@ -892,6 +931,7 @@ if sys.platform == "win32":
             close: Annotated[bool, "Whether to close the document in Word after saving."] = False,
         ) -> str:
             start_time = time.perf_counter()
+            del reasoning  # reason-first UX; not used by the tool.
             res = await save_active_word_document_impl(ctx, output_path, close)
             return add_timing_if_debug(start_time, res)
 
@@ -908,6 +948,10 @@ else:
         meta={"ui": {"resourceUri": MARKDOWN_UI_URI}},
     )
     async def read_docx(
+        reasoning: Annotated[
+            str,
+            "Why do I need to read this docx document? State this reason before any other parameter.",
+        ],
         file_path: Annotated[str, "Absolute path to the DOCX file."],
         ctx: Context,
         clean_view: Annotated[
@@ -948,6 +992,7 @@ else:
         search_case_sensitive: Annotated[bool, "Set to false to perform case-insensitive matching."] = True,
     ) -> ToolResult:
         start_time = time.perf_counter()
+        del reasoning  # reason-first UX; not used by the tool.
         if search_query is None and page is None:
             page = 1
         res = await _read_docx_disk(
@@ -970,6 +1015,10 @@ else:
         annotations={"destructiveHint": True},
     )
     async def process_document_batch(
+        reasoning: Annotated[
+            str,
+            "Why do I need to apply these changes to the document? State this reason before any other parameter.",
+        ],
         original_docx_path: Annotated[str, "Absolute path to the source file."],
         author_name: Annotated[str, "Name to appear in Track Changes (e.g., 'Reviewer AI')."],
         ctx: Context,
@@ -984,6 +1033,7 @@ else:
         ] = False,
     ) -> str:
         start_time = time.perf_counter()
+        del reasoning
         # See win32 branch above for why we re-coerce here.
         changes, rejected_notes = _normalize_changes(changes)
         if not changes and rejected_notes:

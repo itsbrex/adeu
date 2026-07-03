@@ -57,14 +57,17 @@ describe("Field feedback repro — Issue 3 file-path ambiguity (real MCP server)
 
     const serverPath = resolve(__dirname, "../dist/index.js");
     if (!existsSync(serverPath)) {
-      throw new Error("MCP server not built. Run 'npm run build' before tests.");
+      throw new Error(
+        "MCP server not built. Run 'npm run build' before tests.",
+      );
     }
     serverProc = spawn("node", [serverPath]);
   });
 
   afterAll(() => {
     if (serverProc && !serverProc.killed) serverProc.kill();
-    if (workDir && existsSync(workDir)) rmSync(workDir, { recursive: true, force: true });
+    if (workDir && existsSync(workDir))
+      rmSync(workDir, { recursive: true, force: true });
   });
 
   function sendRpc(method: string, params: any, id: number): Promise<any> {
@@ -105,9 +108,12 @@ describe("Field feedback repro — Issue 3 file-path ambiguity (real MCP server)
     const r1 = await callTool(
       "process_document_batch",
       {
+        reasoning: "test",
         original_docx_path: contractPath,
         author_name: "Agent",
-        changes: [{ type: "modify", target_text: "Provider", new_text: "Supplier" }],
+        changes: [
+          { type: "modify", target_text: "Provider", new_text: "Supplier" },
+        ],
       },
       201,
     );
@@ -120,7 +126,10 @@ describe("Field feedback repro — Issue 3 file-path ambiguity (real MCP server)
     //    NOT back onto contract.docx / contract_processed.docx.
     const r2 = await callTool(
       "accept_all_changes",
-      { docx_path: join(workDir, "contract_processed.docx") },
+      {
+        reasoning: "test",
+        docx_path: join(workDir, "contract_processed.docx"),
+      },
       202,
     );
     const msg2 = r2.result.content[0].text as string;
@@ -145,15 +154,20 @@ describe("Field feedback repro — Issue 3 file-path ambiguity (real MCP server)
     const r = await callTool(
       "process_document_batch",
       {
+        reasoning: "test",
         original_docx_path: join(workDir, "contract_processed.docx"),
         author_name: "Agent",
-        changes: [{ type: "modify", target_text: "goods", new_text: "products" }],
+        changes: [
+          { type: "modify", target_text: "goods", new_text: "products" },
+        ],
       },
       203,
     );
     const msg = r.result.content[0].text as string;
     expect(savedFile(msg)).toBe("contract_processed.docx");
-    expect(existsSync(join(workDir, "contract_processed_processed.docx"))).toBe(false);
+    expect(existsSync(join(workDir, "contract_processed_processed.docx"))).toBe(
+      false,
+    );
   });
 
   it("Issue 1 (end-to-end via shipped server): accept + modify the same foreign insertion in one batch succeeds", async () => {
@@ -162,7 +176,9 @@ describe("Field feedback repro — Issue 3 file-path ambiguity (real MCP server)
     const foreign = join(workDir, "lease.docx");
     {
       const doc = await DocumentObject.load(
-        readFileSync(resolve(__dirname, "../../../../shared/fixtures/initial.docx")),
+        readFileSync(
+          resolve(__dirname, "../../../../shared/fixtures/initial.docx"),
+        ),
       );
       const body = doc.element;
       while (body.firstChild) body.removeChild(body.firstChild);
@@ -191,6 +207,7 @@ describe("Field feedback repro — Issue 3 file-path ambiguity (real MCP server)
     const res = await callTool(
       "process_document_batch",
       {
+        reasoning: "test",
         original_docx_path: foreign,
         author_name: "Acme's Counsel",
         output_path: join(workDir, "lease_out.docx"),

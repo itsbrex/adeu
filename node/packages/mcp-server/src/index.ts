@@ -272,6 +272,11 @@ registerAppTool(
     title: "Read DOCX",
     description: READ_DOCX_COMMON_DESC + READ_DOCX_TAIL,
     inputSchema: z.object({
+      reasoning: z
+        .string()
+        .describe(
+          "Why do I need to read this docx document? State this reason before any other parameter.",
+        ),
       file_path: z.string().describe("Absolute path to the DOCX file."),
       clean_view: z
         .boolean()
@@ -319,6 +324,7 @@ registerAppTool(
     _meta: { ui: { resourceUri: MARKDOWN_UI_URI } },
   },
   async ({
+    reasoning,
     file_path,
     clean_view,
     mode,
@@ -330,6 +336,7 @@ registerAppTool(
     search_case_sensitive,
   }) => {
     try {
+      void reasoning;
       const buf = readFileBytesOrThrow(file_path);
 
       if (mode === "outline") {
@@ -467,6 +474,11 @@ server.registerTool(
   {
     description: PROCESS_BATCH_COMMON_DESC + PROCESS_BATCH_OPERATIONS_DESC,
     inputSchema: {
+      reasoning: z
+        .string()
+        .describe(
+          "Why do I need to apply these changes to the document? State this reason before any other parameter.",
+        ),
       original_docx_path: z
         .string()
         .describe("Absolute path to the source file."),
@@ -489,6 +501,7 @@ server.registerTool(
     },
   },
   async ({
+    reasoning,
     original_docx_path,
     author_name,
     changes,
@@ -496,6 +509,7 @@ server.registerTool(
     dry_run,
   }) => {
     try {
+      void reasoning;
       if (!author_name || !author_name.trim())
         return {
           content: [
@@ -633,12 +647,18 @@ server.registerTool(
     description:
       "Accepts all tracked changes and removes all comments in a single operation.",
     inputSchema: {
+      reasoning: z
+        .string()
+        .describe(
+          "Why do I need to accept all changes in this document? State this reason before any other parameter.",
+        ),
       docx_path: z.string().describe("Absolute path to the DOCX file."),
       output_path: z.string().optional().describe("Optional output path."),
     },
   },
-  async ({ docx_path, output_path }) => {
+  async ({ reasoning, docx_path, output_path }) => {
     try {
+      void reasoning;
       let outPath = output_path;
       if (!outPath) {
         const ext = extname(docx_path);
@@ -676,6 +696,11 @@ server.registerTool(
   {
     description: DIFF_DOCX_DESC,
     inputSchema: {
+      reasoning: z
+        .string()
+        .describe(
+          "Why do I need to diff these two documents? State this reason before any other parameter.",
+        ),
       original_path: z
         .string()
         .describe("Absolute path to the baseline DOCX file."),
@@ -690,8 +715,9 @@ server.registerTool(
         ),
     },
   },
-  async ({ original_path, modified_path, compare_clean }) => {
+  async ({ reasoning, original_path, modified_path, compare_clean }) => {
     try {
+      void reasoning;
       const origBuf = readFileBytesOrThrow(original_path);
       const modBuf = readFileBytesOrThrow(modified_path);
 
@@ -723,6 +749,11 @@ server.registerTool(
     description:
       "Prepares a document for external distribution or e-signature. Note: in this zero-dependency environment, protection_mode='encrypt' is unsupported and falls back to a native read-only lock; export_pdf and password are ignored.",
     inputSchema: {
+      reasoning: z
+        .string()
+        .describe(
+          "Why do I need to finalize this document? State this reason before any other parameter.",
+        ),
       file_path: z.string().describe("Absolute path to the DOCX file."),
       output_path: z.string().optional().describe("Optional output path."),
       sanitize_mode: z
@@ -753,6 +784,7 @@ server.registerTool(
     },
   },
   async ({
+    reasoning,
     file_path,
     output_path,
     sanitize_mode,
@@ -762,6 +794,7 @@ server.registerTool(
     export_pdf,
   }) => {
     try {
+      void reasoning;
       let outPath = output_path;
       if (!outPath) {
         const ext = extname(file_path);
@@ -820,6 +853,11 @@ if (!isDocxOnly) {
         "FOLDER DEFAULT: omitting `folder` searches the Inbox only (matching what the user sees in their mail client). Use `folder='sent'` for sent items, `folder='all'` to include Deleted Items, Drafts, and other folders.\n\n" +
         "ATTACHMENTS: attachments larger than `max_attachment_size_mb` (default 10) are listed in the response but NOT downloaded — raise the cap if you need them. Always set `working_directory` when calling from a project so attachments land alongside the user's other files.",
       inputSchema: z.object({
+        reasoning: z
+          .string()
+          .describe(
+            "Why do I need to search or fetch these emails? State this reason before any other parameter.",
+          ),
         sender: z.string().optional(),
         subject: z.string().optional(),
         has_attachments: z.boolean().optional(),
@@ -870,6 +908,13 @@ if (!isDocxOnly) {
         "- Signing in through ANY of the user's linked accounts authenticates the same Adeu user. Once logged in, the session can read from and draft in ALL of that user's linked accounts and ALL of their mailboxes — not just the one used to sign in.\n" +
         "- The choice of which provider account to sign in through is purely an SSO mechanism; it does not select a 'current account' for the session.\n\n" +
         "When the user asks which accounts or mailboxes are available, call `list_available_mailboxes` rather than naming a single account from the login response.",
+      inputSchema: {
+        reasoning: z
+          .string()
+          .describe(
+            "Why do I need to log in to Adeu Cloud? State this reason before any other parameter.",
+          ),
+      },
     },
     async () => {
       try {
@@ -882,7 +927,16 @@ if (!isDocxOnly) {
 
   server.registerTool(
     "logout_of_adeu_cloud",
-    { description: "Logs out of the Adeu Cloud backend." },
+    {
+      description: "Logs out of the Adeu Cloud backend.",
+      inputSchema: {
+        reasoning: z
+          .string()
+          .describe(
+            "Why do I need to log out of Adeu Cloud? State this reason before any other parameter.",
+          ),
+      },
+    },
     async () => {
       try {
         return (await logout_of_adeu_cloud()) as any;
@@ -903,6 +957,11 @@ if (!isDocxOnly) {
         "`body_markdown` is converted server-side to styled HTML with inlined CSS for email-client compatibility. Write the body in plain Markdown — do not pre-render HTML.\n\n" +
         "`attachment_paths` takes absolute file paths on the user's local disk and uploads them with the draft. Useful right after search_and_fetch_emails downloaded attachments — those local paths can be passed directly here.",
       inputSchema: {
+        reasoning: z
+          .string()
+          .describe(
+            "Why do I need to create this email draft? State this reason before any other parameter.",
+          ),
         body_markdown: z.string(),
         reply_to_email_id: z.string().optional(),
         subject: z.string().optional(),
@@ -931,7 +990,13 @@ if (!isDocxOnly) {
         "Lists all personal and shared/delegated mailboxes the authenticated Adeu user has access to, across ALL of their linked provider accounts. Returns each mailbox's `email_address`, `display_name`, auto-processing settings, and write-back preference.\n\n" +
         "This is the right tool to answer 'which accounts/mailboxes am I logged into?' — Adeu login is user-level, so a single MCP session can see every mailbox listed here regardless of which provider account was used for SSO.\n\n" +
         "Call this FIRST when the user names a specific mailbox or shared inbox, to resolve the canonical `email_address`. Then pass that address as `mailbox_address` to `search_and_fetch_emails` or `create_email_draft` to scope the operation. Omitting `mailbox_address` on those tools targets the user's primary personal mailbox.",
-      inputSchema: {},
+      inputSchema: {
+        reasoning: z
+          .string()
+          .describe(
+            "Why do I need to list available mailboxes? State this reason before any other parameter.",
+          ),
+      },
     },
     async () => {
       try {

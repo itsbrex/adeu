@@ -87,7 +87,7 @@ def test_finding_2_list_mailboxes_parity_and_fallback(mock_urlopen):
     mock_resp.__enter__.return_value = mock_resp
     mock_urlopen.return_value = mock_resp
 
-    result = asyncio.run(list_available_mailboxes(ctx=ctx, api_key="test_api_key"))
+    result = asyncio.run(list_available_mailboxes(reasoning="test", ctx=ctx, api_key="test_api_key"))
 
     assert "### Connected Mailboxes" in result
     assert "Below is the list of connected mailboxes you have access to." in result
@@ -124,7 +124,14 @@ def test_finding_6_tool_boundary_error_handling_bogus_mailbox(mock_urlopen):
     mock_urlopen.side_effect = http_error
 
     with pytest.raises(ToolError) as exc_info:
-        asyncio.run(search_and_fetch_emails(ctx=ctx, mailbox_address="bogus@nowhere.invalid", api_key="test_api_key"))
+        asyncio.run(
+            search_and_fetch_emails(
+                reasoning="test",
+                ctx=ctx,
+                mailbox_address="bogus@nowhere.invalid",
+                api_key="test_api_key",
+            )
+        )
 
     error_msg = str(exc_info.value)
     assert "Cloud search failed (HTTP 404):" in error_msg
@@ -153,6 +160,7 @@ def test_finding_6_tool_boundary_error_handling_missing_email(mock_urlopen):
     with pytest.raises(ToolError) as exc_info:
         asyncio.run(
             search_and_fetch_emails(
+                reasoning="test",
                 ctx=ctx,
                 email_id="adeu_99999",  # Direct adeu ID passes through cache check
                 api_key="test_api_key",
@@ -174,7 +182,14 @@ def test_finding_6_tool_boundary_error_handling_timeout(mock_urlopen):
     mock_urlopen.side_effect = TimeoutError("Connection timed out")
 
     with pytest.raises(ToolError) as exc_info:
-        asyncio.run(search_and_fetch_emails(ctx=ctx, mailbox_address="sales@company.com", api_key="test_api_key"))
+        asyncio.run(
+            search_and_fetch_emails(
+                reasoning="test",
+                ctx=ctx,
+                mailbox_address="sales@company.com",
+                api_key="test_api_key",
+            )
+        )
 
     error_msg = str(exc_info.value)
     assert "Email search timed out after 45s." in error_msg
@@ -220,7 +235,14 @@ def test_findings_3_and_11_and_9_formatting_parity(mock_urlopen):
 
     # Request with limit=2 (matches size of previews array)
     res_previews = asyncio.run(
-        search_and_fetch_emails(ctx=ctx, subject="Invoice", limit=2, offset=0, api_key="test_api_key")
+        search_and_fetch_emails(
+            reasoning="test",
+            ctx=ctx,
+            subject="Invoice",
+            limit=2,
+            offset=0,
+            api_key="test_api_key",
+        )
     )
 
     previews_text = _get_tool_text(res_previews)
@@ -246,7 +268,12 @@ def test_findings_3_and_11_and_9_formatting_parity(mock_urlopen):
 
     # Request without email_id, but with filters (simulating search finding exactly one result)
     res_escalation = asyncio.run(
-        search_and_fetch_emails(ctx=ctx, subject="Contract Review Required", api_key="test_api_key")
+        search_and_fetch_emails(
+            reasoning="test",
+            ctx=ctx,
+            subject="Contract Review Required",
+            api_key="test_api_key",
+        )
     )
 
     escalation_text = _get_tool_text(res_escalation)
@@ -275,7 +302,9 @@ def test_findings_3_and_11_and_9_formatting_parity(mock_urlopen):
 
     mock_resp.read.return_value = json.dumps(mock_attachments_data).encode("utf-8")
 
-    res_attachments = asyncio.run(search_and_fetch_emails(ctx=ctx, email_id="adeu_12345", api_key="test_api_key"))
+    res_attachments = asyncio.run(
+        search_and_fetch_emails(reasoning="test", ctx=ctx, email_id="adeu_12345", api_key="test_api_key")
+    )
 
     attachments_text = _get_tool_text(res_attachments)
     assert "You can now use tools like `read_docx`, `diff_docx_files`, or `validate_documents`" in attachments_text
@@ -302,9 +331,14 @@ def test_async_task_initiation_on_search_completed(mock_sleep, mock_urlopen):
         {"status": "COMPLETED", "type": "previews", "previews": []}
     ).encode("utf-8")
 
-    mock_urlopen.side_effect = [mock_resp_init.__enter__.return_value, mock_resp_poll.__enter__.return_value]
+    mock_urlopen.side_effect = [
+        mock_resp_init.__enter__.return_value,
+        mock_resp_poll.__enter__.return_value,
+    ]
 
-    res = asyncio.run(search_and_fetch_emails(ctx=ctx, subject="Heavy Search", api_key="test_api_key"))
+    res = asyncio.run(
+        search_and_fetch_emails(reasoning="test", ctx=ctx, subject="Heavy Search", api_key="test_api_key")
+    )
 
     text = _get_tool_text(res)
     assert "No emails found matching your search criteria." in text
@@ -332,7 +366,9 @@ def test_async_task_initiation_on_search_pending_timeout(mock_sleep, mock_urlope
 
     mock_urlopen.side_effect = [mock_resp_init.__enter__.return_value] + [mock_resp_poll.__enter__.return_value] * 10
 
-    res = asyncio.run(search_and_fetch_emails(ctx=ctx, subject="Heavy Search", api_key="test_api_key"))
+    res = asyncio.run(
+        search_and_fetch_emails(reasoning="test", ctx=ctx, subject="Heavy Search", api_key="test_api_key")
+    )
 
     text = _get_tool_text(res)
     assert "is still processing" in text
@@ -357,9 +393,14 @@ def test_polling_task_completed(mock_sleep, mock_urlopen):
         {"status": "COMPLETED", "type": "previews", "previews": []}
     ).encode("utf-8")
 
-    mock_urlopen.side_effect = [mock_resp_pending.__enter__.return_value, mock_resp_completed.__enter__.return_value]
+    mock_urlopen.side_effect = [
+        mock_resp_pending.__enter__.return_value,
+        mock_resp_completed.__enter__.return_value,
+    ]
 
-    res = asyncio.run(search_and_fetch_emails(ctx=ctx, task_id="email_task_999", api_key="test_api_key"))
+    res = asyncio.run(
+        search_and_fetch_emails(reasoning="test", ctx=ctx, task_id="email_task_999", api_key="test_api_key")
+    )
 
     text = _get_tool_text(res)
     assert "No emails found matching your search criteria." in text
@@ -380,7 +421,14 @@ def test_polling_task_failed(mock_sleep, mock_urlopen):
     mock_urlopen.return_value = mock_resp.__enter__.return_value
 
     with pytest.raises(ToolError) as exc_info:
-        asyncio.run(search_and_fetch_emails(ctx=ctx, task_id="email_task_999", api_key="test_api_key"))
+        asyncio.run(
+            search_and_fetch_emails(
+                reasoning="test",
+                ctx=ctx,
+                task_id="email_task_999",
+                api_key="test_api_key",
+            )
+        )
 
     assert "Validation task failed on the server: Outlook API rate limit reached." in str(exc_info.value)
 
@@ -396,7 +444,9 @@ def test_polling_task_timeout(mock_sleep, mock_urlopen):
     mock_resp.__enter__.return_value.read.return_value = json.dumps({"status": "PENDING"}).encode("utf-8")
     mock_urlopen.return_value = mock_resp.__enter__.return_value
 
-    res = asyncio.run(search_and_fetch_emails(ctx=ctx, task_id="email_task_999", api_key="test_api_key"))
+    res = asyncio.run(
+        search_and_fetch_emails(reasoning="test", ctx=ctx, task_id="email_task_999", api_key="test_api_key")
+    )
 
     text = _get_tool_text(res)
     assert "is still processing" in text

@@ -70,6 +70,7 @@ def test_process_document_batch_accepts_stringified_changes(sample_docx, tmp_pat
 
     result = asyncio.run(
         process_document_batch(
+            reasoning="test",
             original_docx_path=sample_docx,
             author_name="AI Agent",
             ctx=ctx,  # type: ignore[arg-type]
@@ -95,6 +96,7 @@ def test_process_document_batch_accepts_mixed_string_and_dict(sample_docx, tmp_p
 
     result = asyncio.run(
         process_document_batch(
+            reasoning="test",
             original_docx_path=sample_docx,
             author_name="AI Agent",
             ctx=ctx,  # type: ignore[arg-type]
@@ -122,6 +124,7 @@ def test_process_document_batch_rejects_unparseable_string(sample_docx, tmp_path
 
     result = asyncio.run(
         process_document_batch(
+            reasoning="test",
             original_docx_path=sample_docx,
             author_name="AI Agent",
             ctx=ctx,  # type: ignore[arg-type]

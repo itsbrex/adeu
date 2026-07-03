@@ -94,6 +94,7 @@ describe("Resolved Bugs MCP Server Verification", () => {
       {
         name: "process_document_batch",
         arguments: {
+          reasoning: "test",
           original_docx_path: cleanDocPath,
           author_name: "Agent",
           changes: [],
@@ -114,6 +115,7 @@ describe("Resolved Bugs MCP Server Verification", () => {
       {
         name: "diff_docx_files",
         arguments: {
+          reasoning: "test",
           original_path: cleanDocPath,
           modified_path: dirtyDocPath,
           compare_clean: true,
@@ -132,6 +134,7 @@ describe("Resolved Bugs MCP Server Verification", () => {
       {
         name: "diff_docx_files",
         arguments: {
+          reasoning: "test",
           original_path: cleanDocPath,
           modified_path: dirtyDocPath,
           compare_clean: false,
@@ -148,7 +151,10 @@ describe("Resolved Bugs MCP Server Verification", () => {
       "tools/call",
       {
         name: "read_docx",
-        arguments: { file_path: join(tmpdir(), "DEF_DOES_NOT_EXIST.docx") },
+        arguments: {
+          reasoning: "test",
+          file_path: join(tmpdir(), "DEF_DOES_NOT_EXIST.docx"),
+        },
       },
       104,
     );
@@ -173,6 +179,7 @@ describe("Resolved Bugs MCP Server Verification", () => {
       {
         name: "process_document_batch",
         arguments: {
+          reasoning: "test",
           original_docx_path: cleanDocPath,
           author_name: "Agent",
           changes: [
@@ -202,6 +209,7 @@ describe("Resolved Bugs MCP Server Verification", () => {
       {
         name: "process_document_batch",
         arguments: {
+          reasoning: "test",
           original_docx_path: cleanDocPath,
           author_name: "Agent",
           changes: [
@@ -227,6 +235,7 @@ describe("Resolved Bugs MCP Server Verification", () => {
       {
         name: "read_docx",
         arguments: {
+          reasoning: "test",
           file_path: cleanDocPath,
           page: "1",
           outline_max_level: "3",

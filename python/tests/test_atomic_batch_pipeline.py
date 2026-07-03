@@ -79,6 +79,7 @@ def test_atomic_batch_prevents_cascading_misanchor(tmp_path):
     # Run the new server tool asynchronously with the mock context
     result_msg = asyncio.run(
         process_document_batch(
+            reasoning="test",
             original_docx_path=str(mid_path),
             author_name="Round2",
             ctx=MockContext(),
@@ -132,6 +133,7 @@ def test_ambiguous_batch_rejection_then_match_mode_all_through_real_tool(tmp_pat
     )
     rejection = asyncio.run(
         process_document_batch(
+            reasoning="test",
             original_docx_path=str(dpa_path),
             author_name="Reviewer",
             ctx=MockContext(),
@@ -154,6 +156,7 @@ def test_ambiguous_batch_rejection_then_match_mode_all_through_real_tool(tmp_pat
     out_path = tmp_path / "dpa_all.docx"
     result = asyncio.run(
         process_document_batch(
+            reasoning="test",
             original_docx_path=str(dpa_path),
             author_name="Reviewer",
             ctx=MockContext(),
@@ -190,6 +193,7 @@ def test_ambiguous_batch_resolved_by_match_mode_first_through_real_tool(tmp_path
     out_path = tmp_path / "dpa_first.docx"
     result = asyncio.run(
         process_document_batch(
+            reasoning="test",
             original_docx_path=str(dpa_path),
             author_name="Reviewer",
             ctx=MockContext(),

@@ -18,7 +18,13 @@ async def test_bug16_sanitize_kwargs():
     """
 
     def mock_sanitize(
-        file_path, output_path=None, *, keep_markup=False, baseline_path=None, author=None, accept_all=False
+        file_path,
+        output_path=None,
+        *,
+        keep_markup=False,
+        baseline_path=None,
+        author=None,
+        accept_all=False,
     ):
         # If called incorrectly, Python raises TypeError: takes X positional arguments but Y were given
         from unittest.mock import MagicMock
@@ -38,11 +44,16 @@ async def test_bug16_sanitize_kwargs():
     ctx = AsyncMock()
     with (
         patch("pathlib.Path.exists", return_value=True),
-        patch("adeu.mcp_components.tools.sanitize._sanitize", side_effect=mock_sanitize, create=True),
+        patch(
+            "adeu.mcp_components.tools.sanitize._sanitize",
+            side_effect=mock_sanitize,
+            create=True,
+        ),
         patch("adeu.sanitize.core.sanitize_docx", side_effect=mock_sanitize, create=True),
     ):
         # This will raise TypeError if the await asyncio.to_thread call is passing them positionally
         result = await sanitize_docx(
+            reasoning="test",
             file_path="dummy.docx",
             ctx=ctx,
             output_path="out.docx",

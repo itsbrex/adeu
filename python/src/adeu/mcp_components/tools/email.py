@@ -339,10 +339,15 @@ def _get_unique_filepath(save_dir: Path, filename: str) -> Path:
     annotations={"readOnlyHint": True},
 )
 async def list_available_mailboxes(
+    reasoning: Annotated[
+        str,
+        "Why do I need to list available mailboxes? State this reason before any other parameter.",
+    ],
     ctx: Context,
     api_key: str = Depends(get_cloud_auth_token),
 ) -> str:
     """Fetches and displays all available mailboxes that the user has authorization to access."""
+    del reasoning  # reason-first UX; not used by the tool.
     await ctx.info("Listing available mailboxes from Adeu Cloud")
     url = f"{BACKEND_URL}/api/v1/users/me/shared-mailboxes"
 
@@ -479,6 +484,10 @@ async def _poll_email_task(ctx: Context, task_id: str, api_key: str) -> Optional
     meta={"ui": {"resourceUri": EMAIL_UI_URI}},
 )
 async def search_and_fetch_emails(
+    reasoning: Annotated[
+        str,
+        "Why do I need to search or fetch these emails? State this reason before any other parameter.",
+    ],
     ctx: Context,
     sender: Annotated[Optional[str], "Filter by the sender's email address or name."] = None,
     subject: Annotated[Optional[str], "Filter by keywords in the subject line."] = None,
@@ -531,6 +540,7 @@ async def search_and_fetch_emails(
     ] = None,
     api_key: str = Depends(get_cloud_auth_token),
 ) -> ToolResult:
+    del reasoning  # reason-first UX; not used by the tool.
     await ctx.info(
         "Starting live email search",
         extra={
@@ -553,7 +563,14 @@ async def search_and_fetch_emails(
                 f"Task {task_id} is still processing. "
                 + f"Please call `search_and_fetch_emails` again with task_id={task_id}."
             )
-            return ToolResult(content=msg, structured_content={"status": "pending", "task_id": task_id, "message": msg})
+            return ToolResult(
+                content=msg,
+                structured_content={
+                    "status": "pending",
+                    "task_id": task_id,
+                    "message": msg,
+                },
+            )
         data = task_data
 
     else:
@@ -609,7 +626,12 @@ async def search_and_fetch_emails(
                         f"task_id={new_task_id} to monitor the progress."
                     )
                     return ToolResult(
-                        content=msg, structured_content={"status": "pending", "task_id": new_task_id, "message": msg}
+                        content=msg,
+                        structured_content={
+                            "status": "pending",
+                            "task_id": new_task_id,
+                            "message": msg,
+                        },
                     )
                 data = task_data
 
@@ -848,6 +870,10 @@ async def search_and_fetch_emails(
     tags={"cloud"},
 )
 async def create_email_draft(
+    reasoning: Annotated[
+        str,
+        "Why do I need to create this email draft? State this reason before any other parameter.",
+    ],
     ctx: Context,
     body_markdown: Annotated[str, "The body of the email in Markdown format. Will be converted to HTML."],
     reply_to_email_id: Annotated[Optional[str], "Provide the short email ID to reply to an existing thread."] = None,
@@ -863,6 +889,7 @@ async def create_email_draft(
     ] = None,
     api_key: str = Depends(get_cloud_auth_token),
 ) -> ToolResult:
+    del reasoning  # reason-first UX; not used by the tool.
     if not reply_to_email_id and (not subject or not to_recipients):
         return ToolResult(
             "Error: You must provide either 'reply_to_email_id' (to reply) OR "

@@ -54,7 +54,14 @@ def repetitive_doc(tmp_path) -> str:
 def test_read_docx_search_query_exact(repetitive_doc):
     ctx = MockContext()
     # Call the tool with the new search_query parameter
-    result = asyncio.run(read_docx(file_path=repetitive_doc, ctx=ctx, search_query="two (2) years"))
+    result = asyncio.run(
+        read_docx(
+            reasoning="test",
+            file_path=repetitive_doc,
+            ctx=ctx,
+            search_query="two (2) years",
+        )
+    )
 
     content = str(result.content)
 
@@ -70,7 +77,13 @@ def test_read_docx_search_regex(repetitive_doc):
     ctx = MockContext()
     # Call the tool with regex search
     result = asyncio.run(
-        read_docx(file_path=repetitive_doc, ctx=ctx, search_query=r"two \(\d+\) years", search_regex=True)
+        read_docx(
+            reasoning="test",
+            file_path=repetitive_doc,
+            ctx=ctx,
+            search_query=r"two \(\d+\) years",
+            search_regex=True,
+        )
     )
 
     content = str(result.content)
@@ -79,7 +92,7 @@ def test_read_docx_search_regex(repetitive_doc):
 
 def test_read_docx_outline_page_ranges(repetitive_doc):
     ctx = MockContext()
-    result = asyncio.run(read_docx(file_path=repetitive_doc, ctx=ctx, mode="outline"))
+    result = asyncio.run(read_docx(reasoning="test", file_path=repetitive_doc, ctx=ctx, mode="outline"))
 
     content = str(result.content)
 
@@ -106,6 +119,7 @@ def test_process_batch_match_mode_strict_fails(repetitive_doc, tmp_path):
 
     result = asyncio.run(
         process_document_batch(
+            reasoning="test",
             original_docx_path=repetitive_doc,
             author_name="AI Agent",
             ctx=ctx,
@@ -128,6 +142,7 @@ def test_process_batch_match_mode_first(repetitive_doc, tmp_path):
 
     result = asyncio.run(
         process_document_batch(
+            reasoning="test",
             original_docx_path=repetitive_doc,
             author_name="AI Agent",
             ctx=ctx,
@@ -155,6 +170,7 @@ def test_process_batch_match_mode_all(repetitive_doc, tmp_path):
 
     result = asyncio.run(
         process_document_batch(
+            reasoning="test",
             original_docx_path=repetitive_doc,
             author_name="AI Agent",
             ctx=ctx,
@@ -184,6 +200,7 @@ def test_process_batch_regex(repetitive_doc, tmp_path):
 
     result = asyncio.run(
         process_document_batch(
+            reasoning="test",
             original_docx_path=repetitive_doc,
             author_name="AI Agent",
             ctx=ctx,

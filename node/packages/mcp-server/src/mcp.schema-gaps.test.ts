@@ -251,6 +251,7 @@ describe("MCP tools — advertised schema/docs match real capability", () => {
       const res = await rpc("tools/call", {
         name: "process_document_batch",
         arguments: {
+          reasoning: "test",
           original_docx_path: pdbFixture,
           author_name: "Schema Gap Test",
           changes: [
@@ -275,6 +276,7 @@ describe("MCP tools — advertised schema/docs match real capability", () => {
       const res = await rpc("tools/call", {
         name: "process_document_batch",
         arguments: {
+          reasoning: "test",
           original_docx_path: pdbFixture,
           author_name: "Schema Gap Test",
           changes: [
@@ -330,6 +332,7 @@ describe("MCP tools — advertised schema/docs match real capability", () => {
       const res = await rpc("tools/call", {
         name: "diff_docx_files",
         arguments: {
+          reasoning: "test",
           original_path: diffOrig,
           modified_path: diffMod,
           compare_clean: true,
@@ -368,6 +371,7 @@ describe("MCP tools — advertised schema/docs match real capability", () => {
       const res = await rpc("tools/call", {
         name: "finalize_document",
         arguments: {
+          reasoning: "test",
           file_path: finalizeInput,
           output_path: tempOut("finalize_encrypt"),
           protection_mode: "encrypt",
