@@ -1343,9 +1343,7 @@ class RedlineEngine:
                     if not (match_mode in ("strict", "first") and fully_within_foreign_ins):
                         author_hints = []
                         for auth in sorted(ins_authors_to_ids.keys()):
-                            sorted_ids = sorted(
-                                ins_authors_to_ids[auth], key=lambda x: int(x) if x.isdigit() else 0
-                            )
+                            sorted_ids = sorted(ins_authors_to_ids[auth], key=lambda x: int(x) if x.isdigit() else 0)
                             id_hints = ", ".join(f"Chg:{cid}" for cid in sorted_ids)
                             author_hints.append(f"{auth} (e.g. {id_hints})" if id_hints else auth)
                         errors.append(
