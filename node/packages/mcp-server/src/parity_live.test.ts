@@ -4,6 +4,11 @@ import { spawn, ChildProcess } from "node:child_process";
 import { resolve, join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 
+// Each Python CLI invocation spawns a fresh interpreter costing ~3-5s on
+// Windows even when warm, so tests that shell out to Python need more than
+// vitest's 5s default timeout.
+const PYTHON_PARITY_TIMEOUT_MS = 60_000;
+
 describe("Parity Live Server Integration Verification", () => {
   let serverProc: ChildProcess;
   const fixturePath = resolve(
@@ -112,7 +117,7 @@ describe("Parity Live Server Integration Verification", () => {
     expect(res.result.content[0].text).not.toContain("[Debug] build=");
   });
 
-  it("GAP 2 (Live): process_document_batch modify straddling deleted text returns actionable deletion error", async () => {
+  it("GAP 2 (Live): process_document_batch modify straddling deleted text returns actionable deletion error", { timeout: PYTHON_PARITY_TIMEOUT_MS }, async () => {
     const outPath = join(
       resolve(__dirname, "../../../../tmp"),
       `live_gap2_out_${Date.now()}.docx`,
@@ -197,7 +202,7 @@ describe("Parity Live Server Integration Verification", () => {
     }
   });
 
-  it("GAP 1 (Live): read_docx mode=outline heading count and content parity with Python", async () => {
+  it("GAP 1 (Live): read_docx mode=outline heading count and content parity with Python", { timeout: PYTHON_PARITY_TIMEOUT_MS }, async () => {
     const gap1FixturePath = resolve(
       __dirname,
       "../tests/fixtures/gap1_deleted_row_repro.docx",
@@ -288,7 +293,7 @@ describe("Parity Live Server Integration Verification", () => {
     expect(nodeHeadingsDirty).toEqual(pythonHeadingsDirty);
   });
 
-  it("GAP 1 - Style Def (Live): style-definition outlineLvl on non-heading style classification parity", async () => {
+  it("GAP 1 - Style Def (Live): style-definition outlineLvl on non-heading style classification parity", { timeout: PYTHON_PARITY_TIMEOUT_MS }, async () => {
     const gap1FixturePath = resolve(
       __dirname,
       "../tests/fixtures/gap1_minimal_repro.docx",
