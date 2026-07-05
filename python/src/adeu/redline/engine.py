@@ -1332,38 +1332,47 @@ class RedlineEngine:
                             if c_data and c_data.get("author") and c_data.get("author") != self.author:
                                 comment_authors_to_ids.setdefault(c_data["author"], set()).add(f"Com:{cid}")
 
-                if ins_authors_to_ids or comment_authors_to_ids:
+                if ins_authors_to_ids:
                     # A single-occurrence (strict/first) modification whose target
-                    # lies ENTIRELY inside foreign-authored insertion(s), with no
-                    # foreign comment overlap, is allowed: track_delete_run splits
-                    # the enclosing <w:ins> and nests the change, producing valid
-                    # tracked-change XML. Refuse the remaining cases — match_mode
-                    # "all" fan-outs, partial overlaps that straddle the insertion
-                    # boundary, and edits touching another author's comment range.
-                    fully_within_foreign_ins = (
-                        bool(ins_authors_to_ids) and not has_non_foreign_real_text and not comment_authors_to_ids
-                    )
-                    if match_mode in ("strict", "first") and fully_within_foreign_ins:
+                    # lies ENTIRELY inside foreign-authored insertion(s) is
+                    # allowed: track_delete_run splits the enclosing <w:ins> and
+                    # nests the change, producing valid tracked-change XML. Refuse
+                    # the remaining cases — match_mode "all" fan-outs and partial
+                    # overlaps that straddle the insertion boundary.
+                    fully_within_foreign_ins = not has_non_foreign_real_text
+                    if not (match_mode in ("strict", "first") and fully_within_foreign_ins):
+                        author_hints = []
+                        for auth in sorted(ins_authors_to_ids.keys()):
+                            sorted_ids = sorted(
+                                ins_authors_to_ids[auth], key=lambda x: int(x) if x.isdigit() else 0
+                            )
+                            id_hints = ", ".join(f"Chg:{cid}" for cid in sorted_ids)
+                            author_hints.append(f"{auth} (e.g. {id_hints})" if id_hints else auth)
+                        errors.append(
+                            f"- Edit {i + 1} Failed: Modification targets an active insertion from another author "
+                            f"({', '.join(author_hints)}). Accept that change first or scope your edit outside of it."
+                        )
                         continue
 
-                    combined: dict[str, set[str]] = {}
-                    for auth, ids in ins_authors_to_ids.items():
-                        combined.setdefault(auth, set()).update(ids)
-                    for auth, ids in comment_authors_to_ids.items():
-                        combined.setdefault(auth, set()).update(ids)
+                # Foreign comment ranges do NOT block deliberate single-occurrence
+                # edits: amending body text under a colleague's comment is a
+                # normal review workflow, and the comment anchor survives the
+                # tracked change. Only blind match_mode="all" fan-outs are
+                # refused, so a bulk replacement cannot silently sweep through
+                # another author's annotations (transactional rollback).
+                if comment_authors_to_ids and match_mode == "all":
                     author_hints = []
-                    for auth in sorted(combined.keys()):
-                        sorted_ids = sorted(combined[auth], key=lambda x: int(x) if x.isdigit() else 0)
-                        id_hints = ", ".join(
-                            str(cid) if str(cid).startswith("Com:") else f"Chg:{cid}" for cid in sorted_ids
+                    for auth in sorted(comment_authors_to_ids.keys()):
+                        sorted_ids = sorted(
+                            comment_authors_to_ids[auth],
+                            key=lambda x: int(x.split(":")[-1]) if x.split(":")[-1].isdigit() else 0,
                         )
-                        if id_hints:
-                            author_hints.append(f"{auth} (e.g. {id_hints})")
-                        else:
-                            author_hints.append(auth)
+                        id_hints = ", ".join(sorted_ids)
+                        author_hints.append(f"{auth} (e.g. {id_hints})" if id_hints else auth)
                     errors.append(
-                        f"- Edit {i + 1} Failed: Modification targets an active insertion from another author "
-                        f"({', '.join(author_hints)}). Accept that change first or scope your edit outside of it."
+                        f'- Edit {i + 1} Failed: match_mode="all" would sweep through a comment range from '
+                        f"another author ({', '.join(author_hints)}). Target the commented text deliberately "
+                        f'with match_mode "strict" or "first", or scope your edit outside of it.'
                     )
 
         return errors

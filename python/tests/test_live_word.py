@@ -138,9 +138,11 @@ def test_live_word_cross_boundary_edits_rescue_comments(active_word_app):
 
     async def run_test():
         changes = [ModifyText(target_text="manuscript", new_text="typescript")]
-        # To bypass foreign author protection, the batch author must match Word's native comment author
-        current_user = app.UserName
-        await process_active_word_batch(ctx, changes=changes, author_name=current_user)
+        # The batch author deliberately does NOT match Word's native comment
+        # author: editing body text under another author's comment is allowed
+        # (the comment is rescued), mirroring the disk-engine behavior in
+        # test_repro_foreign_comment_range_modify.py.
+        await process_active_word_batch(ctx, changes=changes, author_name="Agent")
         content = extract_content(await read_active_word_document(ctx))
         assert "Editorial comment" in content
         assert "{++typescript++}" in content

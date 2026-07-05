@@ -1735,30 +1735,35 @@ export class RedlineEngine {
             }
           }
         }
-        if (insAuthors.size > 0 || commentAuthors.size > 0) {
+        if (insAuthors.size > 0) {
           // A single (strict/first) modification whose target lies ENTIRELY
-          // inside foreign-authored insertion(s), with no foreign comment
-          // overlap, is allowed: track_delete_run splits the enclosing <w:ins>
-          // and nests the change, producing valid tracked-change XML. Refuse the
-          // remaining cases — match_mode "all" fan-outs, partial overlaps that
-          // straddle the insertion boundary, and edits touching another author's
-          // comment range.
-          const fullyWithinForeignIns =
-            insAuthors.size > 0 &&
-            !hasNonForeignRealText &&
-            commentAuthors.size === 0;
+          // inside foreign-authored insertion(s) is allowed: track_delete_run
+          // splits the enclosing <w:ins> and nests the change, producing valid
+          // tracked-change XML. Refuse the remaining cases — match_mode "all"
+          // fan-outs and partial overlaps that straddle the insertion
+          // boundary.
+          const fullyWithinForeignIns = !hasNonForeignRealText;
           if (
-            (match_mode === "strict" || match_mode === "first") &&
-            fullyWithinForeignIns
+            !(
+              (match_mode === "strict" || match_mode === "first") &&
+              fullyWithinForeignIns
+            )
           ) {
+            errors.push(
+              `- Edit ${i + 1 + index_offset} Failed: Modification targets an active insertion from another author (${Array.from(insAuthors).join(", ")}). Accept that change first or scope your edit outside of it.`,
+            );
             continue;
           }
-          const nestedAuthors = new Set<string>([
-            ...insAuthors,
-            ...commentAuthors,
-          ]);
+        }
+        // Foreign comment ranges do NOT block deliberate single-occurrence
+        // edits: amending body text under a colleague's comment is a normal
+        // review workflow, and the comment anchor survives the tracked change.
+        // Only blind match_mode="all" fan-outs are refused, so a bulk
+        // replacement cannot silently sweep through another author's
+        // annotations (transactional rollback).
+        if (commentAuthors.size > 0 && match_mode === "all") {
           errors.push(
-            `- Edit ${i + 1 + index_offset} Failed: Modification targets an active insertion from another author (${Array.from(nestedAuthors).join(", ")}). Accept that change first or scope your edit outside of it.`,
+            `- Edit ${i + 1 + index_offset} Failed: match_mode="all" would sweep through a comment range from another author (${Array.from(commentAuthors).join(", ")}). Target the commented text deliberately with match_mode "strict" or "first", or scope your edit outside of it.`,
           );
         }
       }

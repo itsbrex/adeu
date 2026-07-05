@@ -353,6 +353,12 @@ export function mapAdeuErrorToNodeApiError(
       descriptionContext =
         "Cross-references, footnotes, hyperlinks, and the Structural Appendix cannot be modified via text replacement:\n" +
         joined;
+    } else if (lower.includes("comment range from another author")) {
+      messageContext =
+        "A match_mode='all' edit would sweep through another author's comment range.";
+      descriptionContext =
+        "Bulk replacements are blocked from running through foreign comment ranges. Target the commented text deliberately with match_mode 'strict' or 'first', or scope the edit outside of it:\n" +
+        joined;
     } else if (lower.includes("another author") || lower.includes("nested")) {
       messageContext =
         "An edit overlaps with a pending tracked change by another author.";

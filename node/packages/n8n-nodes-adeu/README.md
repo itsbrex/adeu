@@ -416,7 +416,8 @@ Because Adeu enforces **Atomic Batch Validation**, any error in the LLM's JSON w
 
 * **"Target text not found"**: The LLM hallucinated a word, altered the spacing, or the text doesn't exist in the baseline document.
 * **"Ambiguous match"**: The LLM used a `target_text` (like "the Company") that appears multiple times. The error details will show you the exact occurrences. Advise the LLM to either include more surrounding context (e.g., "the Company shall indemnify") or use `match_mode: "all"` if the intent is to replace every occurrence.
-* **"Modification targets an active insertion..."**: The LLM tried to `modify` text that another author is currently tracking. Adeu explicitly blocks this to maintain virtual DOM integrity and clean redline threading. You must `accept` or `reject` that prior change first.
+* **"Modification targets an active insertion..."**: The LLM tried to `modify` text that another author is currently tracking. Adeu explicitly blocks this to maintain virtual DOM integrity and clean redline threading. You must `accept` or `reject` that prior change first. (Editing plain text that merely sits under another author's *comment* is allowed — the comment anchor survives the tracked change.)
+* **"...would sweep through a comment range from another author..."**: A `match_mode: "all"` bulk replacement crossed a colleague's comment range. Blind fan-outs are blocked to protect foreign annotations; target the commented text deliberately with `match_mode: "strict"` or `"first"`, or scope the edit outside the comment.
 * **"Read-only elements"**: The LLM tried to modify structural items like cross-references or footnotes.
 * **"Page N exceeds total_pages"**: The LLM requested a page beyond what the document has. Have it call `Extract Outline` first to discover the page count.
 
