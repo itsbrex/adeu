@@ -166,6 +166,11 @@ To solve domain visibility gaps without adding new MCP tools, `read_docx` projec
 *   This configures Claude Desktop to execute the server from the current local source (`sys.executable` + `cwd`), bypassing `uvx`.
 
 ## Current Status
+
+> **Note:** The changelog below is not exhaustive — the latest entry is v1.14.0 while the project
+> is currently at **v1.18.4**. See [GitHub Releases](https://github.com/dealfluence/adeu/releases)
+> for the full release history.
+
 - **v1.14.0**: Search & Targeted Write Engine Upgrade.
     - Introduced flat `search_query` and `regex` filters directly on the `read_docx` endpoint.
     - Added `match_mode` (`"strict"`, `"first"`, `"all"`) and `regex` parameters to `ModifyText` for highly targeted, multi-occurrence writing workflows.

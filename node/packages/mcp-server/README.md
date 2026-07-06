@@ -30,13 +30,28 @@ Add the following to your MCP configuration file (`claude_desktop_config.json`):
 
 ## Exposed Tools
 
-Once connected, your AI agent will have access to the following tools:
+Once connected, your AI agent will have access to the following tools.
+
+### Document tools
 
 - `read_docx`: Reads a DOCX file and returns LLM-friendly text with inline CriticMarkup (`{++inserted++}`, `{--deleted--}`) for Tracked Changes and Comments. Supports pagination, structural outlining, and semantic appendix extraction.
 - `process_document_batch`: Applies a batch of search-and-replace text modifications, table edits, and comment replies to a document. Translates the LLM's edits into perfectly formatted native Word Track Changes.
 - `accept_all_changes`: Accepts all tracked changes and removes all comments to produce a finalized clean document.
 - `diff_docx_files`: Compares two DOCX files and returns a unified sub-word diff of their text content.
 - `finalize_document`: Prepares a document for signature by applying native OOXML read-only locking and deep metadata sanitization.
+
+### Email tools
+
+These require an authenticated Adeu Cloud session (see Cloud tools below).
+
+- `search_and_fetch_emails`: Searches the user's live email inbox via the Adeu Cloud backend and returns matching messages.
+- `create_email_draft`: Creates an email draft in the user's native draft box (Outlook Drafts or Gmail Drafts).
+- `list_available_mailboxes`: Lists all personal and shared/delegated mailboxes the authenticated user can access across every linked provider account, including each mailbox's address, display name, and auto-processing settings.
+
+### Cloud tools
+
+- `login_to_adeu_cloud`: Logs the user into Adeu Cloud, opening a browser window for SSO authentication.
+- `logout_of_adeu_cloud`: Logs out of the Adeu Cloud backend.
 
 ## Documentation & Support
 For full architectural details, prompt recommendations, and the project constitution, please visit the [main Adeu repository](https://github.com/dealfluence/adeu) or our [website](https://adeu.ai).
