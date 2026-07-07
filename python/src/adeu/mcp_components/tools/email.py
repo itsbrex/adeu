@@ -32,7 +32,9 @@ _KNOWN_ERROR_HINTS: dict[str, str] = {
         "The email ID was not found. If this was a short ID (msg_*), it may have been "
         "evicted from the local cache or come from a different machine — re-run "
         "search_and_fetch_emails with filters to get a fresh ID. If it was an "
-        "adeu_<numeric> or raw provider ID, verify it's correct."
+        "adeu_<numeric> or raw provider ID, verify it's correct. If the email lives in "
+        "a shared or secondary mailbox, pass `mailbox_address` explicitly — provider "
+        "IDs only resolve within the mailbox they came from."
     ),
     "Adeu email reference not found.": (
         "The adeu_<id> reference doesn't resolve to any processed email for this user. "
@@ -40,6 +42,21 @@ _KNOWN_ERROR_HINTS: dict[str, str] = {
     ),
     "Invalid adeu_ email ID format.": ("The adeu_<id> reference is malformed. Expected format: adeu_<integer>."),
 }
+
+
+def _lookup_error_hint(detail: str) -> str | None:
+    """Map a known backend error detail to actionable agent guidance."""
+    hint = _KNOWN_ERROR_HINTS.get(detail)
+    if hint is None:
+        # Mailbox-not-found has a dynamic name baked into the string; match by prefix/suffix.
+        if detail.startswith("Mailbox '") and detail.endswith("' not found."):
+            mailbox = detail[len("Mailbox '") : -len("' not found.")]
+            hint = (
+                f"The mailbox '{mailbox}' is not connected to your Adeu account. "
+                "Call list_available_mailboxes to see valid mailbox addresses, then retry "
+                "with one of those as `mailbox_address`."
+            )
+    return hint
 
 
 def _format_backend_error(status_code: int, response_body: str) -> str:
@@ -57,22 +74,24 @@ def _format_backend_error(status_code: int, response_body: str) -> str:
     except Exception:
         pass
 
-    hint = _KNOWN_ERROR_HINTS.get(detail)
-    if hint is None:
-        # Mailbox-not-found has a dynamic name baked into the string; match by prefix/suffix.
-        if detail.startswith("Mailbox '") and detail.endswith("' not found."):
-            mailbox = detail[len("Mailbox '") : -len("' not found.")]
-            hint = (
-                f"The mailbox '{mailbox}' is not connected to your Adeu account. "
-                "Call list_available_mailboxes to see valid mailbox addresses, then retry "
-                "with one of those as `mailbox_address`."
-            )
-
-    message = hint if hint else detail
+    message = _lookup_error_hint(detail) or detail
     return f"Cloud search failed (HTTP {status_code}): {message}"
 
 
-def load_id_cache() -> dict[str, str]:
+# Cache values are either legacy plain strings (the real provider ID) or
+# dicts {"id": ..., "mailbox": ...}. The mailbox matters: provider message IDs
+# are mailbox-scoped, so a later fetch/reply must target the same mailbox or
+# the backend resolves against the PRIMARY account and 404s with "Email not found."
+def _cache_entry_parts(entry) -> tuple[Optional[str], Optional[str]]:
+    """Return (real_id, mailbox) from a cache value of either format."""
+    if not entry:
+        return None, None
+    if isinstance(entry, dict):
+        return entry.get("id"), entry.get("mailbox")
+    return entry, None
+
+
+def load_id_cache() -> dict:
     """Loads the ID mapping cache from disk."""
     if CACHE_FILE.exists():
         try:
@@ -83,7 +102,7 @@ def load_id_cache() -> dict[str, str]:
     return {}
 
 
-def save_id_cache(cache: dict[str, str]) -> None:
+def save_id_cache(cache: dict) -> None:
     """Saves the ID mapping cache to disk, keeping only the most recent MAX_CACHE_SIZE items."""
     try:
         CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -95,12 +114,16 @@ def save_id_cache(cache: dict[str, str]) -> None:
         pass
 
 
-def minify_email_id(real_id: str, cache: dict[str, str]) -> str:
-    """Hashes a giant provider ID into a short ID and adds it to the current cache dict."""
+def minify_email_id(real_id: str, cache: dict, mailbox_address: str | None = None) -> str:
+    """Hashes a giant provider ID into a short ID and adds it to the current cache dict.
+
+    The mailbox the ID was harvested from is stored alongside it so later
+    fetches/replies can be scoped to the right mailbox automatically.
+    """
     if not real_id:
         return real_id
     short_id = f"msg_{hashlib.md5(real_id.encode('utf-8')).hexdigest()[:6]}"
-    cache[short_id] = real_id
+    cache[short_id] = {"id": real_id, "mailbox": mailbox_address}
     return short_id
 
 
@@ -126,7 +149,7 @@ def resolve_email_id(short_id: str) -> str:
     if short_id.startswith("adeu_"):
         return short_id
     cache = load_id_cache()
-    resolved = cache.get(short_id)
+    resolved, _ = _cache_entry_parts(cache.get(short_id))
     if resolved:
         return resolved
     if short_id.startswith("msg_"):
@@ -137,6 +160,14 @@ def resolve_email_id(short_id: str) -> str:
             f"(sender, subject, days_ago) to fetch fresh IDs, then use the new ID from those results."
         )
     return short_id
+
+
+def resolve_cached_mailbox(short_id: str) -> Optional[str]:
+    """Return the mailbox a short ID was harvested from, if the cache remembers it."""
+    if not short_id or not short_id.startswith("msg_"):
+        return None
+    _, mailbox = _cache_entry_parts(load_id_cache().get(short_id))
+    return mailbox
 
 
 class MLStripper(HTMLParser):
@@ -292,12 +323,30 @@ def remove_nested_quotes(text: str) -> str:
     return text[:earliest_cut].strip()
 
 
-def _resolve_attachment_dir(working_directory: str | None, email_id: str) -> Path:
+def _resolve_attachment_dir(working_directory: str | None, email_id: str) -> tuple[Path, str | None]:
+    """Resolve where this email's attachments are saved.
+
+    A requested `working_directory` is honored by creating it (recursively) when
+    missing. Silently falling back to the system temp dir made agents in sandboxed
+    hosts believe the download failed (the reported paths pointed at an
+    inaccessible /tmp), triggering redundant re-search loops. We only fall back
+    when creation genuinely fails (permissions, path blocked by a file), and then
+    return a notice the caller must surface to the LLM.
+    """
     if working_directory:
         base = Path(working_directory)
-        if base.exists() and base.is_dir():
-            return base / "adeu_attachments" / email_id
-    return Path(tempfile.gettempdir()) / "adeu_downloads" / email_id
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            note = (
+                f"⚠️ **Attachment location notice**: the requested `working_directory` "
+                f"(`{working_directory}`) did not exist and could not be created ({e}). "
+                "Any attachments were saved to the system temp directory instead — use the "
+                "exact paths listed below; do NOT re-run the search expecting a different location."
+            )
+            return Path(tempfile.gettempdir()) / "adeu_downloads" / email_id, note
+        return base / "adeu_attachments" / email_id, None
+    return Path(tempfile.gettempdir()) / "adeu_downloads" / email_id, None
 
 
 def _format_bytes(size_bytes: int | None) -> str:
@@ -431,7 +480,10 @@ async def _poll_email_task(ctx: Context, task_id: str, api_key: str) -> Optional
 
             if status == "FAILED":
                 error_msg = task_data.get("error", "Unknown internal error")
-                raise ToolError(f"Validation task failed on the server: {error_msg}")
+                # Async failures carry the same recovery hints as sync HTTP errors —
+                # otherwise "Email not found." reaches the agent with no guidance and
+                # it improvises with fresh (often redundant) searches.
+                raise ToolError(f"Validation task failed on the server: {_lookup_error_hint(error_msg) or error_msg}")
 
             await ctx.debug(f"Task {task_id} status is {status}. Attempt {attempt + 1}/10. Sleeping 5s.")
 
@@ -467,7 +519,9 @@ async def _poll_email_task(ctx: Context, task_id: str, api_key: str) -> Optional
         "EMAIL ID FORMATS (`email_id` parameter accepts any of):\n"
         "- `msg_<6 chars>` — short ID returned by previews on THIS machine. NOT portable across machines "
         "or sessions; the local cache holds the most recent 1000. If you reference one that's been evicted, "
-        "the tool returns a StaleShortIdError telling you to re-search.\n"
+        "the tool returns a StaleShortIdError telling you to re-search. The mailbox used in the original "
+        "search is remembered with the short ID and re-applied automatically when you fetch or reply "
+        "without specifying `mailbox_address`.\n"
         "- `adeu_<numeric>` — server-side reference for emails Adeu has previously processed. Portable "
         "across machines and sessions for the same authenticated user.\n"
         "- Raw provider ID (Gmail/Outlook native ID) — works if you have it, but you usually won't.\n\n"
@@ -476,7 +530,8 @@ async def _poll_email_task(ctx: Context, task_id: str, api_key: str) -> Optional
         "Drafts, and other folders.\n\n"
         "ATTACHMENTS: attachments larger than `max_attachment_size_mb` (default 10) are listed in the "
         "response but NOT downloaded — raise the cap if you need them. Always set `working_directory` "
-        "when calling from a project so attachments land alongside the user's other files. This directory "
+        "when calling from a project so attachments land alongside the user's other files; the directory "
+        "is created automatically if it does not exist. This directory "
         "path refers to the user's native operating system, not the LLM's sandbox environment."
     ),
     tags={"cloud"},
@@ -521,7 +576,8 @@ async def search_and_fetch_emails(
     working_directory: Annotated[
         Optional[str],
         "Optional. The current working directory of the project or task. "
-        "If provided, attachments will be saved here under an 'adeu_attachments' subfolder. "
+        "If provided, attachments will be saved here under an 'adeu_attachments' subfolder; "
+        "the directory is created automatically if it does not exist. "
         "If omitted, attachments are saved to the system temp directory.",
     ] = None,
     mailbox_address: Annotated[
@@ -551,6 +607,11 @@ async def search_and_fetch_emails(
         },
     )
 
+    # The mailbox this call actually targets. May be upgraded below from the
+    # short-ID cache: provider IDs are mailbox-scoped, so a fetch must go to the
+    # mailbox the ID was harvested from, not the user's primary.
+    effective_mailbox = mailbox_address
+
     data = None
 
     if task_id:
@@ -578,6 +639,13 @@ async def search_and_fetch_emails(
         # PHASE 1: INIT / SEARCH (Search/Fetch standard)
         # ==========================================
         real_email_id = resolve_email_id(email_id) if email_id else None
+
+        if email_id and not mailbox_address:
+            cached_mailbox = resolve_cached_mailbox(email_id)
+            if cached_mailbox:
+                effective_mailbox = cached_mailbox
+                await ctx.debug(f"Scoping fetch to mailbox '{cached_mailbox}' remembered from the original search.")
+
         payload_dict = {
             "email_id": real_email_id,
             "sender": sender,
@@ -589,7 +657,7 @@ async def search_and_fetch_emails(
             "folder": folder,
             "limit": limit,
             "offset": offset,
-            "mailbox_address": mailbox_address,
+            "mailbox_address": effective_mailbox,
         }
         payload_dict = {k: v for k, v in payload_dict.items() if v is not None}
 
@@ -666,7 +734,7 @@ async def search_and_fetch_emails(
 
         llm_lines = [f"Found {len(previews)} email(s). Here are the previews:", ""]
         for p in previews:
-            short_id = minify_email_id(p["id"], id_cache)
+            short_id = minify_email_id(p["id"], id_cache, effective_mailbox)
             p["id"] = short_id
             att_flag = "📎 (Has Attachments)" if p.get("has_attachments") else ""
             unread_flag = "🟢 [UNREAD]" if p.get("is_read") is False else ""
@@ -714,15 +782,17 @@ async def search_and_fetch_emails(
 
         email_id_str = full_email.get("id", "unknown_id")
         id_cache = load_id_cache()
-        short_target_id = minify_email_id(email_id_str, id_cache) if email_id_str != "unknown_id" else "unknown_id"
+        short_target_id = (
+            minify_email_id(email_id_str, id_cache, effective_mailbox) if email_id_str != "unknown_id" else "unknown_id"
+        )
         full_email["id"] = short_target_id
         for hist_msg in full_email.get("messages", []):
             if "id" in hist_msg:
-                hist_msg["id"] = minify_email_id(hist_msg["id"], id_cache)
+                hist_msg["id"] = minify_email_id(hist_msg["id"], id_cache, effective_mailbox)
 
         save_id_cache(id_cache)
 
-        save_dir = _resolve_attachment_dir(working_directory, short_target_id)
+        save_dir, dir_fallback_note = _resolve_attachment_dir(working_directory, short_target_id)
         save_dir.mkdir(parents=True, exist_ok=True)
 
         effective_cap_mb = (
@@ -775,6 +845,8 @@ async def search_and_fetch_emails(
         llm_lines = []
         if auto_escalated:
             llm_lines.append("_(Search returned exactly one result; auto-fetched full email below.)_\n")
+        if dir_fallback_note:
+            llm_lines.append(dir_fallback_note + "\n")
         llm_lines.append(f"# Email Thread: {full_email.get('subject')}")
         llm_lines.append("")
 
@@ -843,7 +915,9 @@ async def search_and_fetch_emails(
         if target_local_files or any(m.get("attachments") for m in full_email.get("messages", [])):
             llm_lines.append(
                 "\n*You can now use tools like `read_docx`, `diff_docx_files`, or `validate_documents` "
-                "on the local file paths listed under each message.*"
+                "on the local file paths listed under each message. "
+                "These paths are on the user's machine — pass them directly to those tools; your own "
+                "sandbox/shell may not see them, and that does NOT mean the download failed.*"
             )
 
         return ToolResult(content="\n".join(llm_lines), structured_content=data)
@@ -922,6 +996,14 @@ async def create_email_draft(
 
     real_reply_to_id = resolve_email_id(reply_to_email_id) if reply_to_email_id else None
 
+    # Replies inherit the mailbox the original email's short ID was harvested
+    # from unless the caller overrides — same mailbox-scoping rule as fetches.
+    effective_mailbox = mailbox_address
+    if reply_to_email_id and not mailbox_address:
+        cached_mailbox = resolve_cached_mailbox(reply_to_email_id)
+        if cached_mailbox:
+            effective_mailbox = cached_mailbox
+
     fields = {
         "body_markdown": body_markdown,
     }
@@ -931,8 +1013,8 @@ async def create_email_draft(
         fields["subject"] = subject
     if parsed_recipients:
         fields["to_recipients"] = json.dumps(parsed_recipients)
-    if mailbox_address:
-        fields["mailbox_address"] = mailbox_address
+    if effective_mailbox:
+        fields["mailbox_address"] = effective_mailbox
 
     files_to_upload = []
     if parsed_attachments:

@@ -10,7 +10,9 @@ const KNOWN_ERROR_HINTS: Record<string, string> = {
     "The email ID was not found. If this was a short ID (msg_*), it may have been " +
     "evicted from the local cache or come from a different machine — re-run " +
     "search_and_fetch_emails with filters to get a fresh ID. If it was an " +
-    "adeu_<numeric> or raw provider ID, verify it's correct.",
+    "adeu_<numeric> or raw provider ID, verify it's correct. If the email lives in " +
+    "a shared or secondary mailbox, pass `mailbox_address` explicitly — provider " +
+    "IDs only resolve within the mailbox they came from.",
   "Adeu email reference not found.":
     "The adeu_<id> reference doesn't resolve to any processed email for this user. " +
     "Verify the ID, or re-run search_and_fetch_emails with filters to find the message.",
@@ -18,17 +20,7 @@ const KNOWN_ERROR_HINTS: Record<string, string> = {
     "The adeu_<id> reference is malformed. Expected format: adeu_<integer>.",
 };
 
-function formatBackendError(statusCode: number, responseBody: string): string {
-  let detail = responseBody;
-  try {
-    const parsed = JSON.parse(responseBody);
-    if (parsed && typeof parsed === "object" && "detail" in parsed) {
-      detail = String(parsed.detail);
-    }
-  } catch {
-    // responseBody isn't JSON — use it as-is
-  }
-
+function lookupErrorHint(detail: string): string | undefined {
   let hint = KNOWN_ERROR_HINTS[detail];
   if (
     !hint &&
@@ -41,8 +33,21 @@ function formatBackendError(statusCode: number, responseBody: string): string {
       "Call list_available_mailboxes to see valid mailbox addresses, then retry " +
       "with one of those as `mailbox_address`.";
   }
+  return hint;
+}
 
-  const message = hint ?? detail;
+function formatBackendError(statusCode: number, responseBody: string): string {
+  let detail = responseBody;
+  try {
+    const parsed = JSON.parse(responseBody);
+    if (parsed && typeof parsed === "object" && "detail" in parsed) {
+      detail = String(parsed.detail);
+    }
+  } catch {
+    // responseBody isn't JSON — use it as-is
+  }
+
+  const message = lookupErrorHint(detail) ?? detail;
   return `Cloud search failed (HTTP ${statusCode}): ${message}`;
 }
 function isTimeoutError(err: unknown): boolean {
@@ -61,7 +66,22 @@ function formatBytes(bytes: number | null | undefined): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function loadIdCache(): Record<string, string> {
+// Cache values are either legacy plain strings (the real provider ID) or
+// objects {id, mailbox}. The mailbox matters: provider message IDs are
+// mailbox-scoped, so a later fetch/reply must target the same mailbox or the
+// backend resolves against the PRIMARY account and 404s with "Email not found."
+type CacheEntry = string | { id?: string; mailbox?: string | null };
+
+function cacheEntryParts(entry: CacheEntry | undefined): {
+  id: string | null;
+  mailbox: string | null;
+} {
+  if (!entry) return { id: null, mailbox: null };
+  if (typeof entry === "string") return { id: entry, mailbox: null };
+  return { id: entry.id ?? null, mailbox: entry.mailbox ?? null };
+}
+
+function loadIdCache(): Record<string, CacheEntry> {
   if (existsSync(CACHE_FILE)) {
     try {
       return JSON.parse(readFileSync(CACHE_FILE, "utf-8"));
@@ -72,12 +92,12 @@ function loadIdCache(): Record<string, string> {
   return {};
 }
 
-function saveIdCache(cache: Record<string, string>): void {
+function saveIdCache(cache: Record<string, CacheEntry>): void {
   try {
     mkdirSync(join(homedir(), ".adeu"), { recursive: true });
     const keys = Object.keys(cache);
     if (keys.length > MAX_CACHE_SIZE) {
-      const trimmed: Record<string, string> = {};
+      const trimmed: Record<string, CacheEntry> = {};
       keys.slice(-MAX_CACHE_SIZE).forEach((k) => (trimmed[k] = cache[k]));
       cache = trimmed;
     }
@@ -87,11 +107,15 @@ function saveIdCache(cache: Record<string, string>): void {
   }
 }
 
-function minifyEmailId(realId: string, cache: Record<string, string>): string {
+function minifyEmailId(
+  realId: string,
+  cache: Record<string, CacheEntry>,
+  mailboxAddress?: string | null,
+): string {
   if (!realId) return realId;
   const hash = createHash("md5").update(realId).digest("hex").slice(0, 6);
   const shortId = `msg_${hash}`;
-  cache[shortId] = realId;
+  cache[shortId] = { id: realId, mailbox: mailboxAddress ?? null };
   return shortId;
 }
 
@@ -111,8 +135,8 @@ function resolveEmailId(shortId: string): string {
   // adeu_<id> references are resolved server-side, pass through.
   if (shortId.startsWith("adeu_")) return shortId;
   const cache = loadIdCache();
-  const resolved = cache[shortId];
-  if (resolved) return resolved;
+  const { id } = cacheEntryParts(cache[shortId]);
+  if (id) return id;
   // If it looks like one of our short IDs but isn't in the cache, fail loudly
   // instead of silently passing a meaningless string to the provider.
   if (shortId.startsWith("msg_")) {
@@ -120,6 +144,11 @@ function resolveEmailId(shortId: string): string {
   }
   // Otherwise treat it as a raw provider ID
   return shortId;
+}
+
+function resolveCachedMailbox(shortId: string): string | null {
+  if (!shortId || !shortId.startsWith("msg_")) return null;
+  return cacheEntryParts(loadIdCache()[shortId]).mailbox;
 }
 
 const HTML_NAMED_ENTITIES: Record<string, string> = {
@@ -341,7 +370,11 @@ async function pollEmailTask(taskId: string, apiKey: string): Promise<any> {
 
     if (status === "FAILED") {
       const errorMsg = taskData.error || "Unknown internal error";
-      throw new Error(`Validation task failed on the server: ${errorMsg}`);
+      // Async failures carry the same recovery hints as sync HTTP errors —
+      // otherwise "Email not found." reaches the agent with no guidance and
+      // it improvises with fresh (often redundant) searches.
+      const hint = lookupErrorHint(errorMsg);
+      throw new Error(`Validation task failed on the server: ${hint ?? errorMsg}`);
     }
 
     // Wait 5 seconds before next poll
@@ -358,6 +391,11 @@ export async function search_and_fetch_emails(args: any): Promise<ToolResult> {
     args.max_attachment_size_mb > 0
       ? args.max_attachment_size_mb
       : 10;
+
+  // The mailbox this call actually targets. May be upgraded below from the
+  // short-ID cache: provider IDs are mailbox-scoped, so a fetch must go to the
+  // mailbox the ID was harvested from, not the user's primary.
+  let effectiveMailbox: string | undefined = args.mailbox_address;
 
   let data: any;
 
@@ -398,6 +436,11 @@ export async function search_and_fetch_emails(args: any): Promise<ToolResult> {
       throw err;
     }
 
+    if (args.email_id && !effectiveMailbox) {
+      const cachedMailbox = resolveCachedMailbox(args.email_id);
+      if (cachedMailbox) effectiveMailbox = cachedMailbox;
+    }
+
     const payload = {
       email_id: realEmailId,
       sender: args.sender,
@@ -409,7 +452,7 @@ export async function search_and_fetch_emails(args: any): Promise<ToolResult> {
       folder: args.folder,
       limit: args.limit ?? 10,
       offset: args.offset ?? 0,
-      mailbox_address: args.mailbox_address,
+      mailbox_address: effectiveMailbox,
     };
 
     // Remove undefined fields
@@ -479,6 +522,9 @@ export async function search_and_fetch_emails(args: any): Promise<ToolResult> {
             text: "No emails found matching your search criteria.",
           },
         ],
+        // Keep the UI channel populated (Python parity) — without it the
+        // widget's tool-result handler bails and the skeleton spins forever.
+        structuredContent: data,
       };
 
     const lines = [
@@ -486,7 +532,7 @@ export async function search_and_fetch_emails(args: any): Promise<ToolResult> {
       "",
     ];
     for (const p of previews) {
-      const shortId = minifyEmailId(p.id, cache);
+      const shortId = minifyEmailId(p.id, cache, effectiveMailbox);
       const attFlag = p.has_attachments ? "📎 (Has Attachments)" : "";
       const unreadFlag = p.is_read === false ? "🟢 [UNREAD]" : "";
       lines.push(
@@ -515,7 +561,11 @@ export async function search_and_fetch_emails(args: any): Promise<ToolResult> {
 
   if (data.type === "full_email") {
     const full = data.full_email || {};
-    const shortTargetId = minifyEmailId(full.id || "unknown_id", cache);
+    const shortTargetId = minifyEmailId(
+      full.id || "unknown_id",
+      cache,
+      effectiveMailbox,
+    );
 
     saveIdCache(cache);
 
@@ -533,13 +583,30 @@ export async function search_and_fetch_emails(args: any): Promise<ToolResult> {
         args.days_ago !== undefined ||
         args.folder !== undefined);
 
-    const baseDir =
-      args.working_directory && existsSync(args.working_directory)
-        ? args.working_directory
-        : tmpdir();
+    // Honor the requested working_directory by creating it (recursively) when
+    // missing. Silently falling back to the system temp dir made agents in
+    // sandboxed hosts believe the download failed (the reported paths pointed
+    // at an inaccessible /tmp), triggering redundant re-search loops.
+    let baseDir = tmpdir();
+    let usedWorkingDirectory = false;
+    let dirFallbackNote: string | null = null;
+    if (args.working_directory) {
+      try {
+        mkdirSync(args.working_directory, { recursive: true });
+        baseDir = args.working_directory;
+        usedWorkingDirectory = true;
+      } catch (e) {
+        dirFallbackNote =
+          `⚠️ **Attachment location notice**: the requested \`working_directory\` ` +
+          `(\`${args.working_directory}\`) did not exist and could not be created ` +
+          `(${(e as Error).message}). Any attachments were saved to the system temp ` +
+          `directory instead — use the exact paths listed below; do NOT re-run the ` +
+          `search expecting a different location.`;
+      }
+    }
     const saveDir = join(
       baseDir,
-      args.working_directory ? "adeu_attachments" : "adeu_downloads",
+      usedWorkingDirectory ? "adeu_attachments" : "adeu_downloads",
       shortTargetId,
     );
     mkdirSync(saveDir, { recursive: true });
@@ -600,6 +667,9 @@ export async function search_and_fetch_emails(args: any): Promise<ToolResult> {
       lines.push(
         "_(Search returned exactly one result; auto-fetched full email below.)_\n",
       );
+    }
+    if (dirFallbackNote) {
+      lines.push(dirFallbackNote + "\n");
     }
     lines.push(
       `# Email Thread: ${full.subject}`,
@@ -667,7 +737,8 @@ export async function search_and_fetch_emails(args: any): Promise<ToolResult> {
 
     if (hasAttachments) {
       lines.push(
-        "\n*You can now use tools like `read_docx`, `diff_docx_files`, or `finalize_document` on the local file paths listed under each message.*",
+        "\n*You can now use tools like `read_docx`, `diff_docx_files`, or `finalize_document` on the local file paths listed under each message. " +
+          "These paths are on the user's machine — pass them directly to those tools; your own sandbox/shell may not see them, and that does NOT mean the download failed.*",
       );
     }
 
@@ -680,6 +751,7 @@ export async function search_and_fetch_emails(args: any): Promise<ToolResult> {
   return {
     isError: true,
     content: [{ type: "text", text: "Unknown response format from backend." }],
+    structuredContent: data,
   };
 }
 
@@ -711,8 +783,16 @@ export async function create_email_draft(args: any): Promise<ToolResult> {
     }
   }
   if (args.subject) formData.append("subject", args.subject);
-  if (args.mailbox_address) {
-    formData.append("mailbox_address", args.mailbox_address);
+
+  // Replies inherit the mailbox the original email's short ID was harvested
+  // from unless the caller overrides — same mailbox-scoping rule as fetches.
+  let draftMailbox: string | undefined = args.mailbox_address;
+  if (args.reply_to_email_id && !draftMailbox) {
+    const cachedMailbox = resolveCachedMailbox(args.reply_to_email_id);
+    if (cachedMailbox) draftMailbox = cachedMailbox;
+  }
+  if (draftMailbox) {
+    formData.append("mailbox_address", draftMailbox);
   }
 
   if (args.to_recipients) {

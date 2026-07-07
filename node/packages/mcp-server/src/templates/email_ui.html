@@ -348,6 +348,51 @@
                 background-position: -200% 0;
             }
         }
+
+        /* --- ASYNC / PENDING STATE --- */
+        .pending-state {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 24px;
+            border: 1px solid var(--border-card);
+            border-radius: 8px;
+            background: var(--bg-card);
+        }
+
+        .pending-spinner {
+            width: 28px;
+            height: 28px;
+            flex-shrink: 0;
+            border-radius: 50%;
+            border: 3px solid var(--border-card);
+            border-top-color: var(--brand-sand);
+            animation: pending-spin 0.9s linear infinite;
+        }
+
+        @keyframes pending-spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .pending-title {
+            font-weight: 600;
+            color: var(--text-heading);
+            margin-bottom: 4px;
+        }
+
+        .pending-message {
+            font-size: 0.9rem;
+            opacity: 0.85;
+        }
+
+        .pending-task {
+            margin-top: 6px;
+            font-size: 0.8rem;
+            opacity: 0.7;
+            font-family: ui-monospace, Consolas, monospace;
+        }
     </style>
 </head>
 
@@ -559,6 +604,45 @@
             wrapper.innerHTML = threadHtml;
             return wrapper;
         }
+        function renderPending(data) {
+            const message = data.message || 'The mailbox search is still running on the server. The assistant will check progress again shortly.';
+            const taskLine = data.task_id
+                ? `<div class="pending-task">Task: ${escapeHtml(data.task_id)}</div>`
+                : '';
+            return `
+                <div class="pending-state">
+                    <div class="pending-spinner"></div>
+                    <div class="pending-info">
+                        <div class="pending-title">Still processing&hellip;</div>
+                        <div class="pending-message">${escapeHtml(message)}</div>
+                        ${taskLine}
+                    </div>
+                </div>
+            `;
+        }
+
+        // Large mailboxes can keep the backend polling for a minute or more before
+        // the first tool result arrives. Tell the human the search is still running
+        // rather than leaving a bare skeleton with no sign of progress.
+        let slowLoadStage2 = null;
+        const slowLoadNotice = setTimeout(() => {
+            if (appDiv.querySelector('.skeleton')) {
+                const notice = document.createElement('div');
+                notice.className = 'empty-state';
+                notice.textContent = 'Still working — large mailbox searches can take a minute or two…';
+                appDiv.appendChild(notice);
+                triggerResize();
+                // If no result ever arrives (e.g. the tool call errored and the host
+                // never forwards a tool-result), stop implying progress.
+                slowLoadStage2 = setTimeout(() => {
+                    if (appDiv.querySelector('.skeleton')) {
+                        notice.textContent = 'This is taking longer than expected — the search may have failed. Check the chat for details.';
+                        triggerResize();
+                    }
+                }, 150000);
+            }
+        }, 20000);
+
         window.addEventListener("message", (event) => {
             try {
                 if (!event.data || event.data.jsonrpc !== "2.0") return;
@@ -570,13 +654,32 @@
                 }
 
                 if (msg.method === "ui/notifications/tool-result") {
+                    clearTimeout(slowLoadNotice);
+                    if (slowLoadStage2) clearTimeout(slowLoadStage2);
                     const result = msg.params;
-                    if (!result || !result.structuredContent) return;
+                    // The MCP wire format is camelCase `structuredContent`, but tolerate
+                    // snake_case in case a host forwards the Python server's payload unnormalized.
+                    const data = result ? (result.structuredContent || result.structured_content) : null;
 
-                    const data = result.structuredContent;
+                    if (!data) {
+                        // Error results and text-only results carry no structured payload.
+                        // Never leave the skeleton spinning — surface whatever text we have.
+                        const textParts = (result && Array.isArray(result.content))
+                            ? result.content.filter(c => c && c.type === "text" && c.text).map(c => c.text)
+                            : [];
+                        const fallbackText = textParts.join("\n").trim();
+                        appDiv.innerHTML = `<div class="empty-state" style="white-space: pre-wrap;">${escapeHtml(fallbackText || 'The email tool returned no displayable data. Check the chat for details.')}</div>`;
+                        triggerResize();
+                        return;
+                    }
+
                     appDiv.innerHTML = ''; // Clear skeleton
 
-                    if (data.type === "previews") {
+                    if (data.status === "pending") {
+                        appDiv.innerHTML = renderPending(data);
+                        setTimeout(triggerResize, 50);
+                    }
+                    else if (data.type === "previews") {
                         appDiv.innerHTML = renderPreviews(data.previews);
                         setTimeout(triggerResize, 50);
                     }

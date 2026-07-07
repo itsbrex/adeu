@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import json
+import re
 import urllib.error
 from email.message import Message
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -452,3 +453,223 @@ def test_polling_task_timeout(mock_sleep, mock_urlopen):
     assert "is still processing" in text
     assert "task_id=email_task_999" in text
     assert mock_sleep.await_count == 10
+
+
+def _make_full_email_payload(email_id: str) -> dict:
+    return {
+        "type": "full_email",
+        "full_email": {
+            "id": email_id,
+            "subject": "Attachment Delivery",
+            "sender_name": "Legal",
+            "sender_email": "legal@adeu.ai",
+            "received_datetime": "2026-01-01T12:00:00Z",
+            "body_html": "<p>See attachment.</p>",
+            "is_thread": False,
+            "attachments": [
+                {
+                    "filename": "questionnaire.docx",
+                    "size_bytes": 128,
+                    "base64_data": base64.b64encode(b"questionnaire contents").decode("utf-8"),
+                }
+            ],
+        },
+    }
+
+
+@patch("urllib.request.urlopen")
+def test_working_directory_created_when_missing(mock_urlopen, tmp_path):
+    """A missing working_directory is created recursively instead of silently falling back to temp."""
+    ctx = AsyncMock()
+
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = json.dumps(_make_full_email_payload("adeu_777")).encode("utf-8")
+    mock_resp.__enter__.return_value = mock_resp
+    mock_urlopen.return_value = mock_resp
+
+    requested_dir = tmp_path / "questionnaires" / "nested"
+    assert not requested_dir.exists()
+
+    res = asyncio.run(
+        search_and_fetch_emails(
+            reasoning="test",
+            ctx=ctx,
+            email_id="adeu_777",
+            working_directory=str(requested_dir),
+            api_key="test_api_key",
+        )
+    )
+
+    text = _get_tool_text(res)
+    assert requested_dir.is_dir()
+    assert "Attachment location notice" not in text
+
+    saved_files = list((requested_dir / "adeu_attachments").rglob("questionnaire.docx"))
+    assert len(saved_files) == 1
+    assert saved_files[0].read_bytes() == b"questionnaire contents"
+    assert str(saved_files[0]) in text
+
+
+@patch("adeu.mcp_components.tools.email.tempfile.gettempdir")
+@patch("urllib.request.urlopen")
+def test_working_directory_fallback_note_when_uncreatable(mock_urlopen, mock_gettempdir, tmp_path):
+    """When the working_directory cannot be created, fall back to temp WITH an explicit notice."""
+    ctx = AsyncMock()
+
+    fake_tmp = tmp_path / "faketmp"
+    fake_tmp.mkdir()
+    mock_gettempdir.return_value = str(fake_tmp)
+
+    blocker = tmp_path / "blocker.txt"
+    blocker.write_text("not a directory")
+
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = json.dumps(_make_full_email_payload("adeu_778")).encode("utf-8")
+    mock_resp.__enter__.return_value = mock_resp
+    mock_urlopen.return_value = mock_resp
+
+    res = asyncio.run(
+        search_and_fetch_emails(
+            reasoning="test",
+            ctx=ctx,
+            email_id="adeu_778",
+            working_directory=str(blocker / "sub"),
+            api_key="test_api_key",
+        )
+    )
+
+    text = _get_tool_text(res)
+    assert "Attachment location notice" in text
+    assert "do NOT re-run the search" in text
+
+    saved_files = list((fake_tmp / "adeu_downloads").rglob("questionnaire.docx"))
+    assert len(saved_files) == 1
+    assert str(saved_files[0]) in text
+
+
+@patch("urllib.request.urlopen")
+def test_short_id_fetch_reuses_search_mailbox(mock_urlopen, tmp_path):
+    """Fetching by short ID without mailbox_address re-applies the mailbox from the original search.
+
+    Provider message IDs are mailbox-scoped; without this, NULL-mailbox fetches
+    resolve against the PRIMARY account and 404 with 'Email not found.'
+    """
+    ctx = AsyncMock()
+
+    previews_payload = {
+        "type": "previews",
+        "previews": [
+            {
+                "id": "AAMkAD_shared_item_1",
+                "subject": "Questionnaire",
+                "sender_name": "Abo Shoten",
+                "sender_email": "ops@aboshoten.example",
+                "received_datetime": "2026-07-07T09:00:00Z",
+                "preview_text": "Please fill in",
+                "has_attachments": True,
+                "is_read": False,
+            },
+            {
+                "id": "AAMkAD_shared_item_2",
+                "subject": "Other mail",
+                "sender_name": "Abo Shoten",
+                "sender_email": "ops@aboshoten.example",
+                "received_datetime": "2026-07-07T09:01:00Z",
+                "preview_text": "Something else",
+                "has_attachments": False,
+                "is_read": True,
+            },
+        ],
+    }
+
+    with patch("adeu.mcp_components.tools.email.CACHE_FILE", tmp_path / "cache.json"):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(previews_payload).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+        mock_urlopen.return_value = mock_resp
+
+        res_search = asyncio.run(
+            search_and_fetch_emails(
+                reasoning="test",
+                ctx=ctx,
+                subject="Questionnaire",
+                mailbox_address="risto.kariranta@ahti.io",
+                api_key="test_api_key",
+            )
+        )
+        short_id_match = re.search(r"msg_[0-9a-f]{6}", _get_tool_text(res_search))
+        assert short_id_match is not None
+        short_id = short_id_match.group(0)
+
+        mock_resp.read.return_value = json.dumps(_make_full_email_payload("AAMkAD_shared_item_1")).encode("utf-8")
+
+        asyncio.run(
+            search_and_fetch_emails(
+                reasoning="test",
+                ctx=ctx,
+                email_id=short_id,
+                api_key="test_api_key",
+            )
+        )
+
+    fetch_request = mock_urlopen.call_args_list[-1].args[0]
+    body = json.loads(fetch_request.data.decode("utf-8"))
+    assert body["email_id"] == "AAMkAD_shared_item_1"
+    assert body["mailbox_address"] == "risto.kariranta@ahti.io"
+
+
+@patch("urllib.request.urlopen")
+def test_legacy_cache_entries_still_resolve(mock_urlopen, tmp_path):
+    """Plain-string cache entries from older versions resolve fine and inject no mailbox."""
+    ctx = AsyncMock()
+
+    cache_file = tmp_path / "cache.json"
+    cache_file.write_text(json.dumps({"msg_legacy": "raw_provider_id_123"}), encoding="utf-8")
+
+    with patch("adeu.mcp_components.tools.email.CACHE_FILE", cache_file):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(_make_full_email_payload("raw_provider_id_123")).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+        mock_urlopen.return_value = mock_resp
+
+        asyncio.run(
+            search_and_fetch_emails(
+                reasoning="test",
+                ctx=ctx,
+                email_id="msg_legacy",
+                api_key="test_api_key",
+            )
+        )
+
+    fetch_request = mock_urlopen.call_args_list[-1].args[0]
+    body = json.loads(fetch_request.data.decode("utf-8"))
+    assert body["email_id"] == "raw_provider_id_123"
+    assert "mailbox_address" not in body
+
+
+@patch("urllib.request.urlopen")
+@patch("asyncio.sleep", new_callable=AsyncMock)
+def test_failed_task_error_carries_recovery_hint(mock_sleep, mock_urlopen):
+    """Async task failures map known errors to recovery hints (parity with sync 404s)."""
+    ctx = AsyncMock()
+
+    mock_resp = MagicMock()
+    mock_resp.__enter__.return_value.read.return_value = json.dumps(
+        {"status": "FAILED", "error": "Email not found."}
+    ).encode("utf-8")
+    mock_urlopen.return_value = mock_resp.__enter__.return_value
+
+    with pytest.raises(ToolError) as exc_info:
+        asyncio.run(
+            search_and_fetch_emails(
+                reasoning="test",
+                ctx=ctx,
+                task_id="email_task_777",
+                api_key="test_api_key",
+            )
+        )
+
+    msg = str(exc_info.value)
+    assert "Validation task failed on the server:" in msg
+    assert "re-run search_and_fetch_emails with filters" in msg
+    assert "mailbox_address" in msg

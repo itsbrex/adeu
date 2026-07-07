@@ -847,11 +847,11 @@ if (!isDocxOnly) {
         "2. Fetch mode (with `email_id`): returns the full email body, thread history, and downloads attachments under `max_attachment_size_mb` to the local disk.\n\n" +
         "AUTO-ESCALATION: If a search returns exactly one preview, the backend automatically fetches the full email in the same call. Plan around the response shape — check the `type` field (`previews` vs `full_email`) before assuming.\n\n" +
         "EMAIL ID FORMATS (`email_id` parameter accepts any of):\n" +
-        "- `msg_<6 chars>` — short ID returned by previews on THIS machine. NOT portable across machines or sessions; the local cache holds the most recent 1000. If you reference one that's been evicted, the tool returns a StaleShortIdError telling you to re-search.\n" +
+        "- `msg_<6 chars>` — short ID returned by previews on THIS machine. NOT portable across machines or sessions; the local cache holds the most recent 1000. If you reference one that's been evicted, the tool returns a StaleShortIdError telling you to re-search. The mailbox used in the original search is remembered with the short ID and re-applied automatically when you fetch or reply without specifying `mailbox_address`.\n" +
         "- `adeu_<numeric>` — server-side reference for emails Adeu has previously processed. Portable across machines and sessions for the same authenticated user.\n" +
         "- Raw provider ID (Gmail/Outlook native ID) — works if you have it, but you usually won't.\n\n" +
         "FOLDER DEFAULT: omitting `folder` searches the Inbox only (matching what the user sees in their mail client). Use `folder='sent'` for sent items, `folder='all'` to include Deleted Items, Drafts, and other folders.\n\n" +
-        "ATTACHMENTS: attachments larger than `max_attachment_size_mb` (default 10) are listed in the response but NOT downloaded — raise the cap if you need them. Always set `working_directory` when calling from a project so attachments land alongside the user's other files.",
+        "ATTACHMENTS: attachments larger than `max_attachment_size_mb` (default 10) are listed in the response but NOT downloaded — raise the cap if you need them. Always set `working_directory` when calling from a project so attachments land alongside the user's other files; the directory is created automatically if it does not exist. This directory path refers to the user's native operating system, not the LLM's sandbox environment.",
       inputSchema: z.object({
         reasoning: z
           .string()
@@ -868,7 +868,15 @@ if (!isDocxOnly) {
         limit: z.coerce.number().default(10),
         offset: z.coerce.number().default(0),
         email_id: z.string().optional(),
-        working_directory: z.string().optional(),
+        working_directory: z
+          .string()
+          .optional()
+          .describe(
+            "Optional. The current working directory of the project or task. " +
+              "If provided, attachments will be saved here under an 'adeu_attachments' subfolder; " +
+              "the directory is created automatically if it does not exist. " +
+              "If omitted, attachments are saved to the system temp directory.",
+          ),
         mailbox_address: z
           .string()
           .optional()

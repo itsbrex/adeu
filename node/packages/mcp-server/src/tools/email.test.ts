@@ -1,4 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  existsSync,
+  readFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
+import { homedir, tmpdir } from "node:os";
 import { search_and_fetch_emails, list_available_mailboxes } from "./email.js";
 
 // Mock the Auth module so tests bypass active browser logins
@@ -413,5 +423,238 @@ describe("Node Email Tools Finding #2 and Finding #6 tests", () => {
       expect(result.structuredContent?.status).toBe("pending");
       expect(result.structuredContent?.task_id).toBe("email_task_typescript_123");
     });
+  });
+});
+
+describe("Working directory resolution (silent /tmp fallback fix)", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  function mockFullEmailFetch(emailId: string) {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        type: "full_email",
+        full_email: {
+          id: emailId,
+          subject: "Attachment Delivery",
+          sender_name: "Legal",
+          sender_email: "legal@adeu.ai",
+          received_datetime: "2026-01-01T12:00:00Z",
+          body_html: "<p>See attachment.</p>",
+          is_thread: false,
+          attachments: [
+            {
+              filename: "questionnaire.docx",
+              size_bytes: 128,
+              base64_data: Buffer.from("questionnaire contents").toString(
+                "base64",
+              ),
+            },
+          ],
+        },
+      }),
+    } as Response);
+  }
+
+  it("creates a missing working_directory recursively and saves attachments inside it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "adeu-wd-test-"));
+    const requestedDir = join(root, "questionnaires", "nested");
+    try {
+      mockFullEmailFetch("adeu_777");
+
+      const result = await search_and_fetch_emails({
+        email_id: "adeu_777",
+        working_directory: requestedDir,
+      });
+
+      const text = result.content[0].text;
+      expect(existsSync(requestedDir)).toBe(true);
+      expect(text).not.toContain("Attachment location notice");
+
+      const savedPathMatch = text.match(/📎 `([^`]+)`/);
+      expect(savedPathMatch).not.toBeNull();
+      const savedPath = savedPathMatch![1];
+      expect(savedPath.startsWith(join(requestedDir, "adeu_attachments"))).toBe(
+        true,
+      );
+      expect(readFileSync(savedPath, "utf-8")).toBe("questionnaire contents");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the temp dir WITH an explicit notice when working_directory cannot be created", async () => {
+    const root = mkdtempSync(join(tmpdir(), "adeu-wd-test-"));
+    const blockerFile = join(root, "blocker.txt");
+    writeFileSync(blockerFile, "not a directory");
+    try {
+      mockFullEmailFetch("adeu_778");
+
+      const result = await search_and_fetch_emails({
+        email_id: "adeu_778",
+        working_directory: join(blockerFile, "sub"),
+      });
+
+      const text = result.content[0].text;
+      expect(text).toContain("Attachment location notice");
+      expect(text).toContain("do NOT re-run the search");
+
+      const savedPathMatch = text.match(/📎 `([^`]+)`/);
+      expect(savedPathMatch).not.toBeNull();
+      const savedPath = savedPathMatch![1];
+      expect(savedPath.startsWith(join(tmpdir(), "adeu_downloads"))).toBe(true);
+      expect(existsSync(savedPath)).toBe(true);
+
+      rmSync(dirname(savedPath), { recursive: true, force: true });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns structuredContent for empty preview results so the UI can dismiss its skeleton", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ type: "previews", previews: [] }),
+    } as Response);
+
+    const result = await search_and_fetch_emails({ subject: "nothing matches" });
+    expect(result.content[0].text).toContain(
+      "No emails found matching your search criteria.",
+    );
+    expect(result.structuredContent).toEqual({ type: "previews", previews: [] });
+  });
+});
+
+describe("Mailbox-aware short ID cache", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("re-applies the search's mailbox_address when fetching by short ID without one", async () => {
+    const fetchMock = vi.fn();
+    global.fetch = fetchMock;
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        type: "previews",
+        previews: [
+          {
+            id: "AAMkAD_shared_item_1",
+            subject: "Questionnaire",
+            sender_name: "Abo Shoten",
+            sender_email: "ops@aboshoten.example",
+            received_datetime: "2026-07-07T09:00:00Z",
+            preview_text: "Please fill in",
+            has_attachments: true,
+            is_read: false,
+          },
+          {
+            id: "AAMkAD_shared_item_2",
+            subject: "Other mail",
+            sender_name: "Abo Shoten",
+            sender_email: "ops@aboshoten.example",
+            received_datetime: "2026-07-07T09:01:00Z",
+            preview_text: "Something else",
+            has_attachments: false,
+            is_read: true,
+          },
+        ],
+      }),
+    } as Response);
+
+    const searchRes = await search_and_fetch_emails({
+      subject: "Questionnaire",
+      mailbox_address: "risto.kariranta@ahti.io",
+    });
+    const shortIdMatch = searchRes.content[0].text.match(/msg_[0-9a-f]{6}/);
+    expect(shortIdMatch).not.toBeNull();
+    const shortId = shortIdMatch![0];
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        type: "full_email",
+        full_email: {
+          id: "AAMkAD_shared_item_1",
+          subject: "Questionnaire",
+          sender_name: "Abo Shoten",
+          sender_email: "ops@aboshoten.example",
+          received_datetime: "2026-07-07T09:00:00Z",
+          body_html: "<p>Please fill in.</p>",
+          is_thread: false,
+          attachments: [],
+        },
+      }),
+    } as Response);
+
+    await search_and_fetch_emails({ email_id: shortId });
+
+    const fetchBody = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(fetchBody.email_id).toBe("AAMkAD_shared_item_1");
+    expect(fetchBody.mailbox_address).toBe("risto.kariranta@ahti.io");
+  });
+
+  it("still resolves legacy plain-string cache entries without injecting a mailbox", async () => {
+    // Seed a legacy-format entry directly into the cache file (merge, don't clobber).
+    const cachePath = join(homedir(), ".adeu", "mcp_id_cache.json");
+    mkdirSync(join(homedir(), ".adeu"), { recursive: true });
+    let existing: Record<string, unknown> = {};
+    try {
+      existing = JSON.parse(readFileSync(cachePath, "utf-8"));
+    } catch {
+      /* no cache yet */
+    }
+    existing["msg_leg01"] = "raw_provider_id_123";
+    writeFileSync(cachePath, JSON.stringify(existing));
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        type: "full_email",
+        full_email: {
+          id: "raw_provider_id_123",
+          subject: "Legacy",
+          sender_name: "Old Cache",
+          sender_email: "old@cache.example",
+          received_datetime: "2026-07-07T09:00:00Z",
+          body_html: "<p>hi</p>",
+          is_thread: false,
+          attachments: [],
+        },
+      }),
+    } as Response);
+    global.fetch = fetchMock;
+
+    await search_and_fetch_emails({ email_id: "msg_leg01" });
+
+    const fetchBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(fetchBody.email_id).toBe("raw_provider_id_123");
+    expect(fetchBody.mailbox_address).toBeUndefined();
+  });
+
+  it("maps known errors to recovery hints when an async task fails", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ status: "FAILED", error: "Email not found." }),
+    } as Response);
+
+    await expect(
+      search_and_fetch_emails({ task_id: "email_task_777" }),
+    ).rejects.toThrowError(
+      /re-run search_and_fetch_emails with filters[\s\S]*mailbox_address/,
+    );
   });
 });
