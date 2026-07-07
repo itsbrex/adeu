@@ -196,18 +196,15 @@ See the [n8n-nodes-adeu README](https://github.com/dealfluence/adeu/blob/main/no
 
 ---
 
-## LangChain Integration (Work in Progress)
+## LangChain Integration
 
-We are developing `langchain-adeu`, an official integration package that exposes Adeu's local, offline-capable document manipulation tools directly to the LangChain ecosystem. 
+`langchain-adeu` is an official integration package that exposes Adeu's local, offline-capable document manipulation tools directly to the LangChain ecosystem.
 
-> 🚧 **Pre-release Warning:** This integration is currently a work in progress and has not yet been published to the official PyPI registry.
-
-Once published, you will be able to install it via:
 ```bash
 pip install langchain-adeu
 ```
 
-And bundle its capabilities as tools in your agent workflow:
+Bundle its capabilities as tools in your agent workflow:
 ```python
 from langchain_adeu import AdeuToolkit
 
@@ -223,10 +220,7 @@ Refer to the [LangChain Workspace Guide](langchain/README.md) for full developme
 
 Adeu is designed as a Virtual DOM for DOCX. Because we keep the core strictly focused on OpenXML safety, we maintain a dedicated [`ecosystem/`](ecosystem/) directory for third-party integrations.
 
-In the ecosystem folder, you will find advanced workflows, wrappers, and tools built by the community and LegalTech vendors, including:
-- Legal validation and case-law routing before applying edits.
-- Contract Lifecycle Management (CLM) sync scripts.
-- Specialized multi-agent architectures (LangChain, AutoGen, etc.).
+The ecosystem folder hosts policies and guidelines for third-party contributions such as legal validation workflows, CLM sync scripts, and specialized multi-agent architectures.
 
 **Are you a vendor or builder?** We welcome PRs to the ecosystem folder! Please see our [Vendor & Integration Policy](ecosystem/VENDOR_POLICY.md) to get started.
 

@@ -4,11 +4,11 @@ Thank you for your interest in contributing to Adeu! We welcome bug reports, fea
 
 ## Development Environment
 
-Adeu relies on Python toolchain managed by [uv](https://docs.astral.sh/uv/).
+Adeu is a monorepo with a Python backend, a Node.js workspace, and a LangChain integration package. The Python toolchain is managed by [uv](https://docs.astral.sh/uv/); the Node.js workspace uses npm. You need Python >=3.12 and Node.js >=22.0.0.
 
-### 1. Setup
+### 1. Python Setup
 
-Clone the repository and install the dependencies:
+Clone the repository and install the Python dependencies:
 
 ```bash
 git clone https://github.com/dealfluence/adeu.git
@@ -75,6 +75,31 @@ cd python && uv run pytest --cov=src
 ```
 
 *(Note: Tests involving the Live Word COM engine are automatically skipped on non-Windows platforms).*
+
+### 4. Node.js Setup
+
+Install and build the Node.js workspace:
+
+```bash
+cd node
+npm install
+npm run build     # build all packages (tsup)
+npm run test      # run all vitest suites
+```
+
+The Node workspace contains three packages: `@adeu/core` (TypeScript SDK), `@adeu/mcp-server` (MCP server), and `n8n-nodes-adeu` (n8n community node).
+
+### 5. LangChain Setup
+
+```bash
+cd langchain
+uv sync --all-extras --dev
+uv run pytest                           # unit tests
+uv run ruff format . && uv run ruff check . --fix
+uv run mypy .
+```
+
+The LangChain package uses `uv.sources` to editable-link the sibling `python/` package during local development.
 
 ## Pull Request Guidelines
 
