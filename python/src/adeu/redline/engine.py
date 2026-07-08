@@ -1176,6 +1176,16 @@ class RedlineEngine:
         for i, edit in enumerate(edits):
             if not edit.target_text:
                 continue  # Skip validation for pure index-based insertions
+            # Caller-pinned indexes (e.g. generate_edits_from_text output)
+            # resolve by position, not content: ambiguity / not-found checks
+            # are meaningless for them and false-positive whenever the target
+            # coincidentally matches unrelated text (a comment timestamp, an
+            # earlier redline). The string-shape checks above still apply.
+            if (
+                getattr(edit, "_match_start_index", None) is not None
+                or getattr(edit, "_resolved_start_idx", None) is not None
+            ):
+                continue
             is_regex = getattr(edit, "regex", False)
             match_mode = getattr(edit, "match_mode", "strict")
 

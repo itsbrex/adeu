@@ -1525,6 +1525,18 @@ export class RedlineEngine {
         continue;
       }
       if (!edit.target_text) continue;
+      // Caller-pinned indexes (e.g. generate_edits_from_text output) resolve
+      // by position, not content: ambiguity / not-found checks are meaningless
+      // for them and false-positive whenever the target coincidentally matches
+      // unrelated text (a comment timestamp, an earlier redline). The
+      // string-shape checks above still apply.
+      if (
+        (edit._match_start_index !== undefined &&
+          edit._match_start_index !== null) ||
+        (edit._resolved_start_idx !== undefined &&
+          edit._resolved_start_idx !== null)
+      )
+        continue;
 
       const is_regex = (edit as any).regex || false;
       const match_mode = (edit as any).match_mode || "strict";
@@ -1953,9 +1965,41 @@ export class RedlineEngine {
     let skipped_edits = 0;
 
     if (edits.length > 0) {
+      // Sequential application rebuilds the mapper after every applied edit,
+      // shifting every position at/after that edit. Caller-pinned indexes
+      // (_match_start_index / _resolved_start_idx, e.g. generate_edits_from_text
+      // output) are coordinates in the INITIAL document state, so apply indexed
+      // edits bottom-up first — positions below an applied edit never move (the
+      // same invariant apply_edits' reverse sweep relies on) — then let
+      // text-anchored edits re-resolve against the mutated text as before.
+      // Reports are keyed by `i` so they stay in batch order.
+      const pinned_idx = (e: any): number | null => {
+        if (
+          e._resolved_start_idx !== undefined &&
+          e._resolved_start_idx !== null
+        )
+          return e._resolved_start_idx;
+        if (
+          e._match_start_index !== undefined &&
+          e._match_start_index !== null
+        )
+          return e._match_start_index;
+        return null;
+      };
+      const ordered_edits = edits
+        .map((edit, i) => ({ edit: edit as any, i }))
+        .sort((a, b) => {
+          const ka = pinned_idx(a.edit);
+          const kb = pinned_idx(b.edit);
+          if (ka === null && kb === null) return a.i - b.i;
+          if (ka === null) return 1;
+          if (kb === null) return -1;
+          return kb - ka || a.i - b.i;
+        });
+
       if (dry_run_mode) {
-        for (let i = 0; i < edits.length; i++) {
-          const edit = edits[i];
+        const reports_by_input: any[] = new Array(edits.length);
+        for (const { edit, i } of ordered_edits) {
           const single_errors = this.validate_edits([edit], i);
           if (single_errors.length > 0) {
             skipped_edits++;
@@ -1967,7 +2011,7 @@ export class RedlineEngine {
             const warning = this._check_punctuation_warning(
               (edit as any).target_text || "",
             );
-            edits_reports.push({
+            reports_by_input[i] = {
               status: "failed",
               target_text: (edit as any).target_text || "",
               new_text: (edit as any).new_text || "",
@@ -1975,14 +2019,14 @@ export class RedlineEngine {
               error: single_errors[0],
               critic_markup: null,
               clean_text: null,
-            });
+            };
             continue;
           }
           const res = this.apply_edits([edit], page_offsets);
           if ((edit as any)._applied_status) {
             applied_edits++;
             const previews = this._build_edit_context_previews(edit);
-            edits_reports.push({
+            reports_by_input[i] = {
               status: "applied",
               target_text: (edit as any).target_text || "",
               new_text: (edit as any).new_text || "",
@@ -1994,7 +2038,7 @@ export class RedlineEngine {
               heading_path: (edit as any)._heading_path || "",
               occurrences_modified: (edit as any)._occurrences_modified || 0,
               match_mode: (edit as any).match_mode || "strict",
-            });
+            };
             this.mapper = new DocumentMapper(this.doc);
             this.clean_mapper = null;
           } else {
@@ -2006,7 +2050,7 @@ export class RedlineEngine {
             const warning = this._check_punctuation_warning(
               (edit as any).target_text || "",
             );
-            edits_reports.push({
+            reports_by_input[i] = {
               status: "failed",
               target_text: (edit as any).target_text || "",
               new_text: (edit as any).new_text || "",
@@ -2014,17 +2058,17 @@ export class RedlineEngine {
               error: error_msg,
               critic_markup: null,
               clean_text: null,
-            });
+            };
           }
         }
+        edits_reports.push(...reports_by_input);
       } else {
         // Simulated dry-run sequentially for wet-run validation parity
         const snapshot = takeSnapshot(this.doc);
         const originalCurrentId = this.current_id;
         try {
           const sequential_errors: string[] = [];
-          for (let i = 0; i < edits.length; i++) {
-            const edit = edits[i];
+          for (const { edit, i } of ordered_edits) {
             const single_errors = this.validate_edits([edit], i);
             if (single_errors.length > 0) {
               sequential_errors.push(...single_errors);
@@ -2708,20 +2752,24 @@ export class RedlineEngine {
    */
   private _insert_and_split_ins(
     parent_ins: Element,
-    split_after: Element,
+    anchor: Element,
     new_elem: Element,
+    split_before: boolean = false,
   ) {
     const grandparent = parent_ins.parentNode as Element | null;
     if (!grandparent) return;
     // cloneNode(false) copies the attributes (author/id/date) onto both halves.
+    // The split lands after `anchor` by default; with split_before the anchor
+    // itself goes to the right half so new_elem ends up in front of it.
     const left = parent_ins.cloneNode(false) as Element;
     const right = parent_ins.cloneNode(false) as Element;
     let toRight = false;
     for (const kid of Array.from(parent_ins.childNodes)) {
       parent_ins.removeChild(kid);
+      if (split_before && kid === anchor) toRight = true;
       if (!toRight) {
         left.appendChild(kid);
-        if (kid === split_after) toRight = true;
+        if (kid === anchor) toRight = true;
       } else {
         right.appendChild(kid);
       }
@@ -2746,6 +2794,22 @@ export class RedlineEngine {
         ? edit._resolved_start_idx
         : edit._match_start_index || 0;
     const length = edit.target_text ? edit.target_text.length : 0;
+
+    // Indexed edits (caller-supplied _match_start_index, e.g. straight from
+    // generate_edits_from_text) bypass _pre_resolve_heuristic_edit — the only
+    // place _internal_op is normally assigned. Without this fallback the
+    // deletion sweep below still runs but no insertion branch does: a
+    // replacement silently degrades to a pure tracked deletion and a pure
+    // insertion fails. Mirrors the Python engine.
+    if (op === undefined || op === null) {
+      if (!edit.target_text && edit.new_text) {
+        op = "INSERTION";
+      } else if (edit.target_text && !edit.new_text) {
+        op = "DELETION";
+      } else {
+        op = "MODIFICATION";
+      }
+    }
 
     if (op === "STYLE_ONLY" || op === "STYLE_AND_TEXT") {
       const [anchor_run, anchor_para] = active_mapper.get_insertion_anchor(
@@ -2993,21 +3057,39 @@ export class RedlineEngine {
         if (anchor_run) {
           const anchor_parent = anchor_run._element
             .parentNode as Element | null;
+          // get_insertion_anchor(0) resolves to the document's FIRST run: the
+          // insertion point precedes it, so the new <w:ins> must land before
+          // the anchor, not after (mirrors the Python engine's insert_before
+          // path).
+          const before_anchor = start_idx === 0;
           if (anchor_parent && anchor_parent.tagName === "w:ins") {
             // Inserting inside another author's pending <w:ins>: split it so our
-            // new <w:ins> lands as a sibling right after the anchor run, never
+            // new <w:ins> lands as a sibling right next to the anchor run, never
             // <w:ins> nested in <w:ins> (mirrors the MODIFICATION path and the
             // Python engine).
             this._insert_and_split_ins(
               anchor_parent,
               anchor_run._element,
               result.first_node,
+              before_anchor,
             );
+          } else if (before_anchor && anchor_parent) {
+            anchor_parent.insertBefore(result.first_node, anchor_run._element);
           } else {
             insertAfter(result.first_node, anchor_run._element);
           }
         } else if (anchor_para) {
-          anchor_para._element.appendChild(result.first_node);
+          // Paragraph-anchored insertion: the anchor resolves to a paragraph
+          // (not a run) for zero-width paragraph-start spans — e.g. index 0 of
+          // the document. The insertion point is the START of the paragraph
+          // content, so land right after pPr, mirroring the Python engine;
+          // appendChild would drop the text at the paragraph's END.
+          const para_el = anchor_para._element;
+          let ref: Node | null = para_el.firstChild;
+          while (ref && (ref as Element).tagName === "w:pPr") {
+            ref = ref.nextSibling;
+          }
+          para_el.insertBefore(result.first_node, ref);
         }
       }
 
