@@ -144,7 +144,15 @@ describe("Resolved Bugs MCP Server Verification", () => {
     );
 
     const rawText = resRaw.result.content[0].text;
-    expect(rawText).toContain("{++dirty modified ++}");
+    // The zero-width insertion anchors right before "document", where it
+    // coalesces with the pre-existing {++golden ++} run in the raw
+    // projection ({++golden dirty modified ++}). A standalone
+    // "{++dirty modified ++}" block only existed while the insertion-anchor
+    // bug dropped the text at paragraph start, so assert the raw-markup
+    // intent instead of that exact placement.
+    expect(rawText).toContain("dirty modified");
+    expect(rawText).toContain("{++"); // CriticMarkup IS present in raw mode
+    expect(rawText).toContain("[Chg:5 insert] Reviewer");
   });
   it("BUG-10: Traps ENOENT and returns clean File Not Found errors", async () => {
     const res = await sendRpc(
