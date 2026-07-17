@@ -230,10 +230,9 @@ The ecosystem folder hosts policies and guidelines for third-party contributions
 
 By default, the core Adeu redlining engine and local file tools are fully open-source and execute entirely on your machine. **Adeu never phones home with your local documents** (though your chosen LLM provider will naturally process the text the agent reads).
 
-However, you can explicitly opt-in to connect your MCP server to **Adeu Cloud** to unlock:
+However, for teams requiring end-to-end workflows, you can connect to **Adeu Cloud** to unlock:
 
-- **End-to-End Workflows (Email):** Because contracts travel via email, Adeu Cloud allows agents to securely fetch email threads, extract counterparty DOCX attachments for review, and draft replies with your newly sanitized redlines attached.
-- **Advanced Document Validation:** Run complex, multi-document semantic validation tasks asynchronously. By securely routing these massive contexts to Adeu Cloud for processing, you prevent your local AI agent from exhausting its context window or hitting rate limits.
+- **Email Processing & Fetching:** We offer an extended MCP server with secure email thread fetching, document extraction, and automated drafting capabilities to handle contracts directly from your inbox.
 
 [Learn more about Adeu Cloud](https://adeu.ai).
 
