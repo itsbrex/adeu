@@ -152,6 +152,24 @@ export class BatchValidationError extends Error {
   }
 }
 
+// Appended to a validation error when earlier edits in the same batch have
+// already applied: the failing target may simply be stale under the
+// sequential batch contract. Wording mirrors the Python engine exactly.
+function sequential_context_hint(applied_so_far: number): string {
+  return (
+    `\n  Note: ${applied_so_far} earlier edit(s) in this batch were already ` +
+    "applied. Batches apply sequentially — each edit must target the document " +
+    "text as it reads AFTER the preceding edits (e.g. target the replacement " +
+    "text an earlier edit introduced, not the original wording)."
+  );
+}
+
+// Report placeholder for edits blocked only by OTHER edits' validation
+// failures under the transactional batch contract. Mirrors Python.
+const TRANSACTIONAL_NOT_APPLIED_ERROR =
+  "Not applied: the batch is transactional and other edits failed " +
+  "validation (see their errors). Fix or remove those edits and re-run.";
+
 export function validate_edit_strings(
   edits: any[],
   index_offset: number = 0,
@@ -2082,9 +2100,18 @@ export class RedlineEngine {
 
       if (dry_run_mode) {
         const reports_by_input: any[] = new Array(edits.length);
+        // Indexes that failed VALIDATION (not runtime skips): if any exist,
+        // the real run rejects the whole batch, so the dry-run report must
+        // not claim any edit "applied" (transactional parity with Python).
+        const validation_failed_idx = new Set<number>();
         for (const { edit, i } of ordered_edits) {
-          const single_errors = this.validate_edits([edit], i);
+          let single_errors = this.validate_edits([edit], i);
           if (single_errors.length > 0) {
+            if (applied_edits > 0) {
+              const hint = sequential_context_hint(applied_edits);
+              single_errors = single_errors.map((err) => err + hint);
+            }
+            validation_failed_idx.add(i);
             skipped_edits++;
             // Only surface the punctuation-anchor warning when the edit actually
             // failed. A clean apply already returns the redline preview, so the
@@ -2099,7 +2126,7 @@ export class RedlineEngine {
               target_text: (edit as any).target_text || "",
               new_text: (edit as any).new_text || "",
               warning: warning,
-              error: single_errors[0],
+              error: single_errors.join("\n"),
               critic_markup: null,
               clean_text: null,
             };
@@ -2144,6 +2171,29 @@ export class RedlineEngine {
             };
           }
         }
+        if (validation_failed_idx.size > 0) {
+          // Dry-run mirrors the real run's transactional rejection: no edit
+          // will be applied by the real run, so none may be reported as
+          // applied here. Edits that only failed at runtime keep their own
+          // error; edits that would have applied get the transactional note.
+          applied_edits = 0;
+          skipped_edits = edits.length;
+          for (let i = 0; i < reports_by_input.length; i++) {
+            const report = reports_by_input[i];
+            if (!report || validation_failed_idx.has(i)) continue;
+            if (report.status === "applied") {
+              reports_by_input[i] = {
+                status: "failed",
+                target_text: report.target_text,
+                new_text: report.new_text,
+                warning: null,
+                error: TRANSACTIONAL_NOT_APPLIED_ERROR,
+                critic_markup: null,
+                clean_text: null,
+              };
+            }
+          }
+        }
         edits_reports.push(...reports_by_input);
       } else {
         // Simulated dry-run sequentially for wet-run validation parity
@@ -2151,12 +2201,20 @@ export class RedlineEngine {
         const originalCurrentId = this.current_id;
         try {
           const sequential_errors: string[] = [];
+          let applied_so_far = 0;
           for (const { edit, i } of ordered_edits) {
-            const single_errors = this.validate_edits([edit], i);
+            let single_errors = this.validate_edits([edit], i);
             if (single_errors.length > 0) {
+              if (applied_so_far > 0) {
+                const hint = sequential_context_hint(applied_so_far);
+                single_errors = single_errors.map((err) => err + hint);
+              }
               sequential_errors.push(...single_errors);
             } else {
               this.apply_edits([edit], page_offsets);
+              if ((edit as any)._applied_status) {
+                applied_so_far++;
+              }
               this.mapper = new DocumentMapper(this.doc);
               this.clean_mapper = null;
             }

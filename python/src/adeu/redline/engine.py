@@ -56,6 +56,7 @@ class BatchValidationError(Exception):
 
 def validate_edit_strings(
     edits: List[Union["ModifyText", "InsertTableRow", "DeleteTableRow"]],
+    index_offset: int = 0,
 ) -> List[str]:
     """
     Performs document-context-free validation on a batch of edits.
@@ -80,13 +81,17 @@ def validate_edit_strings(
 
     Args:
         edits: list of edit operations to validate.
+        index_offset: added to each edit's 0-based position when rendering the
+            1-based "Edit N Failed" labels. Callers validating one edit at a
+            time (the sequential batch loop) pass the edit's position in the
+            full batch so error labels stay correct.
 
     Returns:
         List of error message strings. Empty if all edits pass these checks.
     """
     errors: List[str] = []
 
-    for i, edit in enumerate(edits):
+    for i, edit in enumerate(edits, start=index_offset):
         t_text = edit.target_text or ""
         n_text = getattr(edit, "new_text", "") or ""
 
@@ -1330,10 +1335,19 @@ class RedlineEngine:
         except ValueError:
             pass
 
-    def validate_edits(self, edits: List[Union[ModifyText, InsertTableRow, DeleteTableRow]]) -> List[str]:
+    def validate_edits(
+        self,
+        edits: List[Union[ModifyText, InsertTableRow, DeleteTableRow]],
+        index_offset: int = 0,
+    ) -> List[str]:
         """
-        Performs an exhaustive dry-run validation of all text edits in the batch.
-        Returns a list of error strings. If the list is empty, the batch is safe to apply.
+        Validates edits against the document's CURRENT state.
+        Returns a list of error strings. If the list is empty, the edits are
+        safe to apply against the state the engine holds right now.
+
+        Batches apply sequentially, so the batch loop calls this one edit at a
+        time between applies; `index_offset` keeps the 1-based "Edit N Failed"
+        labels aligned with the edit's position in the full batch.
         """
         errors = []
 
@@ -1345,13 +1359,9 @@ class RedlineEngine:
         # Category A: document-context-free string-shape validation.
         # Delegated to module-level helper so the Live Word path can call the
         # same checks. See validate_edit_strings docstring for what is checked.
-        errors.extend(validate_edit_strings(edits))
+        errors.extend(validate_edit_strings(edits, index_offset=index_offset))
 
-        # Effective (edit_idx, start, end, mapper_key) spans of every edit that
-        # validates cleanly, for the batch-level overlap check below (QA M2).
-        effective_spans: List[Tuple[int, int, int, int]] = []
-
-        for i, edit in enumerate(edits):
+        for i, edit in enumerate(edits, start=index_offset):
             if not edit.target_text:
                 continue  # Skip validation for pure index-based insertions
             # Caller-pinned indexes (e.g. generate_edits_from_text output)
@@ -1584,56 +1594,6 @@ class RedlineEngine:
                         "empty ones."
                     )
 
-            # Record the spans this edit will actually modify (for the batch
-            # overlap check below), but only if the edit validated cleanly.
-            edit_prefix = f"- Edit {i + 1} Failed"
-            if not any(e.startswith(edit_prefix) for e in errors):
-                scoped_matches = valid_matches[:1] if match_mode in ("strict", "first") else valid_matches
-                for start, length in scoped_matches:
-                    actual_doc_text = active_text[start : start + length]
-                    for span_start, span_end in self._effective_edit_spans(edit, start, actual_doc_text):
-                        effective_spans.append((i, span_start, span_end, id(target_mapper)))
-
-        # QA M2: overlapping effective spans within one batch are order-dependent
-        # and cannot apply atomically — reject them upfront, exactly like the
-        # ambiguity check. Effective spans come from the same word-level diff the
-        # apply step uses, so edits that merely share unchanged context words
-        # (e.g. widened diff output) do NOT collide. Sort-and-sweep keeps this
-        # O(n log n) even for match_mode="all" fan-outs with many matches.
-        effective_spans.sort(key=lambda t: (t[3], t[1], t[2]))
-        reported_pairs: set = set()
-        running_map: Optional[int] = None
-        running_end = 0
-        running_start = 0
-        running_idx = -1
-        for b_idx, b_start, b_end, b_map in effective_spans:
-            if b_map != running_map:
-                running_map, running_start, running_end, running_idx = b_map, b_start, b_end, b_idx
-                continue
-            overlaps = (
-                b_idx != running_idx
-                and b_start < running_end
-                # A zero-length insertion point sitting exactly on the other
-                # span's start does not touch its characters.
-                and not (b_start == b_end == running_start)
-            )
-            if overlaps:
-                pair = tuple(sorted((running_idx, b_idx)))
-                if pair not in reported_pairs:
-                    reported_pairs.add(pair)
-                    first, second = pair
-                    first_target = truncate_middle(edits[first].target_text or "", 60)
-                    second_target = truncate_middle(edits[second].target_text or "", 60)
-                    errors.append(
-                        f"- Edit {second + 1} Failed: Its target overlaps the text modified by "
-                        f'Edit {first + 1} ("{first_target}" vs "{second_target}"). Overlapping '
-                        "edits in one batch are order-dependent and cannot be applied atomically. "
-                        "Merge them into a single edit covering the combined change, or submit "
-                        "them in separate batches."
-                    )
-            if b_end > running_end:
-                running_start, running_end, running_idx = b_start, b_end, b_idx
-
         return errors
 
     @staticmethod
@@ -1653,48 +1613,27 @@ class RedlineEngine:
                 curr = curr.getparent()
         return None
 
-    def _effective_edit_spans(self, edit: Any, start: int, actual_doc_text: str) -> List[Tuple[int, int]]:
+    def _refresh_after_sequential_edit(self) -> None:
         """
-        The character spans of `actual_doc_text` (matched at `start`) that this
-        edit will actually modify, mirroring the word-level diff the apply step
-        performs. Unchanged context words are excluded, so two edits sharing an
-        anchor phrase only collide when they touch the same characters. Pure
-        insertion points come back as zero-length spans, which the half-open
-        overlap test treats as colliding only when strictly inside another span.
+        Rebuilds every text projection after a batch edit mutated the DOM, so
+        the NEXT edit in the sequential batch validates and resolves against
+        the document state this one produced (chaining). Mirrors the Node
+        engine, which re-creates its mapper after each applied edit.
         """
-        end = start + len(actual_doc_text)
-        if not isinstance(edit, ModifyText) or getattr(edit, "regex", False):
-            return [(start, end)]
-        new_text = edit.new_text or ""
-        if actual_doc_text == new_text:
-            return []  # Comment-only edit: nothing is modified.
-        try:
-            sub_edits = generate_edits_from_text(actual_doc_text, new_text)
-        except Exception:
-            return [(start, end)]
-        if not sub_edits:
-            return [(start, end)]
-        spans = []
-        for se in sub_edits:
-            rel = se._match_start_index or 0
-            spans.append((start + rel, start + rel + len(se.target_text or "")))
-        return spans
+        self.mapper = DocumentMapper(self.doc)
+        self.clean_mapper = None
+        self.original_mapper = None
 
-    _EDIT_ERROR_INDEX_RE = re.compile(r"^- Edit (\d+) Failed:")
-
-    def _validate_edits_detailed(self, edits: List[Union[ModifyText, InsertTableRow, DeleteTableRow]]) -> dict:
+    def _restore_from_snapshot(self, snapshot: Optional[BytesIO]) -> None:
         """
-        Runs validate_edits on the whole batch and groups the error strings by
-        0-based edit index (parsed from the uniform "- Edit N Failed:" prefix).
-        Used by dry-run mode to attribute batch-level validation results to
-        individual edit reports.
+        Rolls the engine back to a pre-batch snapshot (as produced by
+        save_to_stream). Used for transactional rejection: when any edit in a
+        sequential batch fails validation, every edit the batch already
+        applied is undone before the BatchValidationError propagates.
         """
-        errors_by_edit: Dict[int, List[str]] = {}
-        for err in self.validate_edits(edits):
-            m = self._EDIT_ERROR_INDEX_RE.match(err)
-            idx = int(m.group(1)) - 1 if m else 0
-            errors_by_edit.setdefault(idx, []).append(err)
-        return errors_by_edit
+        if snapshot is None:
+            return
+        self.__init__(snapshot, author=self.author)  # type: ignore[misc]
 
     @staticmethod
     def _report_new_text(edit: Any) -> str:
@@ -1797,53 +1736,106 @@ class RedlineEngine:
         applied_edits, skipped_edits = 0, 0
 
         if edits:
-            if dry_run_mode:
-                # Dry-run must preview EXACTLY what the real run will do. The
-                # real run validates the whole batch against the pristine
-                # document and rejects it atomically on any error; the old
-                # dry-run validated and applied edit-by-edit, so later edits
-                # were checked against a document already mutated by earlier
-                # ones — ambiguity occurrence counts (and even outcomes)
-                # disagreed between the two modes (QA M1).
-                errors_by_edit = self._validate_edits_detailed(edits)
-                if errors_by_edit:
-                    skipped_edits = len(edits)
-                    for edit_idx, edit in enumerate(edits):
-                        edit_errors = errors_by_edit.get(edit_idx)
-                        if edit_errors:
-                            # Only surface the punctuation-anchor warning when the
-                            # edit actually failed; on success the redline preview
-                            # already reports the change cleanly.
-                            warning = self._check_punctuation_warning(getattr(edit, "target_text", ""))
-                            error_msg = "\n".join(edit_errors)
-                        else:
-                            warning = None
-                            error_msg = (
-                                "Not applied: the batch is transactional and other edits failed "
-                                "validation (see their errors). Fix or remove those edits and re-run."
-                            )
-                        edits_reports.append(
-                            {
-                                "status": "failed",
-                                "target_text": truncate_middle(getattr(edit, "target_text", ""), REPORT_ECHO_CAP),
-                                "new_text": truncate_middle(self._report_new_text(edit), REPORT_ECHO_CAP),
-                                "warning": warning,
-                                "error": error_msg,
-                                "critic_markup": None,
-                                "clean_text": None,
-                            }
+            # Batches apply SEQUENTIALLY: each edit is validated and applied
+            # against the document state produced by the edits before it, so a
+            # later edit may target text an earlier edit introduced (chaining).
+            # Both modes run this same loop — dry-run on the cloned engine,
+            # real mode on this one — so their reports agree by construction
+            # (QA M1). Validation failures keep the batch transactional: the
+            # real run restores the pre-batch snapshot and rejects everything;
+            # dry-run reports the identical outcome per edit.
+            pre_batch_snapshot = None if dry_run_mode else self.save_to_stream()
+
+            cloned_edits = [deepcopy(e) for e in edits]
+
+            def _pinned_idx(e: Any) -> Optional[int]:
+                if e._resolved_start_idx is not None:
+                    return e._resolved_start_idx
+                return e._match_start_index
+
+            # Caller-pinned indexes (e.g. generate_edits_from_text output) are
+            # coordinates in the INITIAL document state. Apply them first in
+            # one descending sweep — positions below an applied edit never
+            # move — then let text-anchored edits re-resolve sequentially
+            # against the mutated text. Mirrors the Node engine's ordering.
+            pinned = [(i, e) for i, e in enumerate(cloned_edits) if _pinned_idx(e) is not None]
+            unpinned = [(i, e) for i, e in enumerate(cloned_edits) if _pinned_idx(e) is None]
+
+            reports_by_input: List[Optional[dict]] = [None] * len(cloned_edits)
+            validation_errors: List[str] = []
+            failed_validation_indices: set = set()
+
+            if pinned:
+                p_applied, p_skipped = self.apply_edits([e for _, e in pinned], page_offsets=page_offsets)
+                applied_edits += p_applied
+                skipped_edits += p_skipped
+                for i, e in pinned:
+                    reports_by_input[i] = self._build_edit_report(e)
+                if p_applied > 0:
+                    self._refresh_after_sequential_edit()
+
+            for i, edit in unpinned:
+                single_errors = self.validate_edits([edit], index_offset=i)
+                if single_errors:
+                    if applied_edits > 0:
+                        hint = (
+                            f"\n  Note: {applied_edits} earlier edit(s) in this batch were already "
+                            "applied. Batches apply sequentially — each edit must target the document "
+                            "text as it reads AFTER the preceding edits (e.g. target the replacement "
+                            "text an earlier edit introduced, not the original wording)."
                         )
-                else:
-                    cloned_edits = [deepcopy(e) for e in edits]
-                    applied_edits, skipped_edits = self.apply_edits(cloned_edits, page_offsets=page_offsets)
-                    edits_reports.extend(self._build_edit_report(e) for e in cloned_edits)
-            else:
-                errors = self.validate_edits(edits)
-                if errors:
-                    raise BatchValidationError(errors)
-                cloned_edits = [deepcopy(e) for e in edits]
-                applied_edits, skipped_edits = self.apply_edits(cloned_edits, page_offsets=page_offsets)
-                edits_reports.extend(self._build_edit_report(e) for e in cloned_edits)
+                        single_errors = [err + hint for err in single_errors]
+                    validation_errors.extend(single_errors)
+                    failed_validation_indices.add(i)
+                    skipped_edits += 1
+                    # Punctuation-anchor warning is failure-context only; on
+                    # success the redline preview reports the change cleanly.
+                    warning = self._check_punctuation_warning(getattr(edit, "target_text", ""))
+                    reports_by_input[i] = {
+                        "status": "failed",
+                        "target_text": truncate_middle(getattr(edit, "target_text", ""), REPORT_ECHO_CAP),
+                        "new_text": truncate_middle(self._report_new_text(edit), REPORT_ECHO_CAP),
+                        "warning": warning,
+                        "error": "\n".join(single_errors),
+                        "critic_markup": None,
+                        "clean_text": None,
+                    }
+                    continue
+
+                e_applied, e_skipped = self.apply_edits([edit], page_offsets=page_offsets)
+                applied_edits += e_applied
+                skipped_edits += e_skipped
+                reports_by_input[i] = self._build_edit_report(edit)
+                if e_applied > 0:
+                    self._refresh_after_sequential_edit()
+
+            if validation_errors:
+                if not dry_run_mode:
+                    # Transactional rejection: undo every edit this batch
+                    # already applied before raising.
+                    self._restore_from_snapshot(pre_batch_snapshot)
+                    raise BatchValidationError(validation_errors)
+                # Dry-run mirrors the rejection: no edit will be applied by the
+                # real run, so none may be reported as applied here.
+                applied_edits = 0
+                skipped_edits = len(cloned_edits)
+                for i, report in enumerate(reports_by_input):
+                    if report is None or i in failed_validation_indices:
+                        continue
+                    reports_by_input[i] = {
+                        "status": "failed",
+                        "target_text": report["target_text"],
+                        "new_text": report["new_text"],
+                        "warning": None,
+                        "error": (
+                            "Not applied: the batch is transactional and other edits failed "
+                            "validation (see their errors). Fix or remove those edits and re-run."
+                        ),
+                        "critic_markup": None,
+                        "clean_text": None,
+                    }
+
+            edits_reports = [r for r in reports_by_input if r is not None]
 
         from adeu import __version__
 

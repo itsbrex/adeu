@@ -5,20 +5,16 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 from adeu.models import ModifyText
-from adeu.redline.engine import BatchValidationError, RedlineEngine
+from adeu.redline.engine import RedlineEngine
 
 
-def test_tc1_dry_run_matches_real_run_for_chained_batch():
+def test_tc1_sequential_chaining_works_in_both_modes():
     """
-    TC1 (superseded by QA 2026-07-17 M1): dry-run must preview EXACTLY what the
-    real run will do.
-
-    This test originally asserted the opposite — that dry-run evaluates edits
-    sequentially so a second modify can target the first modify's output. But
-    the real run validates every target against the PRISTINE document and
-    rejects this batch ("Receiving Party" does not exist yet), so the
-    sequential dry-run was lying about the real outcome. Both modes now agree:
-    the chained batch fails with a clear not-found error for Edit 2.
+    TC1 [report F1], extended 2026-07-17: sequential chaining is a first-class
+    batch semantic in BOTH modes. Each edit is validated and applied against
+    the document state produced by the edits before it, so a second modify may
+    target the first modify's output — and the real run behaves exactly like
+    the dry-run (QA M1 parity).
     """
     doc = Document()
     doc.add_paragraph("As defined in Section 1, the Recipient shall maintain confidentiality of all materials.")
@@ -27,29 +23,29 @@ def test_tc1_dry_run_matches_real_run_for_chained_batch():
     doc.save(stream)
     stream.seek(0)
 
-    batch = [
-        ModifyText(target_text="the Recipient", new_text="Receiving Party"),
-        ModifyText(target_text="Receiving Party", new_text="Disclosee"),
-    ]
+    def batch():
+        return [
+            ModifyText(target_text="the Recipient", new_text="Receiving Party"),
+            ModifyText(target_text="Receiving Party", new_text="Disclosee"),
+        ]
 
     engine = RedlineEngine(stream)
-    res = engine.process_batch(batch, dry_run=True)
+    res_dry = engine.process_batch(batch(), dry_run=True)
+    assert res_dry["edits_applied"] == 2
+    assert res_dry["edits_skipped"] == 0
+    assert all(r["status"] == "applied" for r in res_dry["edits"])
 
-    assert res["edits_applied"] == 0
-    assert res["edits_skipped"] == 2
-    assert res["edits"][0]["status"] == "failed"
-    assert "transactional" in res["edits"][0]["error"]
-    assert res["edits"][1]["status"] == "failed"
-    assert "not found" in res["edits"][1]["error"].lower()
+    # Real run chains identically and the final accepted text reflects both edits.
+    res_wet = engine.process_batch(batch(), dry_run=False)
+    assert res_wet["edits_applied"] == 2
+    assert res_wet["edits_skipped"] == 0
 
-    # Real run agrees: the batch is rejected for the same reason.
-    stream.seek(0)
-    engine_real = RedlineEngine(stream)
-    try:
-        engine_real.process_batch(batch, dry_run=False)
-        raise AssertionError("Real run should reject the chained batch")
-    except BatchValidationError as e:
-        assert any("Edit 2 Failed" in err and "not found" in err.lower() for err in e.errors)
+    engine.accept_all_revisions(remove_comments=True)
+    from adeu.ingest import extract_text_from_stream
+
+    final_text = extract_text_from_stream(engine.save_to_stream(), filename="x.docx", clean_view=True)
+    assert "Disclosee" in final_text
+    assert "Receiving Party" not in final_text
 
 
 def test_tc2_dry_run_write_parity_active_insertion_edit():

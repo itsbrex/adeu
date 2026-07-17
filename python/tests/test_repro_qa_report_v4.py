@@ -322,12 +322,16 @@ class TestM1DryRunParity:
 
 
 # ---------------------------------------------------------------------------
-# M2 — overlapping edits in one batch are rejected upfront
+# M2 — edits whose targets fight over the same text are rejected, not silently
+# misapplied. Batches apply SEQUENTIALLY: each edit sees the document state
+# produced by the previous edits, so an overlapping stale target fails with a
+# clear error (and a hint about the sequential contract), while a chained
+# batch that re-targets the updated text applies cleanly.
 # ---------------------------------------------------------------------------
 
 
-class TestM2OverlapDetection:
-    def test_colliding_edits_rejected_with_actionable_error(self):
+class TestM2OverlapAndChaining:
+    def test_stale_overlapping_target_rejected_with_sequential_hint(self):
         batch = [
             ModifyText(target_text="two (2) years", new_text="three (3) years"),
             ModifyText(target_text="(2) years", new_text="(4) years"),
@@ -336,24 +340,35 @@ class TestM2OverlapDetection:
         with pytest.raises(BatchValidationError) as exc_info:
             engine.process_batch(batch)
         joined = "\n".join(exc_info.value.errors)
-        assert "overlaps" in joined
-        assert "Edit 1" in joined and "Edit 2" in joined
+        assert "Edit 2 Failed" in joined
+        assert "tracked deletion" in joined
+        assert "Batches apply sequentially" in joined
+        assert "AFTER the preceding edits" in joined
 
-    def test_dry_run_reports_the_same_collision(self):
+        # Transactional: the rejected batch left no tracked changes behind.
+        final_text = _clean_text(engine.save_to_stream())
+        assert "two (2) years" in final_text
+        assert "three" not in final_text
+
+    def test_dry_run_reports_the_same_rejection(self):
         batch = [
             ModifyText(target_text="two (2) years", new_text="three (3) years"),
             ModifyText(target_text="(2) years", new_text="(4) years"),
         ]
         dry = RedlineEngine(_make_nda()).process_batch(batch, dry_run=True)
         assert dry["edits_applied"] == 0
-        assert any("overlaps" in (r["error"] or "") for r in dry["edits"])
+        assert dry["edits_skipped"] == 2
+        assert all(r["status"] == "failed" for r in dry["edits"])
+        assert "tracked deletion" in dry["edits"][1]["error"]
+        assert "Batches apply sequentially" in dry["edits"][1]["error"]
+        assert "transactional" in dry["edits"][0]["error"]
 
-    def test_compatible_adjacent_edits_still_apply(self):
-        """The report's own overlap example came out coherent; edits whose
-        actual modified characters do not intersect must NOT be rejected."""
+    def test_chained_batch_targeting_updated_text_applies(self):
+        """The sequential-contract way to express the report's overlap example:
+        the second edit targets the text as it reads AFTER the first edit."""
         batch = [
             ModifyText(target_text="two (2) years", new_text="three (3) years"),
-            ModifyText(target_text="(2) years", new_text="(2) calendar years"),
+            ModifyText(target_text="(3) years", new_text="(3) calendar years"),
         ]
         engine = RedlineEngine(_make_nda())
         stats = engine.process_batch(batch)
@@ -363,6 +378,21 @@ class TestM2OverlapDetection:
         engine.accept_all_revisions(remove_comments=True)
         final_text = _clean_text(engine.save_to_stream())
         assert "three (3) calendar years" in final_text
+
+    def test_disjoint_edits_unaffected_by_sequential_evaluation(self):
+        """Edits on unrelated regions apply exactly as before."""
+        batch = [
+            ModifyText(target_text="California", new_text="Delaware"),
+            ModifyText(target_text="two (2) years", new_text="five (5) years"),
+        ]
+        engine = RedlineEngine(_make_nda())
+        stats = engine.process_batch(batch)
+        assert stats["edits_applied"] == 2
+
+        engine.accept_all_revisions(remove_comments=True)
+        final_text = _clean_text(engine.save_to_stream())
+        assert "Delaware" in final_text
+        assert "five (5) years" in final_text
 
 
 # ---------------------------------------------------------------------------
