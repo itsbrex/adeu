@@ -52,6 +52,30 @@ class SanitizeError(Exception):
     pass
 
 
+def _atomic_write(path: Path, payload: bytes) -> None:
+    """
+    Stages to a same-directory temporary file and os.replace()s it into
+    place: a failed or interrupted write never truncates or corrupts an
+    existing file at `path` (QA 2026-07-18 v6 M1).
+    """
+    import os
+    import tempfile
+
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent or "."))
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(payload)
+        os.replace(tmp_path, path)
+        tmp_path = None  # type: ignore[assignment]
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+
 def sanitize_docx(
     input_path: str,
     output_path: Optional[str] = None,
@@ -133,12 +157,11 @@ def sanitize_docx(
         # from inferring when edits were made
         report.add_transform_lines(transforms.normalize_change_dates(doc))
 
-    # --- Save (verify BEFORE anything reaches disk) ---
+    # --- Save (verify BEFORE anything reaches disk; write atomically) ---
     output = BytesIO()
     doc.save(output)
     _verify_sanitized_package(output.getvalue())
-    with open(output_path, "wb") as f:
-        f.write(output.getvalue())
+    _atomic_write(Path(output_path), output.getvalue())
 
     # Finalize report
     if report.warnings:

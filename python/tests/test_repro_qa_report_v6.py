@@ -19,11 +19,21 @@ Finding index (report section -> test class below):
   H2  the extract → edit text → apply round trip drops the paragraph
       separator of a newly inserted paragraph, concatenating it with the
       following (or previous) paragraph; the defect survives accept-all
+  M1  DOCX-writing commands accept misleading output extensions and
+      silently replace existing outputs; writes are not atomic
+  M3  batch sanitize writes some outputs and exits 1 — partial results
+  M4  changes-file kind decided by filename suffix, not content
+  M5  invalid --search-regex silently degrades to a literal search, exit 0
+  L1  usage-shaped errors exit 1 instead of 2
+  L2  apply --help does not document the JSON change schema
+  L4  init prints "Config found" when creating a new config
 
-Every test in this file fails against 8102b64 before the corresponding fix.
+Every C/H test (and the M1/M3/M4/M5 tests) fails against the commit
+preceding its fix.
 """
 
 import json
+import os
 import sys
 import zipfile
 from io import BytesIO
@@ -564,3 +574,366 @@ class TestH2ParagraphBoundaryRoundTrip:
         final = extract_text_from_stream(engine.save_to_stream(), clean_view=True)
 
         assert final == text_mod
+
+
+# ---------------------------------------------------------------------------
+# M1 — output extension validation, overwrite visibility, atomic writes
+# ---------------------------------------------------------------------------
+
+
+class TestM1OutputSafety:
+    def test_apply_refuses_txt_output_extension(self, tmp_path, capsys):
+        orig = tmp_path / "original.docx"
+        build_paragraph_doc(orig)
+        edits = tmp_path / "edits.json"
+        edits.write_text(json.dumps([{"type": "modify", "target_text": "Middle paragraph two.", "new_text": "X."}]))
+
+        out = tmp_path / "result.txt"
+        code, _, err = run_cli(["apply", orig, edits, "-o", out], capsys)
+
+        assert code != 0, "apply must refuse to write a DOCX package to a .txt path"
+        assert not out.exists()
+        assert ".docx" in err
+
+    def test_accept_all_refuses_txt_output_extension(self, tmp_path, capsys):
+        orig = tmp_path / "original.docx"
+        build_paragraph_doc(orig)
+
+        out = tmp_path / "accepted.txt"
+        code, _, err = run_cli(["accept-all", orig, "-o", out], capsys)
+
+        assert code != 0
+        assert not out.exists()
+        assert ".docx" in err
+
+    def test_sanitize_refuses_txt_output_extension(self, tmp_path, capsys):
+        orig = tmp_path / "original.docx"
+        build_paragraph_doc(orig)
+
+        out = tmp_path / "sanitized.txt"
+        code, _, err = run_cli(["sanitize", orig, "-o", out], capsys)
+
+        assert code != 0
+        assert not out.exists()
+        assert ".docx" in err
+
+    def test_overwriting_existing_output_is_announced(self, tmp_path, capsys):
+        orig = tmp_path / "original.docx"
+        build_paragraph_doc(orig)
+        edits = tmp_path / "edits.json"
+        edits.write_text(json.dumps([{"type": "modify", "target_text": "Middle paragraph two.", "new_text": "X."}]))
+        out = tmp_path / "result.docx"
+        out.write_bytes(b"sentinel-not-a-docx")
+
+        code, _, err = run_cli(["apply", orig, edits, "-o", out], capsys)
+
+        assert code == 0, err
+        assert "Overwriting existing" in err
+
+    def test_failed_write_leaves_existing_output_untouched(self, tmp_path, capsys, monkeypatch):
+        """Atomicity: a write failure must never truncate the previous output."""
+        orig = tmp_path / "original.docx"
+        build_paragraph_doc(orig)
+        edits = tmp_path / "edits.json"
+        edits.write_text(json.dumps([{"type": "modify", "target_text": "Middle paragraph two.", "new_text": "X."}]))
+        out = tmp_path / "result.docx"
+        out.write_bytes(b"previous-good-output")
+
+        import adeu.cli as cli_mod
+
+        real_replace = os.replace
+
+        def failing_replace(src, dst, *a, **k):
+            if str(dst) == str(out):
+                raise OSError(28, "No space left on device")
+            return real_replace(src, dst, *a, **k)
+
+        monkeypatch.setattr(cli_mod.os, "replace", failing_replace)
+        code, _, err = run_cli(["apply", orig, edits, "-o", out], capsys)
+
+        assert code != 0
+        assert out.read_bytes() == b"previous-good-output", "existing output was corrupted by a failed write"
+
+
+# ---------------------------------------------------------------------------
+# M3 — batch sanitize is all-or-nothing
+# ---------------------------------------------------------------------------
+
+
+class TestM3TransactionalBatchSanitize:
+    def test_blocked_input_means_no_outputs_at_all(self, tmp_path, capsys):
+        clean = tmp_path / "cleanable.docx"
+        build_paragraph_doc(clean)
+
+        blocked = tmp_path / "blocked.docx"
+        doc = Document()
+        p = doc.add_paragraph("Base text ")
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn as _qn
+
+        ins = OxmlElement("w:ins")
+        ins.set(_qn("w:id"), "1")
+        ins.set(_qn("w:author"), "Reviewer")
+        r = OxmlElement("w:r")
+        t = OxmlElement("w:t")
+        t.text = "pending insertion"
+        r.append(t)
+        ins.append(r)
+        p._element.append(ins)
+        doc.save(blocked)
+
+        outdir = tmp_path / "out"
+        code, _, err = run_cli(["sanitize", clean, blocked, "--outdir", outdir], capsys)
+
+        assert code != 0
+        assert not (outdir / "cleanable.docx").exists(), "batch sanitize wrote a partial result despite a blocked input"
+        assert not (outdir / "blocked.docx").exists()
+        assert list(outdir.glob("*.tmp")) == [], "staging temp files were left behind"
+
+    def test_all_good_batch_writes_all_outputs(self, tmp_path, capsys):
+        a = tmp_path / "a.docx"
+        b = tmp_path / "b.docx"
+        build_paragraph_doc(a)
+        build_paragraph_doc(b)
+
+        outdir = tmp_path / "out"
+        code, _, err = run_cli(["sanitize", a, b, "--outdir", outdir], capsys)
+
+        assert code == 0, err
+        assert (outdir / "a.docx").exists()
+        assert (outdir / "b.docx").exists()
+        assert list(outdir.glob("*.tmp")) == []
+
+
+# ---------------------------------------------------------------------------
+# M4 — changes-file kind is decided by content, not filename
+# ---------------------------------------------------------------------------
+
+
+class TestM4ContentSniffedChangesFile:
+    def test_json_batch_with_txt_suffix_is_applied_as_batch(self, tmp_path, capsys):
+        orig = tmp_path / "original.docx"
+        build_paragraph_doc(orig)
+        changes = tmp_path / "changes.txt"
+        changes.write_text(
+            json.dumps([{"type": "modify", "target_text": "Middle paragraph two.", "new_text": "Edited middle."}])
+        )
+
+        out = tmp_path / "result.docx"
+        code, _, err = run_cli(["apply", orig, changes, "-o", out], capsys)
+
+        assert code == 0, f"a JSON batch must be recognized by content, not suffix:\n{err}"
+        final = clean_text_of(out)
+        assert "Edited middle." in final
+        assert "Intro paragraph one." in final, "the batch was diffed as document text, deleting everything else"
+
+    def test_extensionless_json_batch_is_applied_as_batch(self, tmp_path, capsys):
+        orig = tmp_path / "original.docx"
+        build_paragraph_doc(orig)
+        changes = tmp_path / "changes"
+        changes.write_text(
+            json.dumps([{"type": "modify", "target_text": "Middle paragraph two.", "new_text": "Edited middle."}])
+        )
+
+        out = tmp_path / "result.docx"
+        code, _, err = run_cli(["apply", orig, changes, "-o", out], capsys)
+
+        assert code == 0, err
+        assert "Edited middle." in clean_text_of(out)
+
+    def test_invalid_json_with_json_suffix_is_an_error_not_a_text_diff(self, tmp_path, capsys):
+        orig = tmp_path / "original.docx"
+        build_paragraph_doc(orig)
+        changes = tmp_path / "changes.json"
+        changes.write_text('[{"type": "modify", "target_text": "broken...')
+
+        out = tmp_path / "result.docx"
+        code, _, err = run_cli(["apply", orig, changes, "-o", out], capsys)
+
+        assert code != 0, "a broken .json file must be a parse error, never a text diff"
+        assert not out.exists()
+
+    def test_text_starting_with_bracket_is_still_text(self, tmp_path, capsys):
+        """A document whose text begins with '[' must stay on the text path."""
+        orig = tmp_path / "original.docx"
+        build_paragraph_doc(orig)
+        text_orig = clean_text_of(orig)
+        changes = tmp_path / "edited.md"
+        changes.write_text("[DRAFT] Cover note.\n\n" + text_orig, encoding="utf-8")
+
+        out = tmp_path / "result.docx"
+        code, _, err = run_cli(["apply", orig, changes, "-o", out], capsys)
+
+        assert code == 0, err
+        assert "[DRAFT] Cover note." in clean_text_of(out)
+
+
+# ---------------------------------------------------------------------------
+# M5 / L1 / L2 / L4 — strict regex, exit codes, discoverable schema, wording
+# ---------------------------------------------------------------------------
+
+
+class TestM5StrictCliRegex:
+    def test_invalid_search_regex_is_a_hard_error(self, tmp_path, capsys):
+        orig = tmp_path / "original.docx"
+        build_paragraph_doc(orig)
+
+        code, _, err = run_cli(["extract", orig, "--search-query", "[", "--search-regex"], capsys)
+
+        assert code != 0, "an invalid regex must not silently degrade to a literal search on the CLI"
+        assert "regular expression" in err
+
+    def test_valid_search_regex_still_works(self, tmp_path, capsys):
+        orig = tmp_path / "original.docx"
+        build_paragraph_doc(orig)
+
+        code, out, err = run_cli(["extract", orig, "--search-query", "sentinel: END.*9f2c", "--search-regex"], capsys)
+
+        assert code == 0, err
+        assert "END-OF-DOCUMENT-9f2c" in out
+        assert "appears 1 time" in out
+
+
+class TestLowSeverityContracts:
+    def test_missing_argument_paths_exit_2(self, tmp_path, capsys):
+        code, _, _ = run_cli(["extract"], capsys)
+        assert code == 2
+
+        orig = tmp_path / "original.docx"
+        build_paragraph_doc(orig)
+        code, _, _ = run_cli(["apply", orig], capsys)
+        assert code == 2
+
+    def test_invalid_page_value_exits_2(self, tmp_path, capsys):
+        orig = tmp_path / "original.docx"
+        build_paragraph_doc(orig)
+        code, _, _ = run_cli(["extract", orig, "--page", "abc"], capsys)
+        assert code == 2
+        code, _, _ = run_cli(["extract", orig, "--page", "-1"], capsys)
+        assert code == 2
+
+    def test_apply_help_documents_the_change_schema(self, capsys):
+        code, out, err = run_cli(["apply", "--help"], capsys)
+        assert code == 0
+        help_text = out + err
+        for token in ("insert_row", "delete_row", "match_mode", "target_text", "reply"):
+            assert token in help_text, f"apply --help must document '{token}'"
+
+    def test_init_wording_distinguishes_new_config(self, tmp_path, capsys, monkeypatch):
+        import adeu.cli as cli_mod
+
+        config = tmp_path / "claude" / "claude_desktop_config.json"
+        monkeypatch.setattr(cli_mod, "_get_claude_config_path", lambda: config)
+        monkeypatch.setattr(cli_mod.shutil, "which", lambda name: "/usr/bin/uvx")
+
+        code, _, err = run_cli(["init"], capsys)
+        assert code == 0
+        assert "Config will be created" in err
+        assert "Config found" not in err
+
+        code, _, err = run_cli(["init"], capsys)
+        assert code == 0
+        assert "Config found" in err
+
+
+# ---------------------------------------------------------------------------
+# L3 — markup renders structural row operations in the preview
+# ---------------------------------------------------------------------------
+
+
+class TestL3MarkupStructuralPreview:
+    def _diff_changes(self, tmp_path, capsys):
+        orig = tmp_path / "original.docx"
+        mod = tmp_path / "modified.docx"
+        build_table_doc(orig, ORIG_ROWS)
+        build_table_doc(mod, MOD_ROWS)
+        code, out, err = run_cli(["diff", orig, mod, "--json"], capsys)
+        assert code == 0, err
+        changes = tmp_path / "changes.json"
+        changes.write_text(out, encoding="utf-8")
+        return orig, changes
+
+    def test_insert_row_renders_in_preview(self, tmp_path, capsys):
+        orig, changes = self._diff_changes(tmp_path, capsys)
+        out = tmp_path / "preview.md"
+
+        code, _, err = run_cli(["markup", orig, changes, "-o", out], capsys)
+
+        assert code == 0, err
+        preview = out.read_text(encoding="utf-8")
+        assert "{++Storage | 100 GB | €50++}" in preview, "inserted row missing from the rendered preview"
+        support = preview.index("Support | 1 |")
+        storage = preview.index("{++Storage | 100 GB | €50++}")
+        assert support < storage, "inserted row rendered at the wrong position"
+        assert "ignored" not in err, "row operations must render, not be ignored"
+
+    def test_delete_row_renders_in_preview(self, tmp_path, capsys):
+        orig = tmp_path / "original.docx"
+        build_table_doc(orig, [["Alpha", "1", "a"], ["Beta", "2", "b"]])
+        changes = tmp_path / "changes.json"
+        changes.write_text(json.dumps([{"type": "delete_row", "target_text": "Beta | 2 | b"}]))
+        out = tmp_path / "preview.md"
+
+        code, _, err = run_cli(["markup", orig, changes, "-o", out], capsys)
+
+        assert code == 0, err
+        assert "{--Beta | 2 | b--}" in out.read_text(encoding="utf-8")
+
+    def test_missing_row_anchor_fails_without_output(self, tmp_path, capsys):
+        orig = tmp_path / "original.docx"
+        build_table_doc(orig, [["Alpha", "1", "a"]])
+        changes = tmp_path / "changes.json"
+        changes.write_text(
+            json.dumps([{"type": "insert_row", "target_text": "No | Such | Row", "cells": ["x", "y", "z"]}])
+        )
+        out = tmp_path / "preview.md"
+
+        code, _, _ = run_cli(["markup", orig, changes, "-o", out], capsys)
+
+        assert code != 0
+        assert not out.exists()
+
+    def test_markup_json_result_mode(self, tmp_path, capsys):
+        orig, changes = self._diff_changes(tmp_path, capsys)
+        out = tmp_path / "preview.md"
+
+        code, stdout, err = run_cli(["markup", orig, changes, "-o", out, "--json"], capsys)
+
+        assert code == 0, err
+        payload = json.loads(stdout)
+        assert payload["status"] == "ok"
+        assert payload["failed"] == 0
+        assert payload["applied"] >= 3
+        assert payload["output_path"] == str(out)
+
+
+# ---------------------------------------------------------------------------
+# M6 — extract must not pay the MCP framework's import cost
+# ---------------------------------------------------------------------------
+
+
+class TestM6ExtractStartup:
+    def test_extract_never_imports_fastmcp(self, tmp_path):
+        """fastmcp's import chain costs ~0.7 s — 2× the rest of the command.
+
+        Guarded structurally (no wall-clock flakiness): a successful extract
+        subprocess must finish without fastmcp in sys.modules.
+        """
+        import subprocess
+        import sys as _sys
+
+        orig = tmp_path / "original.docx"
+        build_paragraph_doc(orig)
+
+        probe = (
+            "import sys\n"
+            f"sys.argv = ['adeu', 'extract', {str(orig)!r}, '--page', 'all']\n"
+            "from adeu.cli import main\n"
+            "try:\n"
+            "    main()\n"
+            "except SystemExit as e:\n"
+            "    assert (e.code or 0) == 0, e.code\n"
+            "assert 'fastmcp' not in sys.modules, 'extract imported the MCP framework'\n"
+        )
+        result = subprocess.run([_sys.executable, "-c", probe], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
