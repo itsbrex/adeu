@@ -131,8 +131,8 @@ def _print_sandbox_warning_and_exit(path: Path, exit_code: int = 1):
 def _require_input_file(path: Path, exit_code: int = 1) -> None:
     """
     Validates that an input path exists AND is a regular file. A directory
-    satisfies `.exists()`, so without the `.is_file()` check `open(dir, 'rb')`
-    escaped as a raw IsADirectoryError traceback (QA 2026-07-17 F7).
+    satisfies `.exists()`, so `.is_file()` is what turns `open(dir, 'rb')`'s
+    raw IsADirectoryError into a clean CLI error (QA 2026-07-17 F7).
     """
     if not path.exists():
         _print_sandbox_warning_and_exit(path, exit_code)
@@ -254,7 +254,7 @@ def _load_roundtrip_text(path: Path, original: Path, command: str) -> str:
     extract chrome and refusing inputs that cannot round-trip safely:
 
       - a single page of a multi-page extract (everything absent would be
-        diffed as deleted — QA 2026-07-17 F1 destroyed 80% of the document)
+        diffed as deleted — QA 2026-07-17 F1)
       - markup-view text containing CriticMarkup tokens (apply/diff compare
         against the CLEAN view, so the tokens — including reviewer names and
         change IDs — would be written into the document as literal prose,
@@ -409,45 +409,24 @@ def _format_batch_validation_error(exc: "ValidationError") -> str:
 
 def _load_batch_from_json(path: Path) -> List[DocumentChange]:
     """
-    Loads a batch of actions and edits from a JSON file.
-    Supports the unified List[DocumentChange] format or the legacy dict format.
+    Loads a batch of changes from a JSON file in the unified
+    List[DocumentChange] format — the same shape the MCP `changes` parameter
+    takes. A dict root carrying 'actions'/'edits' keys is the pre-v1.1.0
+    batch shape; it gets a targeted migration error rather than a guess
+    (QA 2026-07-17 F2).
     """
     try:
         data = json.loads(_read_text_file(path))
 
-        # Legacy dict format support
-        if isinstance(data, dict):
-            changes_data = []
-            for idx, item in enumerate(data.get("actions", [])):
-                raw_action = item.pop("action", None)
-                # Whitespace/case variants of valid values are normalized;
-                # anything else is a hard error. Never default to a value —
-                # least of all "accept", the destructive opposite of "reject"
-                # (QA 2026-07-17 F2: ' reject ' was silently applied as accept).
-                action_val = raw_action.strip().lower() if isinstance(raw_action, str) else None
-                if action_val not in ("accept", "reject", "reply"):
-                    if raw_action is None:
-                        raise ValueError(
-                            f"actions[{idx}] is missing the required 'action' field. "
-                            "Valid values: 'accept', 'reject', 'reply'."
-                        )
-                    raise ValueError(
-                        f"actions[{idx}] has an unrecognized 'action' value: {raw_action!r}. "
-                        "Valid values: 'accept', 'reject', 'reply'. "
-                        "Refusing to guess — a wrong default could apply the opposite of what you asked."
-                    )
-                item["type"] = action_val
-                changes_data.append(item)
-            for item in data.get("edits", []):
-                item["type"] = "modify"
-                if "original" in item:
-                    item["target_text"] = item.pop("original")
-                if "replace" in item:
-                    item["new_text"] = item.pop("replace")
-                changes_data.append(item)
-            data = changes_data
-        elif not isinstance(data, list):
-            raise ValueError("JSON root must be a list of changes or a legacy dict with 'actions' and 'edits'.")
+        if isinstance(data, dict) and ("actions" in data or "edits" in data):
+            raise ValueError(
+                'this file uses the removed pre-v1.1.0 {"actions": [...], "edits": [...]} format. '
+                "Provide a flat JSON list of typed changes instead — rename 'action' to 'type', "
+                "'original' to 'target_text', 'replace' to 'new_text', and merge both arrays "
+                "into one list.\n\n" + _CHANGE_TYPE_REFERENCE
+            )
+        if not isinstance(data, list):
+            raise ValueError("JSON root must be a list of change objects.\n\n" + _CHANGE_TYPE_REFERENCE)
 
         # BatchChanges (not the bare list) so the CLI tolerates the same LLM
         # quirks the MCP server does: stringified items, inferable missing
@@ -527,9 +506,8 @@ def handle_extract(args):
         # errors) inside build_search_response. In full mode, 'all' returns
         # the entire document without page chrome — the round-trip artifact
         # for text-based apply/diff (QA 2026-07-17 F1). For the remaining
-        # modes it must be a positive integer — anything else used to fall
-        # through silently to page 1 (QA L1: `--page -1` / `--page abc`
-        # returned page 1).
+        # modes it must be a positive integer; anything else is a hard error,
+        # never a silent fallback to page 1 (QA L1).
         page_num = 1
         want_all_pages = False
         if args.page is not None and not getattr(args, "search_query", None):
