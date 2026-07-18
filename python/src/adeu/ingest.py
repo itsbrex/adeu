@@ -270,7 +270,7 @@ def _extract_blocks(
                 blocks.append(table_text)
                 local_cursor = block_start + len(table_text)
                 is_first_block = False
-                if geometry is not None:
+                if geometry is not None and table_acc is not None:
                     geometry.end = block_start + len(table_text)
                     table_acc.append(geometry)
             else:

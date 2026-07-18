@@ -737,11 +737,11 @@ def generate_structured_edits(
     # ambiguous. In-process consumers ride the pinned offsets; JSON consumers
     # fail closed, so tell the user why up front.
     ambiguous_anchor_warned = False
-    for e in edits:
-        if isinstance(e, (InsertTableRow, DeleteTableRow)) and not ambiguous_anchor_warned:
-            if e.target_text and text_orig.count(e.target_text) > 1:
+    for row_op in edits:
+        if isinstance(row_op, (InsertTableRow, DeleteTableRow)) and not ambiguous_anchor_warned:
+            if row_op.target_text and text_orig.count(row_op.target_text) > 1:
                 warnings.append(
-                    f'The row anchor "{e.target_text[:60]}" appears more than once in the document. '
+                    f'The row anchor "{row_op.target_text[:60]}" appears more than once in the document. '
                     "Applying this diff from its JSON output may be rejected as ambiguous — "
                     "make the anchor rows unique, or apply the row changes with explicit "
                     "insert_row/delete_row edits."

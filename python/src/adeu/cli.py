@@ -10,13 +10,13 @@ import shutil
 import sys
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Sequence
 
 from pydantic import TypeAdapter, ValidationError
 
 from adeu.markup import apply_edits_to_markdown
 from adeu.mcp_components.shared import get_build_info
-from adeu.models import BatchChanges, DocumentChange, ModifyText
+from adeu.models import BatchChanges, DeleteTableRow, DocumentChange, InsertTableRow, ModifyText
 from adeu.redline.engine import BatchValidationError, RedlineEngine, validate_edit_strings
 from adeu.sanitize.core import SanitizeError, SanitizeResult, sanitize_docx
 from adeu.utils.console import configure_cli_streams, dynamic_stderr
@@ -722,8 +722,9 @@ def _open_redline_engine_or_exit(path: Path, author: "str | None" = None) -> Red
 
 def handle_diff(args):
     _set_json_mode(args.json)
-    from adeu.diff import make_edits_self_contained
+    from adeu.diff import DiffEdit, make_edits_self_contained
 
+    edits: "Sequence[DiffEdit]"
     if args.modified.suffix.lower() == ".docx":
         compare_clean = getattr(args, "compare_clean", True)
         from adeu.ingest import _extract_text_from_doc
@@ -766,12 +767,12 @@ def handle_diff(args):
 
         from adeu.diff import generate_edits_via_paragraph_alignment
 
-        edits = generate_edits_via_paragraph_alignment(text_orig, text_mod)
+        text_edits = generate_edits_via_paragraph_alignment(text_orig, text_mod)
         # diff output must be re-appliable by text matching alone: JSON
         # consumers never see the private position index, so widen
         # ambiguous/pure-insertion edits with surrounding context until each
         # target is unique (QA C1).
-        edits = make_edits_self_contained(edits, text_orig)
+        edits = make_edits_self_contained(text_edits, text_orig)
 
     if args.json:
         output = [edit.model_dump(exclude={"_match_start_index"}) for edit in edits]
@@ -779,10 +780,9 @@ def handle_diff(args):
     else:
         print(f"Found {len(edits)} changes:", file=sys.stderr)
         for edit in edits:
-            e_type = getattr(edit, "type", "modify")
-            if e_type == "insert_row":
+            if isinstance(edit, InsertTableRow):
                 print(f"[+row] {' | '.join(edit.cells)} ({edit.position} '{edit.target_text[:40]}')")
-            elif e_type == "delete_row":
+            elif isinstance(edit, DeleteTableRow):
                 print(f"[-row] {edit.target_text}")
             elif not edit.new_text:
                 print(f"[-] {edit.target_text}")
