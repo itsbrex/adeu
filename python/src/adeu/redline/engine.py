@@ -878,7 +878,21 @@ class RedlineEngine:
                 if s_name:
                     self._set_paragraph_style(new_p, s_name)
                 elif current_p.pPr is not None:
-                    new_p.append(deepcopy(current_p.pPr))
+                    pPr_clone = deepcopy(current_p.pPr)
+                    pStyle_el = pPr_clone.find(qn("w:pStyle"))
+                    if pStyle_el is not None:
+                        style_val = pStyle_el.get(qn("w:val"))
+                        is_heading = (
+                            style_val.startswith("Heading")
+                            or style_val == "Title"
+                            or style_val.replace(" ", "").startswith("Heading")
+                        )
+                        if style_val and is_heading:
+                            pPr_clone.remove(pStyle_el)
+                    outlineLvl_el = pPr_clone.find(qn("w:outlineLvl"))
+                    if outlineLvl_el is not None:
+                        pPr_clone.remove(outlineLvl_el)
+                    new_p.append(pPr_clone)
 
                 # Track the paragraph break itself as an insertion
                 pPr = new_p.find(qn("w:pPr"))
@@ -1087,6 +1101,19 @@ class RedlineEngine:
                     self._set_paragraph_style(new_p, style_name)
                 elif current_p.pPr is not None:
                     pPr_clone = deepcopy(current_p.pPr)
+                    pStyle_el = pPr_clone.find(qn("w:pStyle"))
+                    if pStyle_el is not None:
+                        style_val = pStyle_el.get(qn("w:val"))
+                        is_heading = (
+                            style_val.startswith("Heading")
+                            or style_val == "Title"
+                            or style_val.replace(" ", "").startswith("Heading")
+                        )
+                        if style_val and is_heading:
+                            pPr_clone.remove(pStyle_el)
+                    outlineLvl_el = pPr_clone.find(qn("w:outlineLvl"))
+                    if outlineLvl_el is not None:
+                        pPr_clone.remove(outlineLvl_el)
                     if list_level is not None:
                         numPr = pPr_clone.find(qn("w:numPr"))
                         if numPr is not None:
@@ -1940,9 +1967,14 @@ class RedlineEngine:
         inside a table row.
         """
         for s in mapper.spans:
-            if s.run is None or s.end <= start or s.start >= start + length:
+            if s.end <= start or s.start >= start + length:
                 continue
-            curr = s.run._element
+            curr = None
+            if s.run is not None:
+                curr = s.run._element
+            elif s.paragraph is not None:
+                curr = s.paragraph._element
+
             while curr is not None:
                 if curr.tag == qn("w:tr"):
                     return len(curr.findall(qn("w:tc")))
@@ -2511,17 +2543,36 @@ class RedlineEngine:
         # resolved in: a clean-view offset applied to the raw mapper points
         # at earlier text once tracked changes exist.
         active_mapper = edit._active_mapper_ref or self.mapper
-        target_runs = active_mapper.find_target_runs_by_index(start_idx, len(edit.target_text))
-        if not target_runs:
-            return False
 
+        target_spans = [
+            s for s in active_mapper.spans if s.end > start_idx and s.start < start_idx + len(edit.target_text)
+        ]
         row_el = None
-        curr = target_runs[0]._element
-        while curr is not None:
-            if curr.tag == qn("w:tr"):
-                row_el = curr
-                break
-            curr = curr.getparent()
+        if target_spans:
+            # 1. Prefer real runs
+            for s in target_spans:
+                if s.run is not None:
+                    curr = s.run._element
+                    while curr is not None:
+                        if curr.tag == qn("w:tr"):
+                            row_el = curr
+                            break
+                        curr = curr.getparent()
+                    if row_el is not None:
+                        break
+
+            # 2. Fall back to paragraphs (handles virtual empty-cell anchors)
+            if row_el is None:
+                for s in target_spans:
+                    if s.paragraph is not None:
+                        curr = s.paragraph._element
+                        while curr is not None:
+                            if curr.tag == qn("w:tr"):
+                                row_el = curr
+                                break
+                            curr = curr.getparent()
+                        if row_el is not None:
+                            break
 
         if row_el is None:
             return False
@@ -2570,17 +2621,36 @@ class RedlineEngine:
 
         # Same coordinate-space rule as _apply_insert_row.
         active_mapper = edit._active_mapper_ref or self.mapper
-        target_runs = active_mapper.find_target_runs_by_index(start_idx, len(edit.target_text))
-        if not target_runs:
-            return False
 
+        target_spans = [
+            s for s in active_mapper.spans if s.end > start_idx and s.start < start_idx + len(edit.target_text)
+        ]
         row_el = None
-        curr = target_runs[0]._element
-        while curr is not None:
-            if curr.tag == qn("w:tr"):
-                row_el = curr
-                break
-            curr = curr.getparent()
+        if target_spans:
+            # 1. Prefer real runs
+            for s in target_spans:
+                if s.run is not None:
+                    curr = s.run._element
+                    while curr is not None:
+                        if curr.tag == qn("w:tr"):
+                            row_el = curr
+                            break
+                        curr = curr.getparent()
+                    if row_el is not None:
+                        break
+
+            # 2. Fall back to paragraphs
+            if row_el is None:
+                for s in target_spans:
+                    if s.paragraph is not None:
+                        curr = s.paragraph._element
+                        while curr is not None:
+                            if curr.tag == qn("w:tr"):
+                                row_el = curr
+                                break
+                            curr = curr.getparent()
+                        if row_el is not None:
+                            break
 
         if row_el is None:
             return False
@@ -2729,6 +2799,23 @@ class RedlineEngine:
         for start_idx, match_len in live_matches:
             actual_doc_text = active_mapper.full_text[start_idx : start_idx + match_len]
             current_effective_new_text = edit.new_text or ""
+
+            if re.match(r"^\{#cell:[^}]+\}$", actual_doc_text.strip()):
+                ins_text = current_effective_new_text
+                ins_text = ins_text.replace(actual_doc_text.strip(), "")
+                if ins_text:
+                    sub_mt = ModifyText(type="modify", target_text="", new_text=ins_text, comment=edit.comment)
+                    sub_mt._match_start_index = start_idx
+                    sub_mt._internal_op = "INSERTION"
+                    sub_mt._active_mapper_ref = active_mapper
+                    all_sub_edits.append(sub_mt)
+                elif edit.comment:
+                    sub_mt = ModifyText(type="modify", target_text="", new_text="", comment=edit.comment)
+                    sub_mt._match_start_index = start_idx
+                    sub_mt._internal_op = "COMMENT_ONLY"
+                    sub_mt._active_mapper_ref = active_mapper
+                    all_sub_edits.append(sub_mt)
+                continue
 
             if is_regex and current_effective_new_text:
                 try:

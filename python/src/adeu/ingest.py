@@ -344,6 +344,14 @@ def extract_table(
                 offset_map=offset_map,
                 cursor=cell_cursor,
             )
+            if not clean_view:
+                first_p_list = cell._element.findall(".//" + qn("w:p"))
+                firstP = first_p_list[0] if first_p_list else None
+                paraId = firstP.get(qn("w14:paraId")) if firstP is not None else None
+                if paraId:
+                    separator = " " if cell_content and not cell_content.endswith(" ") else ""
+                    cell_content = cell_content + separator + f"{{#cell:{paraId}}}"
+
             cell_texts.append(cell_content)
             cell_cursor += len(cell_content)
             first_cell = False

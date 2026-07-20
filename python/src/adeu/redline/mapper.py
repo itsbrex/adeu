@@ -387,7 +387,23 @@ class DocumentMapper:
                     self._add_virtual_text(" | ", current, None)
                     current += 3
 
+                cell_start = current
                 current = self._map_blocks(cell, current)
+
+                if not self.clean_view and not self.original_view:
+                    first_p_list = cell._element.findall(".//" + qn("w:p"))
+                    firstP = first_p_list[0] if first_p_list else None
+                    paraId = firstP.get(qn("w14:paraId")) if firstP is not None else None
+                    if paraId and firstP is not None:
+                        cellPara = Paragraph(firstP, cell)
+                        self._add_virtual_text("", current, cellPara)
+                        if cell_start < current:
+                            self._add_virtual_text(" ", current, cellPara)
+                            current += 1
+                        anchor = f"{{#cell:{paraId}}}"
+                        self._add_virtual_text(anchor, current, cellPara)
+                        current += len(anchor)
+
                 cells_processed += 1
 
             if ins is not None and not self.clean_view and not self.original_view:

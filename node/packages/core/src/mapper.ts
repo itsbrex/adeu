@@ -358,6 +358,11 @@ export class DocumentMapper {
             // token offset so resolution targets THIS cell, not a neighbour.
             const cellPara = new Paragraph(firstP, cell);
             this._add_virtual_text("", current, cellPara);
+            const has_content = current > cell_start;
+            if (has_content) {
+              this._add_virtual_text(" ", current, cellPara);
+              current += 1;
+            }
             const anchor = `{#cell:${paraId}}`;
             this._add_virtual_text(anchor, current, cellPara);
             current += anchor.length;

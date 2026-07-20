@@ -259,7 +259,8 @@ export function extract_table(
           | undefined;
         const paraId = firstP ? firstP.getAttribute("w14:paraId") : null;
         if (paraId) {
-          const anchor = `{#cell:${paraId}}`;
+          const space_pad = cell_content ? " " : "";
+          const anchor = `${space_pad}{#cell:${paraId}}`;
           cell_content = cell_content + anchor;
         }
       }

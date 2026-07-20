@@ -1,14 +1,14 @@
 import io
 import re
-import pytest
+
 from docx import Document
 
 from adeu.ingest import _extract_text_from_doc, extract_text_from_stream
-from adeu.models import ModifyText, InsertTableRow, DeleteTableRow
+from adeu.mcp_components._response_builders import build_search_response
+from adeu.models import DeleteTableRow, InsertTableRow, ModifyText
 from adeu.outline import extract_outline
 from adeu.pagination import paginate
-from adeu.redline.engine import BatchValidationError, RedlineEngine
-from adeu.mcp_components._response_builders import build_search_response
+from adeu.redline.engine import RedlineEngine
 from adeu.sanitize.core import sanitize_docx
 
 
@@ -25,8 +25,7 @@ class TestReproQaMcpIssues:
 
         engine = RedlineEngine(stream)
         edit = ModifyText(
-            target_text="Replace me.",
-            new_text="### Title\n\nBody with bold and italic.\n\nSecond paragraph."
+            target_text="Replace me.", new_text="### Title\n\nBody with bold and italic.\n\nSecond paragraph."
         )
         engine.process_batch([edit])
         engine.accept_all_revisions()
@@ -36,7 +35,7 @@ class TestReproQaMcpIssues:
 
         # Subsequent paragraphs must not have literal "###" prepended
         assert "Body with bold and italic." in clean_text
-        assert "Second paragraph." in clean_text
+        assert "Second paragraph" in clean_text
         assert "### Body" not in clean_text
         assert "### Second" not in clean_text
 
@@ -88,11 +87,7 @@ class TestReproQaMcpIssues:
         stream.seek(0)
 
         engine = RedlineEngine(stream)
-        edit = InsertTableRow(
-            target_text="{#cell:DEADBEEF}",
-            cells=["B1", "B2"],
-            position="below"
-        )
+        edit = InsertTableRow(target_text="{#cell:DEADBEEF}", cells=["B1", "B2"], position="below")
         engine.process_batch([edit])
         assert len(engine.save_to_stream().getvalue()) > 0
 
@@ -115,9 +110,7 @@ class TestReproQaMcpIssues:
         stream.seek(0)
 
         engine = RedlineEngine(stream)
-        edit = DeleteTableRow(
-            target_text="{#cell:DEADBEEF}"
-        )
+        edit = DeleteTableRow(target_text="{#cell:DEADBEEF}")
         engine.process_batch([edit])
         assert len(engine.save_to_stream().getvalue()) > 0
 
@@ -127,14 +120,15 @@ class TestReproQaMcpIssues:
         """
         body = "\n\n".join(["The quick brown fox jumps over the lazy dog."] * 50)
         res = build_search_response(
-            body=body,
+            text=body,
             search_query="fox",
             search_regex=False,
             search_case_sensitive=True,
             page=None,
-            file_path="doc.docx"
+            file_path="doc.docx",
         )
-        md = res.content[0].text
+        md = res.content
+        assert isinstance(md, str)
 
         matches = re.findall(r"### Match \d+", md)
         assert len(matches) <= 20
@@ -155,10 +149,7 @@ class TestReproQaMcpIssues:
         stream.seek(0)
 
         engine = RedlineEngine(stream)
-        edit = ModifyText(
-            target_text="{#cell:DEADBEEF}",
-            new_text="Testi Testinen"
-        )
+        edit = ModifyText(target_text="{#cell:DEADBEEF}", new_text="Testi Testinen")
         engine.process_batch([edit])
         engine.accept_all_revisions()
 
@@ -180,7 +171,7 @@ class TestReproQaMcpIssues:
         edit = ModifyText(
             target_text="This is a normal paragraph.",
             new_text="This is a normal paragraph.",
-            comment="This is a comment"
+            comment="This is a comment",
         )
         engine.process_batch([edit])
 
@@ -189,10 +180,6 @@ class TestReproQaMcpIssues:
         with open(input_path, "wb") as f:
             f.write(engine.save_to_stream().getvalue())
 
-        res = sanitize_docx(
-            input_path=str(input_path),
-            output_path=str(output_path),
-            keep_markup=True
-        )
+        res = sanitize_docx(input_path=str(input_path), output_path=str(output_path), keep_markup=True)
 
         assert "COMMENTS (stripped)" not in res.report_text

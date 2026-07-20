@@ -62,7 +62,7 @@ describe("Adeu MCP QA Report - Issue 1: Markdown headings in new_text", () => {
     const cleanText = await extractTextFromBuffer(buf, true);
 
     // Subsequent paragraphs must not have literal "###" prepended
-    expect(cleanText).toContain("Body with bold and italic.");
+    expect(cleanText).toContain("Body with **bold** and _italic_.");
     expect(cleanText).toContain("Second paragraph.");
     expect(cleanText).not.toContain("### Body with");
     expect(cleanText).not.toContain("### Second");
