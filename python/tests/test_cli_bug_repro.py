@@ -469,3 +469,59 @@ def test_process_document_batch_changes_json_parameter(tmp_path):
 
     clean_text = _extract_text_from_doc(new_doc, clean_view=True)
     assert "It has exactly three paragraphs after editing." in clean_text
+
+
+def test_repro_sanitize_double_percent_escaping(tmp_path, capsys):
+    """
+    Asserts that the similarity guard message printed to stderr uses single percent signs (%)
+    instead of double percent signs (%%) when a low similarity baseline is checked, both
+    in the blocked block reason and in the low-similarity warning.
+    """
+    import docx
+
+    # 1. Create two completely different documents to trigger the similarity guard
+    doc_a_path = tmp_path / "doc_a.docx"
+    doc_a = docx.Document()
+    doc_a.add_paragraph("This is document A")
+    doc_a.save(str(doc_a_path))
+
+    doc_b_path = tmp_path / "doc_b.docx"
+    doc_b = docx.Document()
+    doc_b.add_paragraph("Something totally different and unrelated")
+    doc_b.save(str(doc_b_path))
+
+    out_path = tmp_path / "out.docx"
+
+    # 2. Run sanitize without allowing low similarity (should block)
+    code, stdout, stderr = run_cli(
+        ["sanitize", str(doc_a_path), "-o", str(out_path), "--baseline", str(doc_b_path), "--report"], capsys
+    )
+
+    assert code == 1
+    # The message should contain single percent signs '%' and NOT double percent signs '%%'
+    assert "share only 31%" in stderr or "share only 31%" in stdout
+    assert "69% differs" in stderr or "69% differs" in stdout
+    assert "31%%" not in stderr and "31%%" not in stdout
+    assert "69%%" not in stderr and "69%%" not in stdout
+
+    # 3. Run sanitize allowing low similarity (should warning-proceed)
+    code, stdout, stderr = run_cli(
+        [
+            "sanitize",
+            str(doc_a_path),
+            "-o",
+            str(out_path),
+            "--baseline",
+            str(doc_b_path),
+            "--report",
+            "--allow-low-similarity-baseline",
+        ],
+        capsys,
+    )
+
+    assert code == 0
+    # The warning should contain single percent signs '%' and NOT double percent signs '%%'
+    assert "share only 31%" in stderr or "share only 31%" in stdout
+    assert "69% differs" in stderr or "69% differs" in stdout
+    assert "31%%" not in stderr and "31%%" not in stdout
+    assert "69%%" not in stderr and "69%%" not in stdout
