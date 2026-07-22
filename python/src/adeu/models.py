@@ -186,6 +186,16 @@ class InsertTableRow(BaseModel):
         description="A list of Markdown strings representing the contents of the new cells.",
     )
 
+    match_mode: Literal["strict", "first", "all"] = Field(
+        default="strict",
+        description=(
+            "Resolution strategy when target_text matches more than one row. "
+            "'strict' (default): fail with an ambiguity error. "
+            "'first': anchor on the first matching row only. "
+            "'all': insert a row relative to EVERY matching row."
+        ),
+    )
+
     # Internal use only. PrivateAttr is invisible to the MCP API schema.
     _match_start_index: Optional[int] = PrivateAttr(default=None)
     _resolved_start_idx: Optional[int] = PrivateAttr(default=None)
@@ -207,6 +217,16 @@ class DeleteTableRow(BaseModel):
         ...,
         description=(
             "Text inside the row you wish to delete. The engine will delete the entire row containing this match."
+        ),
+    )
+
+    match_mode: Literal["strict", "first", "all"] = Field(
+        default="strict",
+        description=(
+            "Resolution strategy when target_text matches more than one row. "
+            "'strict' (default): fail with an ambiguity error. "
+            "'first': delete only the first matching row. "
+            "'all': delete EVERY matching row."
         ),
     )
 

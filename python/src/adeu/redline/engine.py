@@ -2387,7 +2387,7 @@ class RedlineEngine:
                             matches_to_apply = unique_matches[:1]
 
                         if match_mode == "all" or len(matches_to_apply) > 1:
-                            for m_start, m_len in matches_to_apply:
+                            for m_start, _m_len in matches_to_apply:
                                 sub_edit = deepcopy(edit)
                                 sub_edit._resolved_start_idx = m_start
                                 sub_edit._active_mapper_ref = resolved_mapper

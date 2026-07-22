@@ -574,22 +574,24 @@ def test_process_document_batch_relaxed_validation_repro(tmp_path):
 
 def test_table_row_match_mode_all(tmp_path):
     import io
+
     import docx
-    from adeu.redline.engine import RedlineEngine
-    from adeu.models import DeleteTableRow, InsertTableRow
+
     from adeu.ingest import _extract_text_from_doc
+    from adeu.models import DeleteTableRow, InsertTableRow
+    from adeu.redline.engine import RedlineEngine
 
     doc = docx.Document()
     table = doc.add_table(rows=3, cols=3)
     # Row 0: ID | Name | Notes
     # Row 1: 1 | Alice | First record
     # Row 2: 2 |       | Second record with empty name
-    for row, data in zip(table.rows, [
-        ["ID", "Name", "Notes"],
-        ["1", "Alice", "First record"],
-        ["2", "", "Second record with empty name"]
-    ]):
-        for cell, text in zip(row.cells, data):
+    for row, data in zip(
+        table.rows,
+        [["ID", "Name", "Notes"], ["1", "Alice", "First record"], ["2", "", "Second record with empty name"]],
+        strict=True,
+    ):
+        for cell, text in zip(row.cells, data, strict=True):
             cell.text = text
 
     stream = io.BytesIO()
@@ -598,13 +600,7 @@ def test_table_row_match_mode_all(tmp_path):
 
     # --- Test Delete All ---
     engine_del = RedlineEngine(stream)
-    stats_del = engine_del.process_batch([
-        DeleteTableRow(
-            type="delete_row",
-            target_text="record",
-            match_mode="all"
-        )
-    ])
+    stats_del = engine_del.process_batch([DeleteTableRow(type="delete_row", target_text="record", match_mode="all")])
 
     assert stats_del["edits_applied"] == 1
     assert stats_del["occurrences_modified"] == 2
@@ -617,22 +613,24 @@ def test_table_row_match_mode_all(tmp_path):
     # --- Test Insert All ---
     stream.seek(0)
     engine_ins = RedlineEngine(stream)
-    stats_ins = engine_ins.process_batch([
-        InsertTableRow(
-            type="insert_row",
-            target_text="record",
-            match_mode="all",
-            position="below",
-            cells=["NEW_ID", "NEW_NAME", "NEW_NOTES"]
-        )
-    ])
+    stats_ins = engine_ins.process_batch(
+        [
+            InsertTableRow(
+                type="insert_row",
+                target_text="record",
+                match_mode="all",
+                position="below",
+                cells=["NEW_ID", "NEW_NAME", "NEW_NOTES"],
+            )
+        ]
+    )
 
     assert stats_ins["edits_applied"] == 1
     assert stats_ins["occurrences_modified"] == 2
 
     engine_ins.accept_all_revisions()
     clean_text_ins = _extract_text_from_doc(docx.Document(engine_ins.save_to_stream()), clean_view=True)
-    
+
     # We should have exactly 2 injected rows
     occurrences = clean_text_ins.count("NEW_ID | NEW_NAME | NEW_NOTES")
     assert occurrences == 2
@@ -640,12 +638,15 @@ def test_table_row_match_mode_all(tmp_path):
 
 def test_search_query_paragraph_filtering(tmp_path):
     """
-    Ensures that when a document is searched using the MCP read_docx tool, 
+    Ensures that when a document is searched using the MCP read_docx tool,
     the snippet returned strictly bounds to the paragraph the match lives in,
     instead of an arbitrary 100-character window that leaks neighboring lines.
     """
     import asyncio
+    from unittest.mock import patch
+
     import docx
+
     from adeu.server import mcp
 
     doc = docx.Document()
@@ -661,10 +662,18 @@ def test_search_query_paragraph_filtering(tmp_path):
     arguments = {
         "reasoning": "Filter document to target paragraph.",
         "file_path": str(doc_path),
-        "search_query": "Chinese"
+        "search_query": "Chinese",
     }
 
-    result = asyncio.run(mcp.call_tool("read_docx", arguments))
+    # The tool logs progress through the MCP session, which does not exist when
+    # a tool is invoked directly outside a client connection.
+    with (
+        patch("fastmcp.server.context.Context.info"),
+        patch("fastmcp.server.context.Context.debug"),
+        patch("fastmcp.server.context.Context.warning"),
+        patch("fastmcp.server.context.Context.error"),
+    ):
+        result = asyncio.run(mcp.call_tool("read_docx", arguments))
     text = "".join(item.text for item in result.content if item.type == "text")
 
     # The query MUST be matched and returned.
