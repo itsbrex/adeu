@@ -474,9 +474,16 @@ server.registerTool(
         .string()
         .describe("Name to appear in Track Changes (e.g., 'Reviewer AI')."),
       changes: z
-        .array(z.union([z.string(), CHANGE_ITEM_SCHEMA]))
+        .array(z.union([z.string(), CHANGE_ITEM_SCHEMA, z.any()]))
+        .optional()
         .describe(
           "Ordered list of changes to apply. Each item is an object carrying a `type` discriminator plus that type's fields (see the per-field docs and the tool description). Items apply SEQUENTIALLY: each one evaluates against the document state produced by the items before it, so later items may target text an earlier item introduced.",
+        ),
+      changes_json: z
+        .string()
+        .optional()
+        .describe(
+          "Optional JSON string containing an ordered list of changes (alternative to changes). Parsed if provided, in which case the changes parameter is ignored.",
         ),
       output_path: z.string().optional().describe("Optional output path."),
       dry_run: z
@@ -493,6 +500,7 @@ server.registerTool(
     original_docx_path,
     author_name,
     changes,
+    changes_json,
     output_path,
     dry_run,
   }) => {
@@ -516,10 +524,48 @@ server.registerTool(
             },
           ],
         };
-      if (!changes || changes.length === 0)
+
+      let finalChanges: any[] = [];
+      if (changes_json) {
+        try {
+          const parsed = JSON.parse(changes_json);
+          if (!Array.isArray(parsed)) {
+            return {
+              isError: true,
+              content: [
+                {
+                  type: "text",
+                  text: "Error: changes_json must be a JSON array.",
+                },
+              ],
+            };
+          }
+          finalChanges = parsed;
+        } catch (e: any) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: `Error parsing changes_json: ${e.message}`,
+              },
+            ],
+          };
+        }
+      } else {
+        if (!changes || !Array.isArray(changes)) {
+          return {
+            content: [{ type: "text", text: "Error: No changes provided." }],
+          };
+        }
+        finalChanges = changes;
+      }
+
+      if (finalChanges.length === 0) {
         return {
           content: [{ type: "text", text: "Error: No changes provided." }],
         };
+      }
 
       // Defensive sanitization at the MCP boundary: some LLM clients
       // "double-serialize" nested arrays, delivering each element of `changes`
@@ -528,7 +574,7 @@ server.registerTool(
       // raw string primitives downstream regardless of the engine version
       // bundled. Genuine objects and unparseable strings pass through
       // untouched so validation surfaces a clear error rather than crashing.
-      const sanitizedChanges = changes.map((item: any) => {
+      const sanitizedChanges = finalChanges.map((item: any) => {
         let obj: any = item;
         if (typeof item === "string") {
           try {
