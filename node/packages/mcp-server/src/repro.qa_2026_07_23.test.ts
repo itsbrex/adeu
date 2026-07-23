@@ -31,16 +31,17 @@
 // Every test in this file is written test-first: it fails on current main and
 // passes once the finding is fixed.
 //
-// NOT covered (verified NOT to reproduce at the raw stdio server boundary on
-// current main, 2026-07-23):
+// NOT covered here (they do NOT reproduce at the raw stdio server boundary —
+// the raw schema is correct — but the client-side transformation that
+// produced the QA observations is a real-world constraint, so they are
+// covered as design constraints in repro.qa_2026_07_23.client-compat.test.ts):
 //   F3  — tools/list advertises process_document_batch with
 //         required = ["reasoning","original_docx_path","author_name","changes"],
-//         so schema and runtime already agree that author_name is required.
-//         The QA report's "only `changes` is required" observation matches the
-//         MCP *client's* transformed view of the schema, not the server's.
+//         but real clients DROP primitive entries from required[], so models
+//         legitimately omit author_name and hit the raw Zod dump.
 //   F22 (page sub-item) — the server publishes `page` as
-//         {"anyOf":[{"type":"number"},{"type":"string"}]}; the `{}` the QA saw
-//         is the same client-side anyOf-stripping.
+//         {"anyOf":[{"type":"number"},{"type":"string"}]}; real clients strip
+//         property-level unions to `{}`, which is exactly what the QA saw.
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawn, ChildProcess } from "node:child_process";
