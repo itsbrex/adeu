@@ -218,6 +218,10 @@ __marimo__/
 AI_SESSION.md
 .ralph.json
 
+# Kilo AI Editor
+.kilo/
+.kilocodeignore
+
 # Node / Monorepo
 node_modules/
 dist/
