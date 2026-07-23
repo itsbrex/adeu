@@ -384,6 +384,7 @@ class RedlineEngine:
         self.clean_mapper: Optional[DocumentMapper] = None
         self.original_mapper: Optional[DocumentMapper] = None
         self.skipped_details: List[str] = []
+        self._bullet_num_id: Optional[str] = None
 
     def _check_punctuation_warning(self, target_text: str) -> Optional[str]:
         """Return a hint when a short, single-token anchor contains punctuation
@@ -822,7 +823,7 @@ class RedlineEngine:
                 # pending same-author revision.
                 prev_p = _sibling_paragraph(current_p, forward=False) if current_p is not None else None
                 mark = _crossable_mark(prev_p) if prev_p is not None else None
-                if mark is None:
+                if mark is None or prev_p is None:
                     break
                 pairs.add(mark)
                 current_p = prev_p
