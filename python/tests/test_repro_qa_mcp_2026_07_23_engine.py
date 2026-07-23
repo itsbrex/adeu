@@ -68,9 +68,7 @@ def build_three_paragraph_doc() -> BytesIO:
 def apply_multi_paragraph_replacement() -> BytesIO:
     """One ModifyText replacing a body sentence with heading + two sentences."""
     engine = RedlineEngine(build_three_paragraph_doc(), author="QA Agent")
-    stats = engine.process_batch(
-        [ModifyText(target_text=ORIG_SENTENCE, new_text=REPLACEMENT)]
-    )
+    stats = engine.process_batch([ModifyText(target_text=ORIG_SENTENCE, new_text=REPLACEMENT)])
     assert stats["edits_applied"] == 1, "setup: the replacement edit must apply"
     return engine.save_to_stream()
 
@@ -89,8 +87,7 @@ class TestF1MultiParagraphReplacementReject:
         )
         stray = [ln for ln in clean.splitlines() if ln.strip() == "."]
         assert not stray, (
-            "the original paragraph survives as a stranded '.'-only container "
-            f"in the accepted view:\n{clean}"
+            f"the original paragraph survives as a stranded '.'-only container in the accepted view:\n{clean}"
         )
 
     def test_reject_unwinds_the_whole_replacement(self):
@@ -170,9 +167,7 @@ class TestF20ChangeIdOrdering:
         buf.seek(0)
 
         engine = RedlineEngine(buf, author="QA Agent")
-        stats = engine.process_batch(
-            [ModifyText(target_text="apple", new_text="pear", match_mode="all")]
-        )
+        stats = engine.process_batch([ModifyText(target_text="apple", new_text="pear", match_mode="all")])
         assert stats["edits_applied"] == 1, "setup: the fan-out edit must apply"
 
         raw = extract_text_from_stream(engine.save_to_stream(), clean_view=False)

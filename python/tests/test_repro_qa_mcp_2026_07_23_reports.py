@@ -60,7 +60,6 @@ import json
 import re
 import sys
 
-import pytest
 from docx import Document
 from docx.oxml.ns import qn
 
@@ -197,9 +196,7 @@ class TestF5UnsupportedMarkdown:
         that re-reads as "* item one" — the Virtual Text contract. Currently it
         half-applies exactly like "- item" and re-reads as bare "item one" (F5)."""
         engine = RedlineEngine(doc_stream("Intro paragraph.", "Closing paragraph."), author="QA")
-        engine.process_batch(
-            [ModifyText(target_text="Intro paragraph.", new_text="Intro paragraph.\n\n* item one")]
-        )
+        engine.process_batch([ModifyText(target_text="Intro paragraph.", new_text="Intro paragraph.\n\n* item one")])
 
         clean = extract_text_from_stream(engine.save_to_stream(), clean_view=True)
         assert "* item one" in clean, (
@@ -220,9 +217,7 @@ class TestF6PreviewFidelity:
         modified, but both previews show only the FIRST occurrence changed
         while the saved document changes all three (F6.1)."""
         engine = RedlineEngine(doc_stream("apple apple apple."), author="QA")
-        stats = engine.process_batch(
-            [ModifyText(target_text="apple", new_text="pear", match_mode="all")]
-        )
+        stats = engine.process_batch([ModifyText(target_text="apple", new_text="pear", match_mode="all")])
         report = stats["edits"][0]
 
         # Sanity: the document itself is correct and all 3 occurrences counted.
@@ -247,9 +242,7 @@ class TestF6PreviewFidelity:
         preview window renders as plain accepted text when the later edit
         resolves via the clean-mapper fallback — it must keep its {++...++}
         markup so it never looks silently accepted (F6.2)."""
-        engine = RedlineEngine(
-            doc_stream("Payment due in 30 days of invoice receipt at the office."), author="Alice"
-        )
+        engine = RedlineEngine(doc_stream("Payment due in 30 days of invoice receipt at the office."), author="Alice")
         engine.process_batch(
             [
                 ModifyText(target_text="30 days", new_text="30 business days"),
@@ -300,8 +293,7 @@ class TestF6PreviewFidelity:
         for field in ("critic_markup", "clean_text"):
             preview = report[field] or ""
             assert not nested.search(preview), (
-                f"the {field} preview nests CriticMarkup insertions — invalid notation "
-                f"(F6.3): {preview!r}"
+                f"the {field} preview nests CriticMarkup insertions — invalid notation (F6.3): {preview!r}"
             )
 
 
@@ -347,9 +339,7 @@ class TestF7DryRunOmitsComments:
         )
 
         assert "Dry-run simulation complete" in result
-        assert COMMENT_TEXT in result, (
-            "the dry-run response never mentions the comment the edit carries:\n" + result
-        )
+        assert COMMENT_TEXT in result, "the dry-run response never mentions the comment the edit carries:\n" + result
 
 
 # ---------------------------------------------------------------------------
@@ -365,19 +355,14 @@ class TestF12FinalizationReports:
         paragraph-mark w:ins elements have no text) makes the headline and the
         listed items disagree with no reconciliation, exactly the F12 shape
         ("auto-accepted: 15" over 13 listed items)."""
-        engine = RedlineEngine(
-            doc_stream("First clause text here.", "Second clause stays put."), author="Alice"
-        )
+        engine = RedlineEngine(doc_stream("First clause text here.", "Second clause stays put."), author="Alice")
         engine.process_batch(
             [
                 # One logical change fragmented across multiple w:ins elements:
                 # two content paragraphs plus two textless paragraph-mark w:ins.
                 ModifyText(
                     target_text="First clause text here.",
-                    new_text=(
-                        "First clause text here.\n\nA second inserted paragraph."
-                        "\n\nA third inserted paragraph."
-                    ),
+                    new_text=("First clause text here.\n\nA second inserted paragraph.\n\nA third inserted paragraph."),
                 ),
                 # Plus one normal tracked deletion.
                 ModifyText(target_text="stays put", new_text=""),
@@ -398,8 +383,7 @@ class TestF12FinalizationReports:
         if headline_count != listed:
             unlisted = headline_count - listed
             reconciled = re.search(
-                r"(?i)\b%d\b[^\n]*(paragraph mark|revision mark|no (?:visible )?text|not listed|formatting)"
-                % unlisted,
+                r"(?i)\b%d\b[^\n]*(paragraph mark|revision mark|no (?:visible )?text|not listed|formatting)" % unlisted,
                 report,
             )
             assert reconciled, (

@@ -4914,11 +4914,7 @@ class RedlineEngine:
                 grandparent = parent.getparent()
                 if parent.tag == qn("w:rPr") and grandparent is not None and grandparent.tag == qn("w:pPr"):
                     p_el = grandparent.getparent()
-                    if (
-                        p_el is not None
-                        and p_el.tag == qn("w:p")
-                        and not self._paragraph_has_visible_content(p_el)
-                    ):
+                    if p_el is not None and p_el.tag == qn("w:p") and not self._paragraph_has_visible_content(p_el):
                         body = p_el.getparent()
                         if body is not None:
                             body.remove(p_el)
