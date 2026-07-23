@@ -1271,3 +1271,18 @@ def generate_edits_via_paragraph_alignment(original_text: str, modified_text: st
     # straddle a paragraph break with body text on both sides; split them
     # into engine-applicable pieces (ADEU-QA-002 A).
     return _split_cross_paragraph_hunks(edits)
+
+
+def create_unified_diff(
+    original_text: str,
+    modified_text: str,
+    fromfile: str = "original",
+    tofile: str = "modified",
+) -> str:
+    """Produce a standard Git-style unified diff string between two texts."""
+    import difflib
+
+    a_lines = original_text.splitlines(keepends=True)
+    b_lines = modified_text.splitlines(keepends=True)
+    diff = difflib.unified_diff(a_lines, b_lines, fromfile=fromfile, tofile=tofile)
+    return "".join(diff)
